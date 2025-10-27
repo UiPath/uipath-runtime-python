@@ -170,10 +170,10 @@ class UiPathRuntimeLogsInterceptor:
             self._clean_all_handlers(stderr_logger)
 
         # Use the min_level in the LoggerWriter to filter messages
-        sys.stdout = LoggerWriter(  # type: ignore[assignment]
+        sys.stdout = LoggerWriter(
             stdout_logger, logging.INFO, self.numeric_min_level, self.original_stdout
         )
-        sys.stderr = LoggerWriter(  # type: ignore[assignment]
+        sys.stderr = LoggerWriter(
             stderr_logger, logging.ERROR, self.numeric_min_level, self.original_stderr
         )
 
