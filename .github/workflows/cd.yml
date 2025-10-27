@@ -23,7 +23,7 @@ jobs:
       - lint
       - test
 
-    if: ${{ github.repository == 'UiPath/uipath-python' }}
+    if: ${{ github.repository == 'UiPath/uipath-runtime-python' }}
     permissions:
       contents: read
       actions: write
