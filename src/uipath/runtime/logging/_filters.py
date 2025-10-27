@@ -24,7 +24,7 @@ class UiPathRuntimeExecutionFilter(logging.Filter):
         ctx_execution_id = current_execution_id.get()
         if ctx_execution_id == self.execution_id:
             # Inject execution_id into record for downstream handlers
-            record.execution_id = self.execution_id  # type: ignore[attr-defined]
+            record.execution_id = self.execution_id
             return True
 
         return False

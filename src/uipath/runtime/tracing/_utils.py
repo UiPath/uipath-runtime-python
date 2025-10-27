@@ -5,11 +5,12 @@ import json
 import os
 import random
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from os import environ as env
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 from opentelemetry.sdk.trace import ReadableSpan
@@ -20,35 +21,21 @@ from uipath.runtime.tracing.span import UiPathRuntimeSpan
 
 
 def get_supported_params(
-    tracer_impl: Callable, params: Dict[str, Any]
+    tracer_impl: Callable[..., Any],
+    params: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    """Extract the parameters supported by the tracer implementation.
-
-    Args:
-        tracer_impl: The tracer implementation function or callable
-        params: Dictionary of parameters to check
-
-    Returns:
-        Dictionary containing only parameters supported by the tracer implementation
-    """
-    supported_params = {}
-    if hasattr(tracer_impl, "__code__"):
-        # For regular functions
-        impl_signature = inspect.signature(tracer_impl)
-        for param_name, param_value in params.items():
-            if param_name in impl_signature.parameters and param_value is not None:
-                supported_params[param_name] = param_value
-    elif callable(tracer_impl):
-        # For callable objects
-        impl_signature = inspect.signature(tracer_impl.__call__)
-        for param_name, param_value in params.items():
-            if param_name in impl_signature.parameters and param_value is not None:
-                supported_params[param_name] = param_value
-    else:
+    """Extract the parameters supported by the tracer implementation."""
+    try:
+        sig = inspect.signature(tracer_impl)
+    except (TypeError, ValueError):
         # If we can't inspect, pass all parameters and let the function handle it
-        supported_params = params
+        return dict(params)
 
-    return supported_params
+    supported: Dict[str, Any] = {}
+    for name, value in params.items():
+        if value is not None and name in sig.parameters:
+            supported[name] = value
+    return supported
 
 
 def _simple_serialize_defaults(obj):

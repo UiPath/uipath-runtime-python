@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from os import environ as env
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -62,7 +62,7 @@ class UiPathRuntimeSpan(BaseModel):
         default_factory=lambda: env.get("UIPATH_JOB_KEY"), serialization_alias="JobKey"
     )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert the Span to a dictionary suitable for JSON serialization.
 
         Returns a dict with PascalCase keys for UiPath API compatibility.

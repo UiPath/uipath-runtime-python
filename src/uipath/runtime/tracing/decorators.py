@@ -19,12 +19,12 @@ from uipath.runtime.tracing.manager import UiPathRuntimeTracingManager
 logger = logging.getLogger(__name__)
 
 
-def _default_input_processor() -> dict:
+def _default_input_processor() -> dict[str, Any]:
     """Default input processor that doesn't log any actual input data."""
     return {"redacted": "Input data not logged for privacy/security"}
 
 
-def _default_output_processor() -> dict:
+def _default_output_processor() -> dict[str, Any]:
     """Default output processor that doesn't log any actual output data."""
     return {"redacted": "Output data not logged for privacy/security"}
 

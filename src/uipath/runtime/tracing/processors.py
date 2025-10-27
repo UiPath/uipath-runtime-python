@@ -1,6 +1,6 @@
 """Custom span processors for UiPath execution tracing."""
 
-from typing import Optional
+from typing import Optional, cast
 
 from opentelemetry import context as context_api
 from opentelemetry import trace
@@ -18,11 +18,11 @@ class UiPathExecutionTraceProcessorMixin:
         """Called when a span is started."""
         parent_span: Optional[Span]
         if parent_context:
-            parent_span = trace.get_current_span(parent_context)
+            parent_span = cast(Span, trace.get_current_span(parent_context))
         else:
-            parent_span = trace.get_current_span()
+            parent_span = cast(Span, trace.get_current_span())
 
-        if parent_span and parent_span.is_recording():
+        if parent_span and parent_span.is_recording() and parent_span.attributes:
             execution_id = parent_span.attributes.get("execution.id")
             if execution_id:
                 span.set_attribute("execution.id", execution_id)
