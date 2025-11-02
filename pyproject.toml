@@ -1,6 +1,6 @@
 [project]
 name = "uipath-runtime"
-version = "0.0.1"
+version = "0.0.2"
 description = "UiPath Runtime abstractions"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -8,6 +8,7 @@ dependencies = [
   "opentelemetry-sdk>=1.38.0",
   "opentelemetry-instrumentation>=0.59b0",
   "pydantic>=2.12.3",
+  "uipath-core>=0.0.1",
 ]
 classifiers = [
   "Intended Audience :: Developers",
@@ -96,7 +97,7 @@ warn_required_dynamic_aliases = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
-addopts = "-ra -q --cov"
+addopts = "-ra -q --cov=src/uipath --cov-report=term-missing"
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
 

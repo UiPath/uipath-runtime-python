@@ -1,11 +1,12 @@
 """Result of an execution with status and optional error information."""
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from uipath.runtime.errors.contract import UiPathErrorContract
+from uipath.runtime.errors import UiPathErrorContract
+from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeEventType
 
 
 class UiPathRuntimeStatus(str, Enum):
@@ -52,19 +53,26 @@ class UiPathResumeTrigger(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class UiPathRuntimeResult(BaseModel):
+class UiPathRuntimeResult(UiPathRuntimeEvent):
     """Result of an execution with status and optional error information."""
 
-    output: Optional[Dict[str, Any]] = None
+    output: Optional[Union[Dict[str, Any], BaseModel]] = None
     status: UiPathRuntimeStatus = UiPathRuntimeStatus.SUCCESSFUL
     resume: Optional[UiPathResumeTrigger] = None
     error: Optional[UiPathErrorContract] = None
 
+    event_type: UiPathRuntimeEventType = Field(
+        default=UiPathRuntimeEventType.RUNTIME_RESULT, frozen=True
+    )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format for output."""
-        output_data = self.output or {}
-        if isinstance(self.output, BaseModel):
+        if self.output is None:
+            output_data = {}
+        elif isinstance(self.output, BaseModel):
             output_data = self.output.model_dump()
+        else:
+            output_data = self.output
 
         result = {
             "output": output_data,

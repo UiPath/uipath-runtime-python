@@ -26,9 +26,6 @@ class UiPathExecutionTraceProcessorMixin:
             execution_id = parent_span.attributes.get("execution.id")
             if execution_id:
                 span.set_attribute("execution.id", execution_id)
-            evaluation_id = parent_span.attributes.get("evaluation.id")
-            if evaluation_id:
-                span.set_attribute("evaluation.id", evaluation_id)
 
 
 class UiPathExecutionBatchTraceProcessor(
