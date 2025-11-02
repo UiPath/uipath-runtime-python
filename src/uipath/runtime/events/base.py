@@ -12,6 +12,7 @@ class UiPathRuntimeEventType(str, Enum):
     RUNTIME_MESSAGE = "runtime_message"
     RUNTIME_STATE = "runtime_state"
     RUNTIME_ERROR = "runtime_error"
+    RUNTIME_RESULT = "runtime_result"
 
 
 class UiPathRuntimeEvent(BaseModel):

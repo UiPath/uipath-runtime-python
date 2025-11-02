@@ -4,14 +4,7 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import (
-    AsyncGenerator,
-    List,
-    Optional,
-    Union,
-)
-
-from pydantic import BaseModel
+from typing import AsyncGenerator
 
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.errors import (
@@ -26,8 +19,7 @@ from uipath.runtime.events import (
 from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 from uipath.runtime.schema import (
-    UiPathRuntimeBindingResource,
-    UiPathRuntimeEntrypoint,
+    UiPathRuntimeSchema,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,28 +41,8 @@ class UiPathBaseRuntime(ABC):
         """Initialize the runtime with the provided context."""
         self.context = context
 
-    @classmethod
-    def from_context(cls, context: UiPathRuntimeContext):
-        """Factory method to create a runtime instance from a context.
-
-        Args:
-            context: The runtime context with configuration
-
-        Returns:
-            An initialized Runtime instance
-        """
-        runtime = cls(context)
-        return runtime
-
-    async def get_binding_resources(self) -> List[UiPathRuntimeBindingResource]:
-        """Get binding resources for this runtime.
-
-        Returns: A list of binding resources.
-        """
-        raise NotImplementedError()
-
-    async def get_entrypoint(self) -> UiPathRuntimeEntrypoint:
-        """Get entrypoint for this runtime.
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """Get schema for this runtime.
 
         Returns: A entrypoint for this runtime.
         """
@@ -130,7 +102,7 @@ class UiPathBaseRuntime(ABC):
         return self
 
     @abstractmethod
-    async def execute(self) -> Optional[UiPathRuntimeResult]:
+    async def execute(self) -> UiPathRuntimeResult:
         """Execute with the provided context.
 
         Returns:
@@ -143,7 +115,7 @@ class UiPathBaseRuntime(ABC):
 
     async def stream(
         self,
-    ) -> AsyncGenerator[Union[UiPathRuntimeEvent, UiPathRuntimeResult], None]:
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream execution events in real-time.
 
         This is an optional method that runtimes can implement to support streaming.
@@ -233,12 +205,7 @@ class UiPathBaseRuntime(ABC):
             # Write the execution output to file if requested
             if self.context.output_file:
                 with open(self.context.output_file, "w") as f:
-                    if isinstance(execution_result.output, BaseModel):
-                        f.write(execution_result.output.model_dump())
-                    else:
-                        json.dump(
-                            execution_result.output or {}, f, indent=2, default=str
-                        )
+                    f.write(content.get("output", "{}"))
 
             # Don't suppress exceptions
             return False

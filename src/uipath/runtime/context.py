@@ -14,9 +14,9 @@ from typing import (
 from uuid import uuid4
 
 from pydantic import BaseModel
+from uipath.core.tracing.context import UiPathTraceContext
 
-from .result import UiPathRuntimeResult
-from .tracing.context import UiPathTraceContext
+from uipath.runtime.result import UiPathRuntimeResult
 
 C = TypeVar("C", bound="UiPathRuntimeContext")
 
