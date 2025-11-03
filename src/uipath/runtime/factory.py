@@ -127,7 +127,6 @@ class UiPathRuntimeExecutor:
     async def execute_in_root_span(
         self,
         runtime: UiPathBaseRuntime,
-        execution_id: Optional[str] = None,
         root_span: str = "root",
         attributes: Optional[dict[str, str]] = None,
     ) -> UiPathRuntimeResult:
@@ -135,8 +134,8 @@ class UiPathRuntimeExecutor:
         try:
             tracer: Tracer = trace.get_tracer("uipath-runtime")
             span_attributes = {}
-            if execution_id:
-                span_attributes["execution.id"] = execution_id
+            if runtime.context.execution_id:
+                span_attributes["execution.id"] = runtime.context.execution_id
             if attributes:
                 span_attributes.update(attributes)
 
@@ -151,7 +150,6 @@ class UiPathRuntimeExecutor:
     async def stream_in_root_span(
         self,
         runtime: UiPathBaseRuntime,
-        execution_id: Optional[str] = None,
         root_span: str = "root",
         attributes: Optional[dict[str, str]] = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
@@ -172,8 +170,8 @@ class UiPathRuntimeExecutor:
         try:
             tracer: Tracer = trace.get_tracer("uipath-runtime")
             span_attributes = {}
-            if execution_id:
-                span_attributes["execution.id"] = execution_id
+            if runtime.context.execution_id:
+                span_attributes["execution.id"] = runtime.context.execution_id
             if attributes:
                 span_attributes.update(attributes)
 

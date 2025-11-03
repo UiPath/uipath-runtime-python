@@ -44,7 +44,7 @@ class UiPathBaseRuntime(ABC):
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Get schema for this runtime.
 
-        Returns: A entrypoint for this runtime.
+        Returns: The runtime's schema (entrypoint type, input/output json schema).
         """
         raise NotImplementedError()
 
