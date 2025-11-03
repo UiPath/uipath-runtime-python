@@ -1,5 +1,8 @@
 # UiPath Runtime
 
+[![PyPI downloads](https://img.shields.io/pypi/dm/uipath-runtime.svg)](https://pypi.org/project/uipath-runtime/)
+[![Python versions](https://img.shields.io/pypi/pyversions/uipath-runtime.svg)](https://pypi.org/project/uipath-runtime/)
+
 Core runtime abstractions and contracts for the UiPath Python SDK.
 
 ## Overview
@@ -27,8 +30,33 @@ class MyCustomRuntime(UiPathBaseRuntime):
     def __init__(self, context: UiPathRuntimeContext):
         super().__init__(context)
 
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        # Returns the runtime's JSON schemas
+        return UiPathRuntimeSchema(
+            input={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Input message"
+                    }
+                },
+                "required": ["message"]
+            },
+            output={
+                "type": "object",
+                "properties": {
+                    "result": {
+                        "type": "string",
+                        "description": "Execution result"
+                    }
+                },
+                "required": ["result"]
+            }
+        )
+
     async def execute(self) -> UiPathRuntimeResult:
-        # Execute your agent logic
+        # Execute framework-specific agent invoke logic
         return UiPathRuntimeResult(
             output={"result": "success"},
             status=UiPathRuntimeStatus.SUCCESSFUL
@@ -36,7 +64,7 @@ class MyCustomRuntime(UiPathBaseRuntime):
 
     async def stream(
         self,
-    ) -> AsyncGenerator[Union[UiPathRuntimeEvent, UiPathRuntimeResult], None]:
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         # Stream events during execution for real-time monitoring
         yield UiPathRuntimeStateEvent(
             payload={"status": "starting"},
@@ -69,22 +97,22 @@ class MyCustomRuntime(UiPathBaseRuntime):
 The factory pattern handles runtime instantiation, instrumentation, and tracing:
 
 ```python
-from uipath.runtime import UiPathRuntimeFactory, UiPathRuntimeContext
+from uipath.runtime import UiPathRuntimeFactory, UiPathRuntimeContext, UiPathRuntimeExecutor
 
-factory = UiPathRuntimeFactory(
-    MyCustomRuntime,
-    UiPathRuntimeContext,
-)
+factory = UiPathRuntimeFactory(MyCustomRuntime)
+
+executor = UiPathRuntimeExecutor()
 
 # Add OpenTelemetry instrumentation
-factory.add_instrumentor(MyInstrumentor, get_current_span)
+executor.add_instrumentor(MyInstrumentor, get_current_span)
 
 # Add span exporters for tracing
-factory.add_span_exporter(JsonLinesFileExporter("trace.jsonl"))
+executor.add_span_exporter(JsonLinesFileExporter("trace.jsonl"))
 
 # Execute
 context = UiPathRuntimeContext(entrypoint="main.py", input='{"query": "hello"}')
-result = await factory.execute(context)
+async with factory.from_context(context):
+    result = await executor.execute(runtime)
 ```
 
 ### Event Streaming
@@ -92,7 +120,7 @@ result = await factory.execute(context)
 Runtimes can stream events during execution for real-time monitoring:
 
 ```python
-async for event in factory.stream(context):
+async for event in executor.stream(runtime):
     if isinstance(event, UiPathRuntimeStateEvent):
         print(f"State update: {event.payload}")
     elif isinstance(event, UiPathRuntimeMessageEvent):
