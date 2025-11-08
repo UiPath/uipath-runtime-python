@@ -10,7 +10,6 @@ from typing import (
     TypeVar,
 )
 
-from opentelemetry import trace
 from typing_extensions import override
 from uipath.core import UiPathTraceManager
 
@@ -20,6 +19,7 @@ from uipath.runtime.events import (
 )
 from uipath.runtime.logging import UiPathRuntimeExecutionLogHandler
 from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
+from uipath.runtime.result import UiPathRuntimeResult
 from uipath.runtime.schema import (
     UiPathRuntimeSchema,
 )
@@ -51,12 +51,13 @@ class UiPathBaseRuntime(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def execute(self, input: dict[str, Any]) -> Any:
+    async def execute(self, input: dict[str, Any]) -> UiPathRuntimeResult:
         """Produce the agent output."""
         raise NotImplementedError()
 
     async def stream(
         self,
+        input: dict[str, Any],
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream execution events in real-time.
 
@@ -120,16 +121,14 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
         self.trace_manager = trace_manager
         self.root_span = root_span
         self.execution_id = execution_id
-        self.log_handler: Optional[UiPathRuntimeExecutionLogHandler]
+        self.log_handler: Optional[UiPathRuntimeExecutionLogHandler] = None
         if execution_id is not None:
             self.log_handler = UiPathRuntimeExecutionLogHandler(execution_id)
-        else:
-            self.log_handler = None
 
     async def execute(
         self,
         input: dict[str, Any],
-    ) -> Any:
+    ) -> UiPathRuntimeResult:
         """Execute runtime with context."""
         if self.log_handler:
             log_interceptor = UiPathRuntimeLogsInterceptor(
@@ -153,8 +152,7 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
     @override
     async def stream(
         self,
-        root_span: str = "root",
-        execution_id: Optional[str] = None,
+        input: dict[str, Any],
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream runtime execution with context.
 
@@ -166,18 +164,24 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
             UiPathRuntimeEvent instances during execution and final UiPathRuntimeResult
 
         Raises:
-            UiPathRuntimeStreamNotSupportedError: If the runtime doesn't support streaming
+            UiPathStreamNotSupportedError: If the runtime doesn't support streaming
         """
+        if self.log_handler:
+            log_interceptor = UiPathRuntimeLogsInterceptor(
+                execution_id=self.execution_id, log_handler=self.log_handler
+            )
+            log_interceptor.setup()
         try:
-            tracer = trace.get_tracer("uipath-runtime")
-            span_attributes: dict[str, Any] = {}
-            if execution_id:
-                span_attributes["execution.id"] = "exec-a"
-            with tracer.start_as_current_span(root_span, attributes=span_attributes):
-                async for event in self.delegate.stream():
-                    yield event
+            if self.execution_id:
+                with self.trace_manager.start_execution_span(
+                    self.root_span, execution_id=self.execution_id
+                ):
+                    async for event in self.delegate.stream(input):
+                        yield event
         finally:
             self.trace_manager.flush_spans()
+            if self.log_handler:
+                log_interceptor.teardown()
 
     def cleanup(self) -> None:
         """Close runtime resources."""

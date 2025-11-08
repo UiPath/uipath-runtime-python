@@ -1,7 +1,7 @@
 """Debug runtime implementation."""
 
 import logging
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from uipath.runtime import (
     UiPathBaseRuntime,
@@ -36,7 +36,7 @@ class UiPathDebugRuntime(UiPathBaseRuntime, Generic[T]):
         self.delegate: T = delegate
         self.debug_bridge: UiPathDebugBridge = debug_bridge
 
-    async def execute(self) -> UiPathRuntimeResult:
+    async def execute(self, input: dict[str, Any]) -> UiPathRuntimeResult:
         """Execute the workflow with debug support."""
         try:
             await self.debug_bridge.connect()
@@ -46,14 +46,14 @@ class UiPathDebugRuntime(UiPathBaseRuntime, Generic[T]):
             result: UiPathRuntimeResult
             # Try to stream events from inner runtime
             try:
-                result = await self._stream_and_debug(self.delegate)
+                result = await self._stream_and_debug(self.delegate, input)
             except UiPathStreamNotSupportedError:
                 # Fallback to regular execute if streaming not supported
                 logger.debug(
                     f"Runtime {self.delegate.__class__.__name__} does not support "
                     "streaming, falling back to execute()"
                 )
-                result = await self.delegate.execute()
+                result = await self.delegate.execute(input)
 
             await self.debug_bridge.emit_execution_completed(result)
 
@@ -71,7 +71,9 @@ class UiPathDebugRuntime(UiPathBaseRuntime, Generic[T]):
             )
             raise
 
-    async def _stream_and_debug(self, inner_runtime: T) -> UiPathRuntimeResult:
+    async def _stream_and_debug(
+        self, inner_runtime: T, input: dict[str, Any]
+    ) -> UiPathRuntimeResult:
         """Stream events from inner runtime and handle debug interactions."""
         final_result: UiPathRuntimeResult
         execution_completed = False
@@ -82,9 +84,10 @@ class UiPathDebugRuntime(UiPathBaseRuntime, Generic[T]):
         # Keep streaming until execution completes (not just paused at breakpoint)
         while not execution_completed:
             # Update breakpoints from debug bridge
-            inner_runtime.context.breakpoints = self.debug_bridge.get_breakpoints()
+            if inner_runtime.context is not None:
+                inner_runtime.context.breakpoints = self.debug_bridge.get_breakpoints()
             # Stream events from inner runtime
-            async for event in inner_runtime.stream():
+            async for event in inner_runtime.stream(input):
                 # Handle final result
                 if isinstance(event, UiPathRuntimeResult):
                     final_result = event
@@ -96,7 +99,8 @@ class UiPathDebugRuntime(UiPathBaseRuntime, Generic[T]):
                             await self.debug_bridge.emit_breakpoint_hit(event)
                             await self.debug_bridge.wait_for_resume()
 
-                            self.delegate.context.resume = True
+                            if inner_runtime.context is not None:
+                                inner_runtime.context.resume = True
 
                         except UiPathDebugQuitError:
                             final_result = UiPathRuntimeResult(
@@ -114,10 +118,6 @@ class UiPathDebugRuntime(UiPathBaseRuntime, Generic[T]):
                     await self.debug_bridge.emit_state_update(event)
 
         return final_result
-
-    async def validate(self) -> None:
-        """Validate runtime configuration."""
-        await self.delegate.validate()
 
     async def cleanup(self) -> None:
         """Cleanup runtime resources."""
