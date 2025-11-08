@@ -1,6 +1,6 @@
 """UiPath Runtime Package."""
 
-from uipath.runtime.base import UiPathBaseRuntime
+from uipath.runtime.base import UiPathBaseRuntime, UiPathStreamNotSupportedError
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.factory import UiPathRuntimeExecutor, UiPathRuntimeFactory
@@ -10,6 +10,7 @@ from uipath.runtime.result import (
     UiPathResumeTrigger,
     UiPathResumeTriggerType,
     UiPathRuntimeResult,
+    UiPathRuntimeStatus,
 )
 
 __all__ = [
@@ -18,9 +19,11 @@ __all__ = [
     "UiPathRuntimeFactory",
     "UiPathRuntimeExecutor",
     "UiPathRuntimeResult",
+    "UiPathRuntimeStatus",
     "UiPathRuntimeEvent",
     "UiPathBreakpointResult",
     "UiPathApiTrigger",
     "UiPathResumeTrigger",
     "UiPathResumeTriggerType",
+    "UiPathStreamNotSupportedError",
 ]

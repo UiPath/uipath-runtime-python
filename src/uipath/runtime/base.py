@@ -25,7 +25,7 @@ from uipath.runtime.schema import (
 logger = logging.getLogger(__name__)
 
 
-class UiPathRuntimeStreamNotSupportedError(NotImplementedError):
+class UiPathStreamNotSupportedError(NotImplementedError):
     """Raised when a runtime does not support streaming."""
 
     pass
@@ -130,7 +130,7 @@ class UiPathBaseRuntime(ABC):
             Final yield: UiPathRuntimeResult (or its subclass UiPathBreakpointResult)
 
         Raises:
-            UiPathRuntimeStreamNotSupportedError: If the runtime doesn't support streaming
+            UiPathStreamNotSupportedError: If the runtime doesn't support streaming
             RuntimeError: If execution fails
 
         Example:
@@ -146,7 +146,7 @@ class UiPathBaseRuntime(ABC):
                     # Handle state update
                     print(f"State updated by: {event.node_name}")
         """
-        raise UiPathRuntimeStreamNotSupportedError(
+        raise UiPathStreamNotSupportedError(
             f"{self.__class__.__name__} does not implement streaming. "
             "Use execute() instead."
         )
