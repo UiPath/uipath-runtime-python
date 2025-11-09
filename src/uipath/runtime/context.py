@@ -6,8 +6,6 @@ import os
 from functools import cached_property
 from typing import (
     Any,
-    List,
-    Literal,
     Optional,
     TypeVar,
 )
@@ -16,7 +14,16 @@ from uuid import uuid4
 from pydantic import BaseModel
 from uipath.core.tracing.context import UiPathTraceContext
 
-from uipath.runtime.result import UiPathRuntimeResult
+from uipath.runtime.errors import (
+    UiPathErrorCategory,
+    UiPathErrorCode,
+    UiPathErrorContract,
+    UiPathRuntimeError,
+)
+from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
+from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
+
+logger = logging.getLogger(__name__)
 
 C = TypeVar("C", bound="UiPathRuntimeContext")
 
@@ -25,10 +32,8 @@ class UiPathRuntimeContext(BaseModel):
     """Context information passed throughout the runtime execution."""
 
     entrypoint: Optional[str] = None
-    input: Optional[Any] = None
-    resume: bool = False
+    input: Optional[dict[str, Any]] = None
     job_id: Optional[str] = None
-    execution_id: Optional[str] = None
     trace_context: Optional[UiPathTraceContext] = None
     config_path: str = "uipath.json"
     runtime_dir: Optional[str] = "__uipath"
@@ -38,12 +43,135 @@ class UiPathRuntimeContext(BaseModel):
     output_file: Optional[str] = None
     trace_file: Optional[str] = None
     logs_file: Optional[str] = "execution.log"
-    log_handler: Optional[logging.Handler] = None
     logs_min_level: Optional[str] = "INFO"
-    breakpoints: Optional[List[str] | Literal["*"]] = None
     result: Optional[UiPathRuntimeResult] = None
 
     model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
+
+    def __enter__(self):
+        """Async enter method called when entering the 'async with' block.
+
+        Initializes and prepares the runtime contextual environment.
+
+        Returns:
+            The runtime context instance
+        """
+        try:
+            if self.input_file:
+                # Read the input from file if provided
+                _, file_extension = os.path.splitext(self.input_file)
+                if file_extension != ".json":
+                    raise UiPathRuntimeError(
+                        code=UiPathErrorCode.INVALID_INPUT_FILE_EXTENSION,
+                        title="Invalid Input File Extension",
+                        detail="The provided input file must be in JSON format.",
+                    )
+                with open(self.input_file) as f:
+                    self.input = json.loads(f.read())
+        except json.JSONDecodeError as e:
+            raise UiPathRuntimeError(
+                UiPathErrorCode.INPUT_INVALID_JSON,
+                "Invalid JSON input",
+                f"The input data is not valid JSON: {str(e)}",
+                UiPathErrorCategory.USER,
+            ) from e
+
+        # Intercept all stdout/stderr/logs
+        # Write to file (runtime), stdout (debug) or log handler (if provided)
+        self.logs_interceptor = UiPathRuntimeLogsInterceptor(
+            min_level=self.logs_min_level,
+            dir=self.runtime_dir,
+            file=self.logs_file,
+            job_id=self.job_id,
+        )
+        self.logs_interceptor.setup()
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Async exit method called when exiting the 'async with' block.
+
+        Cleans up resources and handles any exceptions.
+
+        Always writes output file regardless of whether execution was successful,
+        suspended, or encountered an error.
+        """
+        try:
+            if self.result is None:
+                self.result = UiPathRuntimeResult()
+
+            if exc_type:
+                # Create error info from exception
+                if isinstance(exc_val, UiPathRuntimeError):
+                    error_info = exc_val.error_info
+                else:
+                    # Generic error
+                    error_info = UiPathErrorContract(
+                        code=f"ERROR_{exc_type.__name__}",
+                        title=f"Runtime error: {exc_type.__name__}",
+                        detail=str(exc_val),
+                        category=UiPathErrorCategory.UNKNOWN,
+                    )
+
+                self.result.status = UiPathRuntimeStatus.FAULTED
+                self.result.error = error_info
+
+            content = self.result.to_dict()
+
+            # Always write output file at runtime, except for inner runtimes
+            # Inner runtimes have execution_id
+            if self.job_id:
+                with open(self.result_file_path, "w") as f:
+                    json.dump(content, f, indent=2, default=str)
+
+            # Write the execution output to file if requested
+            if self.output_file:
+                with open(self.output_file, "w") as f:
+                    f.write(content.get("output", "{}"))
+
+            # Don't suppress exceptions
+            return False
+
+        except Exception as e:
+            logger.error(f"Error during runtime shutdown: {str(e)}")
+
+            # Create a fallback error result if we fail during cleanup
+            if not isinstance(e, UiPathRuntimeError):
+                error_info = UiPathErrorContract(
+                    code="RUNTIME_SHUTDOWN_ERROR",
+                    title="Runtime shutdown failed",
+                    detail=f"Error: {str(e)}",
+                    category=UiPathErrorCategory.SYSTEM,
+                )
+            else:
+                error_info = e.error_info
+
+            # Last-ditch effort to write error output
+            try:
+                error_result = UiPathRuntimeResult(
+                    status=UiPathRuntimeStatus.FAULTED, error=error_info
+                )
+                error_result_content = error_result.to_dict()
+                if self.job_id:
+                    with open(self.result_file_path, "w") as f:
+                        json.dump(error_result_content, f, indent=2, default=str)
+            except Exception as write_error:
+                logger.error(f"Failed to write error output file: {str(write_error)}")
+                raise
+
+            # Re-raise as RuntimeError if it's not already a UiPathRuntimeError
+            if not isinstance(e, UiPathRuntimeError):
+                raise RuntimeError(
+                    error_info.code,
+                    error_info.title,
+                    error_info.detail,
+                    error_info.category,
+                ) from e
+            raise
+        finally:
+            # Restore original logging
+            if hasattr(self, "logs_interceptor"):
+                self.logs_interceptor.teardown()
 
     @cached_property
     def result_file_path(self) -> str:

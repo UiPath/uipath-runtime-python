@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Sequence, cast
+from typing import Any, AsyncGenerator, List, Optional, Sequence, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -10,17 +10,19 @@ import pytest
 from uipath.runtime import (
     UiPathBaseRuntime,
     UiPathBreakpointResult,
+    UiPathExecuteOptions,
     UiPathRuntimeContext,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
     UiPathStreamNotSupportedError,
+    UiPathStreamOptions,
 )
 from uipath.runtime.debug import (
     UiPathDebugBridge,
     UiPathDebugQuitError,
     UiPathDebugRuntime,
 )
-from uipath.runtime.events import UiPathRuntimeStateEvent
+from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeStateEvent
 
 
 def make_debug_bridge_mock() -> UiPathDebugBridge:
@@ -50,28 +52,26 @@ class StreamingMockRuntime(UiPathBaseRuntime):
 
     def __init__(
         self,
-        context: UiPathRuntimeContext,
         node_sequence: Sequence[str],
         *,
         stream_unsupported: bool = False,
         error_in_stream: bool = False,
     ) -> None:
-        super().__init__(context)
+        super().__init__()
         self.node_sequence: List[str] = list(node_sequence)
         self.stream_unsupported: bool = stream_unsupported
         self.error_in_stream: bool = error_in_stream
 
         self.execute_called: bool = False
-        self.validate_called: bool = False
-        self.cleanup_called: bool = False
-
-    async def validate(self) -> None:
-        self.validate_called = True
 
     async def cleanup(self) -> None:
-        self.cleanup_called = True
+        pass
 
-    async def execute(self) -> UiPathRuntimeResult:
+    async def execute(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
+    ) -> UiPathRuntimeResult:
         """Fallback execute path (used when streaming is not supported)."""
         self.execute_called = True
         return UiPathRuntimeResult(
@@ -79,7 +79,11 @@ class StreamingMockRuntime(UiPathBaseRuntime):
             output={"mode": "execute"},
         )
 
-    async def stream(self):
+    async def stream(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathStreamOptions] = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Async generator yielding state events, breakpoint events, and final result."""
         if self.stream_unsupported:
             raise UiPathStreamNotSupportedError("Streaming not supported")
@@ -90,13 +94,15 @@ class StreamingMockRuntime(UiPathBaseRuntime):
         for idx, node in enumerate(self.node_sequence):
             # 1) Always emit a state update event
             yield UiPathRuntimeStateEvent(
-                execution_id=self.context.execution_id,
                 node_name=node,
                 payload={"index": idx, "node": node},
             )
 
             # 2) Check for breakpoints on this node
-            breakpoints = self.context.breakpoints
+            if options:
+                breakpoints = options.breakpoints
+            else:
+                breakpoints = []
             hit_breakpoint = False
 
             if breakpoints == "*":
@@ -124,10 +130,7 @@ class StreamingMockRuntime(UiPathBaseRuntime):
 async def test_debug_runtime_streams_and_handles_breakpoints_and_state():
     """UiPathDebugRuntime should stream events, handle breakpoints and state updates."""
 
-    context = UiPathRuntimeContext(execution_id="exec-stream")
-
     runtime_impl = StreamingMockRuntime(
-        context,
         node_sequence=["node-1", "node-2", "node-3"],
     )
     bridge = make_debug_bridge_mock()
@@ -137,18 +140,16 @@ async def test_debug_runtime_streams_and_handles_breakpoints_and_state():
     cast(Mock, bridge.get_breakpoints).return_value = ["node-2"]
 
     debug_runtime = UiPathDebugRuntime(
-        context=context,
         delegate=runtime_impl,
         debug_bridge=bridge,
     )
 
-    result = await debug_runtime.execute()
+    result = await debug_runtime.execute({})
 
     # Result propagation
     assert isinstance(result, UiPathRuntimeResult)
     assert result.status == UiPathRuntimeStatus.SUCCESSFUL
     assert result.output == {"visited_nodes": ["node-1", "node-2", "node-3"]}
-    assert context.result is result
 
     # Bridge lifecycle
     cast(AsyncMock, bridge.connect).assert_awaited_once()
@@ -162,20 +163,12 @@ async def test_debug_runtime_streams_and_handles_breakpoints_and_state():
         cast(AsyncMock, bridge.wait_for_resume).await_count == 2
     )  # initial + after breakpoint
 
-    # Breakpoints applied to inner runtime context
-    assert runtime_impl.context.breakpoints == ["node-2"]
-    # After resume, debug runtime should set resume flag
-    assert runtime_impl.context.resume is True
-
 
 @pytest.mark.asyncio
 async def test_debug_runtime_falls_back_when_stream_not_supported():
     """If runtime raises UiPathStreamNotSupportedError, we fall back to execute()."""
 
-    context = UiPathRuntimeContext(execution_id="exec-fallback")
-
     runtime_impl = StreamingMockRuntime(
-        context,
         node_sequence=["node-1"],
         stream_unsupported=True,
     )
@@ -185,12 +178,11 @@ async def test_debug_runtime_falls_back_when_stream_not_supported():
     cast(AsyncMock, bridge.wait_for_resume).return_value = None
 
     debug_runtime = UiPathDebugRuntime(
-        context=context,
         delegate=runtime_impl,
         debug_bridge=bridge,
     )
 
-    result = await debug_runtime.execute()
+    result = await debug_runtime.execute({})
 
     # Fallback to execute() path
     assert runtime_impl.execute_called is True
@@ -211,10 +203,7 @@ async def test_debug_runtime_falls_back_when_stream_not_supported():
 async def test_debug_runtime_quit_creates_successful_result():
     """UiPathDebugRuntime should handle UiPathDebugQuitError and return SUCCESSFUL."""
 
-    context = UiPathRuntimeContext(execution_id="exec-quit")
-
     runtime_impl = StreamingMockRuntime(
-        context,
         node_sequence=["node-quit"],
     )
     bridge = make_debug_bridge_mock()
@@ -227,12 +216,11 @@ async def test_debug_runtime_quit_creates_successful_result():
     cast(Mock, bridge.get_breakpoints).return_value = ["node-quit"]
 
     debug_runtime = UiPathDebugRuntime(
-        context=context,
         delegate=runtime_impl,
         debug_bridge=bridge,
     )
 
-    result = await debug_runtime.execute()
+    result = await debug_runtime.execute({})
 
     # Quit result is synthesized as SUCCESSFUL (no specific output required)
     assert isinstance(result, UiPathRuntimeResult)
@@ -250,11 +238,8 @@ async def test_debug_runtime_quit_creates_successful_result():
 async def test_debug_runtime_execute_reports_errors_and_marks_faulted():
     """On unexpected errors, UiPathDebugRuntime should emit error and mark result FAULTED."""
 
-    context = UiPathRuntimeContext(execution_id="exec-error")
-
     # This runtime will raise an error as soon as stream() is used
     runtime_impl = StreamingMockRuntime(
-        context,
         node_sequence=["node-1"],
         error_in_stream=True,
     )
@@ -262,17 +247,17 @@ async def test_debug_runtime_execute_reports_errors_and_marks_faulted():
     cast(AsyncMock, bridge.wait_for_resume).return_value = None
 
     debug_runtime = UiPathDebugRuntime(
-        context=context,
         delegate=runtime_impl,
         debug_bridge=bridge,
     )
 
     with pytest.raises(RuntimeError, match="Stream blew up"):
-        await debug_runtime.execute()
+        with UiPathRuntimeContext.with_defaults() as ctx:
+            ctx.result = await debug_runtime.execute(input=ctx.input)
 
     # Context should be marked FAULTED
-    assert context.result is not None
-    assert context.result.status == UiPathRuntimeStatus.FAULTED
+    assert ctx.result is not None
+    assert ctx.result.status == UiPathRuntimeStatus.FAULTED
 
     # Error should be emitted to debug bridge
     cast(AsyncMock, bridge.emit_execution_error).assert_awaited_once()
@@ -281,23 +266,19 @@ async def test_debug_runtime_execute_reports_errors_and_marks_faulted():
 
 
 @pytest.mark.asyncio
-async def test_debug_runtime_cleanup_calls_inner_cleanup_and_disconnect():
-    """cleanup() should call inner runtime cleanup and debug bridge disconnect."""
+async def test_debug_runtime_cleanup_calls_disconnect():
+    """cleanup() should call debug bridge disconnect."""
 
-    context = UiPathRuntimeContext(execution_id="exec-cleanup")
-
-    runtime_impl = StreamingMockRuntime(context, node_sequence=["node-1"])
+    runtime_impl = StreamingMockRuntime(node_sequence=["node-1"])
     bridge = make_debug_bridge_mock()
 
     debug_runtime = UiPathDebugRuntime(
-        context=context,
         delegate=runtime_impl,
         debug_bridge=bridge,
     )
 
     await debug_runtime.cleanup()
 
-    assert runtime_impl.cleanup_called is True
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
 
 
@@ -305,14 +286,11 @@ async def test_debug_runtime_cleanup_calls_inner_cleanup_and_disconnect():
 async def test_debug_runtime_cleanup_suppresses_disconnect_errors():
     """Errors from debug_bridge.disconnect should be suppressed, inner cleanup still runs."""
 
-    context = UiPathRuntimeContext(execution_id="exec-cleanup-disconnect-error")
-
-    runtime_impl = StreamingMockRuntime(context, node_sequence=["node-1"])
+    runtime_impl = StreamingMockRuntime(node_sequence=["node-1"])
     bridge = make_debug_bridge_mock()
     cast(AsyncMock, bridge.disconnect).side_effect = RuntimeError("disconnect failed")
 
     debug_runtime = UiPathDebugRuntime(
-        context=context,
         delegate=runtime_impl,
         debug_bridge=bridge,
     )
@@ -320,33 +298,4 @@ async def test_debug_runtime_cleanup_suppresses_disconnect_errors():
     # No exception should bubble up from cleanup()
     await debug_runtime.cleanup()
 
-    assert runtime_impl.cleanup_called is True
-    cast(AsyncMock, bridge.disconnect).assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_debug_runtime_cleanup_propagates_inner_cleanup_error_but_still_disconnects():
-    """If inner runtime cleanup fails, the error bubbles up but disconnect is still attempted."""
-
-    context = UiPathRuntimeContext(execution_id="exec-cleanup-inner-error")
-
-    runtime_impl = StreamingMockRuntime(context, node_sequence=["node-1"])
-    bridge = make_debug_bridge_mock()
-
-    async def failing_cleanup() -> None:
-        runtime_impl.cleanup_called = True
-        raise RuntimeError("inner cleanup failed")
-
-    runtime_impl.cleanup = failing_cleanup  # type: ignore[method-assign]
-
-    debug_runtime = UiPathDebugRuntime(
-        context=context,
-        delegate=runtime_impl,
-        debug_bridge=bridge,
-    )
-
-    with pytest.raises(RuntimeError, match="inner cleanup failed"):
-        await debug_runtime.cleanup()
-
-    assert runtime_impl.cleanup_called is True
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()

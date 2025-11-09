@@ -1,11 +1,17 @@
 """Simple test for runtime factory and executor span capture."""
 
+from typing import Any, Generic, List, Optional, TypeVar
+
 import pytest
 from opentelemetry import trace
+from uipath.core import UiPathTraceManager
 
-from uipath.runtime.base import UiPathBaseRuntime
-from uipath.runtime.context import UiPathRuntimeContext
-from uipath.runtime.factory import UiPathRuntimeExecutor, UiPathRuntimeFactory
+from uipath.runtime import (
+    UiPathBaseRuntime,
+    UiPathExecuteOptions,
+    UiPathExecutionRuntime,
+    UiPathRuntimeFactory,
+)
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 
@@ -18,7 +24,12 @@ class MockRuntimeA(UiPathBaseRuntime):
     async def cleanup(self):
         pass
 
-    async def execute(self) -> UiPathRuntimeResult:
+    async def execute(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
+    ) -> UiPathRuntimeResult:
+        print(f"executing {input}")
         return UiPathRuntimeResult(
             output={"runtime": "A"}, status=UiPathRuntimeStatus.SUCCESSFUL
         )
@@ -33,7 +44,12 @@ class MockRuntimeB(UiPathBaseRuntime):
     async def cleanup(self):
         pass
 
-    async def execute(self) -> UiPathRuntimeResult:
+    async def execute(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
+    ) -> UiPathRuntimeResult:
+        print(f"executing {input}")
         return UiPathRuntimeResult(
             output={"runtime": "B"}, status=UiPathRuntimeStatus.SUCCESSFUL
         )
@@ -48,7 +64,12 @@ class MockRuntimeC(UiPathBaseRuntime):
     async def cleanup(self):
         pass
 
-    async def execute(self) -> UiPathRuntimeResult:
+    async def execute(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
+    ) -> UiPathRuntimeResult:
+        print(f"executing {input}")
         tracer = trace.get_tracer("test-runtime-c")
 
         # Create a child span
@@ -80,38 +101,53 @@ class MockRuntimeC(UiPathBaseRuntime):
         )
 
 
+T = TypeVar("T", bound=UiPathBaseRuntime)
+
+
+class UiPathTestRuntimeFactory(UiPathRuntimeFactory[T], Generic[T]):
+    def __init__(self, runtime_class: type[T]):
+        self.runtime_class = runtime_class
+
+    def new_runtime(self, entrypoint: str) -> T:
+        return self.runtime_class()
+
+    def discover_runtimes(self) -> List[T]:
+        return []
+
+
 @pytest.mark.asyncio
 async def test_multiple_factories_same_executor():
     """Test two factories using same executor, verify spans are captured correctly."""
+    trace_manager = UiPathTraceManager()
 
     # Create two factories for different runtimes
-    factory_a = UiPathRuntimeFactory(MockRuntimeA)
-    factory_b = UiPathRuntimeFactory(MockRuntimeB)
-    factory_c = UiPathRuntimeFactory(MockRuntimeC)
+    factory_a = UiPathTestRuntimeFactory(MockRuntimeA)
+    factory_b = UiPathTestRuntimeFactory(MockRuntimeB)
+    factory_c = UiPathTestRuntimeFactory(MockRuntimeC)
 
     # Create single executor
-    executor = UiPathRuntimeExecutor()
 
     # Execute runtime A
-    runtime_a = factory_a.from_context(UiPathRuntimeContext(execution_id="exec-a"))
-    async with runtime_a:
-        result_a = await executor.execute_in_root_span(
-            runtime_a, root_span="runtime-a-span"
-        )
+    runtime_a = factory_a.new_runtime(entrypoint="")
+    execution_runtime_a = UiPathExecutionRuntime(
+        runtime_a, trace_manager, "runtime-a-span", "exec-a"
+    )
+    result_a = await execution_runtime_a.execute({"input": "a"})
 
     # Execute runtime B
-    runtime_b = factory_b.from_context(UiPathRuntimeContext(execution_id="exec-b"))
-    async with runtime_b:
-        result_b = await executor.execute_in_root_span(
-            runtime_b, root_span="runtime-b-span"
-        )
+    runtime_b = factory_b.new_runtime(entrypoint="")
+    execution_runtime_b = UiPathExecutionRuntime(
+        runtime_b, trace_manager, "runtime-b-span", "exec-b"
+    )
+    result_b = await execution_runtime_b.execute({"input": "b"})
 
     # Execute runtime C with custom spans
-    runtime_c = factory_c.from_context(UiPathRuntimeContext(execution_id="exec-c"))
-    async with runtime_c:
-        result_c = await executor.execute_in_root_span(
-            runtime_c, root_span="runtime-c-span"
-        )
+
+    runtime_c = factory_c.new_runtime(entrypoint="")
+    execution_runtime_c = UiPathExecutionRuntime(
+        runtime_c, trace_manager, "runtime-c-span", "exec-c"
+    )
+    result_c = await execution_runtime_c.execute({"input": "c"})
 
     # Verify results
     assert result_a.status == UiPathRuntimeStatus.SUCCESSFUL
@@ -122,19 +158,19 @@ async def test_multiple_factories_same_executor():
     assert result_c.output == {"runtime": "C", "spans_created": 4}
 
     # Verify spans for execution A
-    spans_a = executor.get_execution_spans("exec-a")
+    spans_a = trace_manager.get_execution_spans("exec-a")
     assert len(spans_a) > 0
     span_names_a = [s.name for s in spans_a]
     assert "runtime-a-span" in span_names_a
 
     # Verify spans for execution B
-    spans_b = executor.get_execution_spans("exec-b")
+    spans_b = trace_manager.get_execution_spans("exec-b")
     assert len(spans_b) > 0
     span_names_b = [s.name for s in spans_b]
     assert "runtime-b-span" in span_names_b
 
     # Verify spans for execution C (should include custom spans)
-    spans_c = executor.get_execution_spans("exec-c")
+    spans_c = trace_manager.get_execution_spans("exec-c")
     assert len(spans_c) > 0
     span_names_c = [s.name for s in spans_c]
 
@@ -178,3 +214,16 @@ async def test_multiple_factories_same_executor():
     for span in spans_c:
         assert span.attributes is not None
         assert span.attributes.get("execution.id") == "exec-c"
+
+    # Verify logs are captured
+    assert execution_runtime_a.log_handler
+    assert len(execution_runtime_a.log_handler.buffer) > 0
+    assert execution_runtime_a.log_handler.buffer[0].msg == "executing {'input': 'a'}"
+
+    assert execution_runtime_b.log_handler
+    assert len(execution_runtime_b.log_handler.buffer) > 0
+    assert execution_runtime_b.log_handler.buffer[0].msg == "executing {'input': 'b'}"
+
+    assert execution_runtime_c.log_handler
+    assert len(execution_runtime_c.log_handler.buffer) > 0
+    assert execution_runtime_c.log_handler.buffer[0].msg == "executing {'input': 'c'}"
