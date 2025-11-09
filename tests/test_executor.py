@@ -128,21 +128,21 @@ async def test_multiple_factories_same_executor():
     # Execute runtime A
     runtime_a = factory_a.new_runtime(entrypoint="")
     execution_runtime_a = UiPathExecutionRuntime(
-        runtime_a, trace_manager, "runtime-a-span", "exec-a"
+        runtime_a, trace_manager, "runtime-a-span", execution_id="exec-a"
     )
     result_a = await execution_runtime_a.execute({"input": "a"})
 
     # Execute runtime B
     runtime_b = factory_b.new_runtime(entrypoint="")
     execution_runtime_b = UiPathExecutionRuntime(
-        runtime_b, trace_manager, "runtime-b-span", "exec-b"
+        runtime_b, trace_manager, "runtime-b-span", execution_id="exec-b"
     )
     result_b = await execution_runtime_b.execute({"input": "b"})
 
     # Execute runtime C with custom spans
     runtime_c = factory_c.new_runtime(entrypoint="")
     execution_runtime_c = UiPathExecutionRuntime(
-        runtime_c, trace_manager, "runtime-c-span", "exec-c"
+        runtime_c, trace_manager, "runtime-c-span", execution_id="exec-c"
     )
     result_c = await execution_runtime_c.execute({"input": "c"})
 
