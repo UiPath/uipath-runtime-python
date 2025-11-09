@@ -117,15 +117,13 @@ class UiPathTestRuntimeFactory(UiPathRuntimeFactory[T], Generic[T]):
 
 @pytest.mark.asyncio
 async def test_multiple_factories_same_executor():
-    """Test two factories using same executor, verify spans are captured correctly."""
+    """Test factories using same trace manager, verify spans are captured correctly."""
     trace_manager = UiPathTraceManager()
 
-    # Create two factories for different runtimes
+    # Create factories for different runtimes
     factory_a = UiPathTestRuntimeFactory(MockRuntimeA)
     factory_b = UiPathTestRuntimeFactory(MockRuntimeB)
     factory_c = UiPathTestRuntimeFactory(MockRuntimeC)
-
-    # Create single executor
 
     # Execute runtime A
     runtime_a = factory_a.new_runtime(entrypoint="")
@@ -142,7 +140,6 @@ async def test_multiple_factories_same_executor():
     result_b = await execution_runtime_b.execute({"input": "b"})
 
     # Execute runtime C with custom spans
-
     runtime_c = factory_c.new_runtime(entrypoint="")
     execution_runtime_c = UiPathExecutionRuntime(
         runtime_c, trace_manager, "runtime-c-span", "exec-c"
