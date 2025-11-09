@@ -2,7 +2,7 @@
 
 import sys
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from uipath.runtime.errors.codes import UiPathErrorCode
 from uipath.runtime.errors.contract import UiPathErrorCategory, UiPathErrorContract
@@ -71,7 +71,7 @@ class UiPathBaseRuntimeError(Exception):
         return None
 
     @property
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         """Get the error information as a dictionary."""
         return self.error_info.model_dump()
 

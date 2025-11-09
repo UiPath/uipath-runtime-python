@@ -1,6 +1,6 @@
 """UiPath Runtime Schema Definitions."""
 
-from typing import Any, Dict
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,8 +19,8 @@ class UiPathRuntimeSchema(BaseModel):
     file_path: str = Field(..., alias="filePath")
     unique_id: str = Field(..., alias="uniqueId")
     type: str = Field(..., alias="type")
-    input: Dict[str, Any] = Field(..., alias="input")
-    output: Dict[str, Any] = Field(..., alias="output")
+    input: dict[str, Any] = Field(..., alias="input")
+    output: dict[str, Any] = Field(..., alias="output")
 
     model_config = COMMON_MODEL_SCHEMA
 

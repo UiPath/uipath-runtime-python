@@ -3,7 +3,6 @@
 from abc import ABC, abstractmethod
 from typing import (
     Generic,
-    List,
     TypeVar,
 )
 
@@ -16,7 +15,7 @@ class UiPathRuntimeFactory(Generic[T], ABC):
     """Generic factory for UiPath runtime classes."""
 
     @abstractmethod
-    def discover_runtimes(self) -> List[T]:
+    def discover_runtimes(self) -> list[T]:
         """Discover all runtime classes."""
         raise NotImplementedError()
 

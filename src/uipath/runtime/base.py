@@ -6,7 +6,6 @@ from typing import (
     Any,
     AsyncGenerator,
     Generic,
-    List,
     Literal,
     Optional,
     TypeVar,
@@ -43,7 +42,7 @@ class UiPathExecuteOptions(BaseModel):
         default=False,
         description="Indicates whether to resume a suspended execution.",
     )
-    breakpoints: Optional[List[str] | Literal["*"]] = Field(
+    breakpoints: Optional[list[str] | Literal["*"]] = Field(
         default=None,
         description="List of nodes or '*' to break on all steps.",
     )

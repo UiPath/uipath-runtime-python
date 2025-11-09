@@ -1,7 +1,7 @@
 """Abstract debug bridge interface."""
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Literal
+from typing import Any, Literal
 
 from uipath.runtime import (
     UiPathBreakpointResult,
@@ -65,7 +65,7 @@ class UiPathDebugBridge(ABC):
         pass
 
     @abstractmethod
-    def get_breakpoints(self) -> List[str] | Literal["*"]:
+    def get_breakpoints(self) -> list[str] | Literal["*"]:
         """Get nodes to suspend execution at.
 
         Returns:

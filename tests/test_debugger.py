@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, List, Optional, Sequence, cast
+from typing import Any, AsyncGenerator, Optional, Sequence, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -58,7 +58,7 @@ class StreamingMockRuntime(UiPathBaseRuntime):
         error_in_stream: bool = False,
     ) -> None:
         super().__init__()
-        self.node_sequence: List[str] = list(node_sequence)
+        self.node_sequence: list[str] = list(node_sequence)
         self.stream_unsupported: bool = stream_unsupported
         self.error_in_stream: bool = error_in_stream
 

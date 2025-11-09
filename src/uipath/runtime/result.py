@@ -1,7 +1,7 @@
 """Result of an execution with status and optional error information."""
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -56,7 +56,7 @@ class UiPathResumeTrigger(BaseModel):
 class UiPathRuntimeResult(UiPathRuntimeEvent):
     """Result of an execution with status and optional error information."""
 
-    output: Optional[Union[Dict[str, Any], BaseModel]] = None
+    output: Optional[Union[dict[str, Any], BaseModel]] = None
     status: UiPathRuntimeStatus = UiPathRuntimeStatus.SUCCESSFUL
     resume: Optional[UiPathResumeTrigger] = None
     error: Optional[UiPathErrorContract] = None
@@ -65,7 +65,7 @@ class UiPathRuntimeResult(UiPathRuntimeEvent):
         default=UiPathRuntimeEventType.RUNTIME_RESULT, frozen=True
     )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format for output."""
         if self.output is None:
             output_data = {}
@@ -98,4 +98,4 @@ class UiPathBreakpointResult(UiPathRuntimeResult):
     breakpoint_node: str  # Which node the breakpoint is at
     breakpoint_type: Literal["before", "after"]  # Before or after the node
     current_state: dict[str, Any] | Any  # Current workflow state at breakpoint
-    next_nodes: List[str]  # Which node(s) will execute next
+    next_nodes: list[str]  # Which node(s) will execute next

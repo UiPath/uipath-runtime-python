@@ -1,6 +1,6 @@
 """Simple test for runtime factory and executor span capture."""
 
-from typing import Any, Generic, List, Optional, TypeVar
+from typing import Any, Optional, TypeVar
 
 import pytest
 from opentelemetry import trace
@@ -104,28 +104,26 @@ class MockRuntimeC(UiPathBaseRuntime):
 T = TypeVar("T", bound=UiPathBaseRuntime)
 
 
-class UiPathTestRuntimeFactory(UiPathRuntimeFactory[T], Generic[T]):
+class UiPathTestRuntimeFactory(UiPathRuntimeFactory[T]):
     def __init__(self, runtime_class: type[T]):
         self.runtime_class = runtime_class
 
     def new_runtime(self, entrypoint: str) -> T:
         return self.runtime_class()
 
-    def discover_runtimes(self) -> List[T]:
+    def discover_runtimes(self) -> list[T]:
         return []
 
 
 @pytest.mark.asyncio
 async def test_multiple_factories_same_executor():
-    """Test two factories using same executor, verify spans are captured correctly."""
+    """Test factories using same trace manager, verify spans are captured correctly."""
     trace_manager = UiPathTraceManager()
 
-    # Create two factories for different runtimes
+    # Create factories for different runtimes
     factory_a = UiPathTestRuntimeFactory(MockRuntimeA)
     factory_b = UiPathTestRuntimeFactory(MockRuntimeB)
     factory_c = UiPathTestRuntimeFactory(MockRuntimeC)
-
-    # Create single executor
 
     # Execute runtime A
     runtime_a = factory_a.new_runtime(entrypoint="")
@@ -142,7 +140,6 @@ async def test_multiple_factories_same_executor():
     result_b = await execution_runtime_b.execute({"input": "b"})
 
     # Execute runtime C with custom spans
-
     runtime_c = factory_c.new_runtime(entrypoint="")
     execution_runtime_c = UiPathExecutionRuntime(
         runtime_c, trace_manager, "runtime-c-span", "exec-c"

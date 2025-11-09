@@ -137,7 +137,9 @@ def test_result_file_written_on_fault_contains_error_contract(tmp_path: Path) ->
 
     # We always have an output key, even if it's an empty dict
     assert "output" in content
-
+    # Status should be FAULTED
+    assert "status" in content
+    assert content["status"] == UiPathRuntimeStatus.FAULTED.value
     # Error contract should be present and structured
     assert "error" in content
     error = content["error"]
