@@ -142,6 +142,7 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
         delegate: T,
         trace_manager: UiPathTraceManager,
         root_span: str = "root",
+        log_handler: Optional[UiPathRuntimeExecutionLogHandler] = None,
         execution_id: Optional[str] = None,
     ):
         """Initialize the executor."""
@@ -149,8 +150,8 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
         self.trace_manager = trace_manager
         self.root_span = root_span
         self.execution_id = execution_id
-        self.log_handler: Optional[UiPathRuntimeExecutionLogHandler] = None
-        if execution_id is not None:
+        self.log_handler = log_handler
+        if execution_id is not None and log_handler is None:
             self.log_handler = UiPathRuntimeExecutionLogHandler(execution_id)
 
     async def execute(
