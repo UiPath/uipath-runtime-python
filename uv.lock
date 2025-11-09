@@ -938,7 +938,7 @@ wheels = [
 
 [[package]]
 name = "uipath-runtime"
-version = "0.0.5"
+version = "0.0.6"
 source = { editable = "." }
 dependencies = [
     { name = "opentelemetry-instrumentation" },
