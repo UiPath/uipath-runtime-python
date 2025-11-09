@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 from typing_extensions import override
 from uipath.core import UiPathTraceManager
 
-from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.events import (
     UiPathRuntimeEvent,
 )
@@ -61,10 +60,6 @@ class UiPathBaseRuntime(ABC):
 
     This allows using the class with 'async with' statements.
     """
-
-    def __init__(self, context: Optional[UiPathRuntimeContext] = None):
-        """Initialize the runtime with the provided context."""
-        self.context = context
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Get schema for this runtime.
