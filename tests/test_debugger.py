@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from uipath.runtime import (
-    UiPathBaseRuntime,
     UiPathBreakpointResult,
     UiPathExecuteOptions,
     UiPathRuntimeContext,
@@ -18,20 +17,21 @@ from uipath.runtime import (
     UiPathStreamOptions,
 )
 from uipath.runtime.debug import (
-    UiPathDebugBridge,
+    UiPathDebugBridgeProtocol,
     UiPathDebugQuitError,
     UiPathDebugRuntime,
 )
 from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeStateEvent
+from uipath.runtime.schema import UiPathRuntimeSchema
 
 
-def make_debug_bridge_mock() -> UiPathDebugBridge:
+def make_debug_bridge_mock() -> UiPathDebugBridgeProtocol:
     """Create a debug bridge mock with all methods that UiPathDebugRuntime uses.
 
     We use `spec=UiPathDebugBridge` so invalid attributes raise at runtime,
     but still operate as a unittest.mock.Mock with AsyncMock methods.
     """
-    bridge_mock: Mock = Mock(spec=UiPathDebugBridge)
+    bridge_mock: Mock = Mock(spec=UiPathDebugBridgeProtocol)
 
     bridge_mock.connect = AsyncMock()
     bridge_mock.disconnect = AsyncMock()
@@ -44,10 +44,10 @@ def make_debug_bridge_mock() -> UiPathDebugBridge:
 
     bridge_mock.get_breakpoints = Mock(return_value=["node-1"])
 
-    return cast(UiPathDebugBridge, bridge_mock)
+    return cast(UiPathDebugBridgeProtocol, bridge_mock)
 
 
-class StreamingMockRuntime(UiPathBaseRuntime):
+class StreamingMockRuntime:
     """Mock runtime that streams state events, breakpoint hits and a final result."""
 
     def __init__(
@@ -124,6 +124,11 @@ class StreamingMockRuntime(UiPathBaseRuntime):
             status=UiPathRuntimeStatus.SUCCESSFUL,
             output={"visited_nodes": self.node_sequence},
         )
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """NotImplemented."""
+
+        raise NotImplementedError()
 
 
 @pytest.mark.asyncio

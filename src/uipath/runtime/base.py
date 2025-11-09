@@ -1,18 +1,15 @@
 """Base runtime class and async context manager implementation."""
 
 import logging
-from abc import ABC, abstractmethod
+import typing
 from typing import (
     Any,
     AsyncGenerator,
-    Generic,
     Literal,
     Optional,
-    TypeVar,
 )
 
 from pydantic import BaseModel, Field
-from typing_extensions import override
 from uipath.core import UiPathTraceManager
 
 from uipath.runtime.events import (
@@ -55,27 +52,20 @@ class UiPathStreamOptions(UiPathExecuteOptions):
     pass
 
 
-class UiPathBaseRuntime(ABC):
-    """Base runtime class implementing the async context manager protocol.
+class UiPathExecutable(typing.Protocol):
+    """UiPath execution interface."""
 
-    This allows using the class with 'async with' statements.
-    """
-
-    async def get_schema(self) -> UiPathRuntimeSchema:
-        """Get schema for this runtime.
-
-        Returns: The runtime's schema (entrypoint type, input/output json schema).
-        """
-        raise NotImplementedError()
-
-    @abstractmethod
     async def execute(
         self,
         input: Optional[dict[str, Any]] = None,
         options: Optional[UiPathExecuteOptions] = None,
     ) -> UiPathRuntimeResult:
         """Produce the agent output."""
-        raise NotImplementedError()
+        ...
+
+
+class UiPathStreamable(typing.Protocol):
+    """UiPath streaming interface."""
 
     async def stream(
         self,
@@ -120,21 +110,35 @@ class UiPathBaseRuntime(ABC):
         # Without it, the function wouldn't match the AsyncGenerator return type
         yield
 
-    @abstractmethod
-    async def cleanup(self):
-        """Cleaup runtime resources."""
-        pass
+
+class HasSchema(typing.Protocol):
+    """Contains runtime input and output schema."""
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """Get schema for a runtime.
+
+        Returns: The runtime's schema (entrypoint type, input/output json schema).
+        """
+        ...
 
 
-T = TypeVar("T", bound=UiPathBaseRuntime)
+# Note: explicitly marking it as a protocol for mypy.
+# https://mypy.readthedocs.io/en/stable/protocols.html#defining-subprotocols-and-subclassing-protocols
+# Note that inheriting from an existing protocol does not automatically turn the subclass into a protocol
+# – it just creates a regular (non-protocol) class or ABC that implements the given protocol (or protocols).
+# The Protocol base class must always be explicitly present if you are defining a protocol.
+class UiPathRuntimeProtocol(
+    UiPathExecutable, UiPathStreamable, HasSchema, typing.Protocol
+):
+    """UiPath Runtime Protocol."""
 
 
-class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
+class UiPathExecutionRuntime:
     """Handles runtime execution with tracing/telemetry."""
 
     def __init__(
         self,
-        delegate: T,
+        delegate: UiPathRuntimeProtocol,
         trace_manager: UiPathTraceManager,
         root_span: str = "root",
         log_handler: Optional[UiPathRuntimeExecutionLogHandler] = None,
@@ -174,7 +178,6 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
             if self.log_handler:
                 log_interceptor.teardown()
 
-    @override
     async def stream(
         self,
         input: Optional[dict[str, Any]] = None,
@@ -209,6 +212,6 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
             if self.log_handler:
                 log_interceptor.teardown()
 
-    def cleanup(self) -> None:
-        """Close runtime resources."""
-        pass
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """Passthrough schema for the delegate."""
+        return await self.delegate.get_schema()
