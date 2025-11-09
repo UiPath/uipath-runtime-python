@@ -126,8 +126,9 @@ class UiPathRuntimeContext(BaseModel):
 
             # Write the execution output to file if requested
             if self.output_file:
+                output_payload = content.get("output", {})
                 with open(self.output_file, "w") as f:
-                    f.write(content.get("output", "{}"))
+                    json.dump(output_payload, f, default=str)
 
             # Don't suppress exceptions
             return False
