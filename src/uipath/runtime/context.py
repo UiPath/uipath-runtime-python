@@ -6,8 +6,6 @@ import os
 from functools import cached_property
 from typing import (
     Any,
-    List,
-    Literal,
     Optional,
     TypeVar,
 )
@@ -34,8 +32,7 @@ class UiPathRuntimeContext(BaseModel):
     """Context information passed throughout the runtime execution."""
 
     entrypoint: Optional[str] = None
-    input: Optional[Any] = None
-    resume: bool = False
+    input: Optional[dict[str, Any]] = None
     job_id: Optional[str] = None
     trace_context: Optional[UiPathTraceContext] = None
     config_path: str = "uipath.json"
@@ -47,7 +44,6 @@ class UiPathRuntimeContext(BaseModel):
     trace_file: Optional[str] = None
     logs_file: Optional[str] = "execution.log"
     logs_min_level: Optional[str] = "INFO"
-    breakpoints: Optional[List[str] | Literal["*"]] = None
     result: Optional[UiPathRuntimeResult] = None
 
     model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
@@ -60,27 +56,18 @@ class UiPathRuntimeContext(BaseModel):
         Returns:
             The runtime context instance
         """
-        # Read the input from file if provided
-        if self.input_file:
-            _, file_extension = os.path.splitext(self.input_file)
-            if file_extension != ".json":
-                raise UiPathRuntimeError(
-                    code=UiPathErrorCode.INVALID_INPUT_FILE_EXTENSION,
-                    title="Invalid Input File Extension",
-                    detail="The provided input file must be in JSON format.",
-                )
-            with open(self.input_file) as f:
-                self.input = f.read()
-
         try:
-            if isinstance(self.input, str):
-                if self.input.strip():
-                    self.input = json.loads(self.input)
-                else:
-                    self.input = {}
-            elif self.input is None:
-                self.input = {}
-            # else: leave it as-is (already a dict, list, bool, etc.)
+            if self.input_file:
+                # Read the input from file if provided
+                _, file_extension = os.path.splitext(self.input_file)
+                if file_extension != ".json":
+                    raise UiPathRuntimeError(
+                        code=UiPathErrorCode.INVALID_INPUT_FILE_EXTENSION,
+                        title="Invalid Input File Extension",
+                        detail="The provided input file must be in JSON format.",
+                    )
+                with open(self.input_file) as f:
+                    self.input = json.loads(f.read())
         except json.JSONDecodeError as e:
             raise UiPathRuntimeError(
                 UiPathErrorCode.INPUT_INVALID_JSON,
@@ -111,9 +98,7 @@ class UiPathRuntimeContext(BaseModel):
         """
         try:
             if self.result is None:
-                execution_result = UiPathRuntimeResult()
-            else:
-                execution_result = self.result
+                self.result = UiPathRuntimeResult()
 
             if exc_type:
                 # Create error info from exception
@@ -128,10 +113,10 @@ class UiPathRuntimeContext(BaseModel):
                         category=UiPathErrorCategory.UNKNOWN,
                     )
 
-                execution_result.status = UiPathRuntimeStatus.FAULTED
-                execution_result.error = error_info
+                self.result.status = UiPathRuntimeStatus.FAULTED
+                self.result.error = error_info
 
-            content = execution_result.to_dict()
+            content = self.result.to_dict()
 
             # Always write output file at runtime, except for inner runtimes
             # Inner runtimes have execution_id

@@ -1,13 +1,17 @@
 """Simple test for runtime factory and executor span capture."""
 
-from typing import Any, Generic, List, TypeVar
+from typing import Any, Generic, List, Optional, TypeVar
 
 import pytest
 from opentelemetry import trace
 from uipath.core import UiPathTraceManager
 
-from uipath.runtime import UiPathRuntimeFactory
-from uipath.runtime.base import UiPathBaseRuntime, UiPathExecutionRuntime
+from uipath.runtime import (
+    UiPathBaseRuntime,
+    UiPathExecuteOptions,
+    UiPathExecutionRuntime,
+    UiPathRuntimeFactory,
+)
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 
@@ -20,7 +24,11 @@ class MockRuntimeA(UiPathBaseRuntime):
     async def cleanup(self):
         pass
 
-    async def execute(self, input: dict[str, Any]) -> UiPathRuntimeResult:
+    async def execute(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
+    ) -> UiPathRuntimeResult:
         print(f"executing {input}")
         return UiPathRuntimeResult(
             output={"runtime": "A"}, status=UiPathRuntimeStatus.SUCCESSFUL
@@ -36,7 +44,11 @@ class MockRuntimeB(UiPathBaseRuntime):
     async def cleanup(self):
         pass
 
-    async def execute(self, input: dict[str, Any]) -> UiPathRuntimeResult:
+    async def execute(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
+    ) -> UiPathRuntimeResult:
         print(f"executing {input}")
         return UiPathRuntimeResult(
             output={"runtime": "B"}, status=UiPathRuntimeStatus.SUCCESSFUL
@@ -52,7 +64,11 @@ class MockRuntimeC(UiPathBaseRuntime):
     async def cleanup(self):
         pass
 
-    async def execute(self, input: dict[str, Any]) -> UiPathRuntimeResult:
+    async def execute(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
+    ) -> UiPathRuntimeResult:
         print(f"executing {input}")
         tracer = trace.get_tracer("test-runtime-c")
 

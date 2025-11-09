@@ -6,10 +6,13 @@ from typing import (
     Any,
     AsyncGenerator,
     Generic,
+    List,
+    Literal,
     Optional,
     TypeVar,
 )
 
+from pydantic import BaseModel, Field
 from typing_extensions import override
 from uipath.core import UiPathTraceManager
 
@@ -33,6 +36,27 @@ class UiPathStreamNotSupportedError(NotImplementedError):
     pass
 
 
+class UiPathExecuteOptions(BaseModel):
+    """Execution-time options controlling runtime behavior."""
+
+    resume: bool = Field(
+        default=False,
+        description="Indicates whether to resume a suspended execution.",
+    )
+    breakpoints: Optional[List[str] | Literal["*"]] = Field(
+        default=None,
+        description="List of nodes or '*' to break on all steps.",
+    )
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
+
+
+class UiPathStreamOptions(UiPathExecuteOptions):
+    """Streaming-specific execution options."""
+
+    pass
+
+
 class UiPathBaseRuntime(ABC):
     """Base runtime class implementing the async context manager protocol.
 
@@ -51,13 +75,18 @@ class UiPathBaseRuntime(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    async def execute(self, input: dict[str, Any]) -> UiPathRuntimeResult:
+    async def execute(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
+    ) -> UiPathRuntimeResult:
         """Produce the agent output."""
         raise NotImplementedError()
 
     async def stream(
         self,
-        input: dict[str, Any],
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathStreamOptions] = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream execution events in real-time.
 
@@ -127,7 +156,8 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
 
     async def execute(
         self,
-        input: dict[str, Any],
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathExecuteOptions] = None,
     ) -> UiPathRuntimeResult:
         """Execute runtime with context."""
         if self.log_handler:
@@ -141,9 +171,9 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
                 with self.trace_manager.start_execution_span(
                     self.root_span, execution_id=self.execution_id
                 ):
-                    return await self.delegate.execute(input)
+                    return await self.delegate.execute(input, options=options)
             else:
-                return await self.delegate.execute(input)
+                return await self.delegate.execute(input, options=options)
         finally:
             self.trace_manager.flush_spans()
             if self.log_handler:
@@ -152,7 +182,8 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
     @override
     async def stream(
         self,
-        input: dict[str, Any],
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathStreamOptions] = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream runtime execution with context.
 
@@ -176,7 +207,7 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
                 with self.trace_manager.start_execution_span(
                     self.root_span, execution_id=self.execution_id
                 ):
-                    async for event in self.delegate.stream(input):
+                    async for event in self.delegate.stream(input, options=options):
                         yield event
         finally:
             self.trace_manager.flush_spans()
