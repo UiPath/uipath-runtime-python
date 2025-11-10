@@ -64,7 +64,7 @@ class StreamingMockRuntime:
 
         self.execute_called: bool = False
 
-    async def cleanup(self) -> None:
+    async def dispose(self) -> None:
         pass
 
     async def execute(
@@ -271,8 +271,8 @@ async def test_debug_runtime_execute_reports_errors_and_marks_faulted():
 
 
 @pytest.mark.asyncio
-async def test_debug_runtime_cleanup_calls_disconnect():
-    """cleanup() should call debug bridge disconnect."""
+async def test_debug_runtime_dispose_calls_disconnect():
+    """dispose() should call debug bridge disconnect."""
 
     runtime_impl = StreamingMockRuntime(node_sequence=["node-1"])
     bridge = make_debug_bridge_mock()
@@ -282,14 +282,14 @@ async def test_debug_runtime_cleanup_calls_disconnect():
         debug_bridge=bridge,
     )
 
-    await debug_runtime.cleanup()
+    await debug_runtime.dispose()
 
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_debug_runtime_cleanup_suppresses_disconnect_errors():
-    """Errors from debug_bridge.disconnect should be suppressed, inner cleanup still runs."""
+async def test_debug_runtime_dispose_suppresses_disconnect_errors():
+    """Errors from debug_bridge.disconnect should be suppressed."""
 
     runtime_impl = StreamingMockRuntime(node_sequence=["node-1"])
     bridge = make_debug_bridge_mock()
@@ -300,7 +300,7 @@ async def test_debug_runtime_cleanup_suppresses_disconnect_errors():
         debug_bridge=bridge,
     )
 
-    # No exception should bubble up from cleanup()
-    await debug_runtime.cleanup()
+    # No exception should bubble up from dispose()
+    await debug_runtime.dispose()
 
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()

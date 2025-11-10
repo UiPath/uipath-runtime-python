@@ -9,7 +9,11 @@ from uipath.runtime.base import (
 )
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.events import UiPathRuntimeEvent
-from uipath.runtime.factory import UiPathRuntimeCreator, UiPathRuntimeScanner
+from uipath.runtime.factory import (
+    UiPathRuntimeCreatorProtocol,
+    UiPathRuntimeFactoryProtocol,
+    UiPathRuntimeScannerProtocol,
+)
 from uipath.runtime.result import (
     UiPathApiTrigger,
     UiPathBreakpointResult,
@@ -25,8 +29,9 @@ __all__ = [
     "UiPathRuntimeContext",
     "UiPathRuntimeProtocol",
     "UiPathExecutionRuntime",
-    "UiPathRuntimeCreator",
-    "UiPathRuntimeScanner",
+    "UiPathRuntimeCreatorProtocol",
+    "UiPathRuntimeScannerProtocol",
+    "UiPathRuntimeFactoryProtocol",
     "UiPathRuntimeResult",
     "UiPathRuntimeStatus",
     "UiPathRuntimeEvent",

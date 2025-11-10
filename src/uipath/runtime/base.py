@@ -7,6 +7,7 @@ from typing import (
     AsyncGenerator,
     Literal,
     Optional,
+    Protocol,
 )
 
 from pydantic import BaseModel, Field
@@ -52,7 +53,7 @@ class UiPathStreamOptions(UiPathExecuteOptions):
     pass
 
 
-class UiPathExecutable(typing.Protocol):
+class UiPathExecutableProtocol(typing.Protocol):
     """UiPath execution interface."""
 
     async def execute(
@@ -64,7 +65,7 @@ class UiPathExecutable(typing.Protocol):
         ...
 
 
-class UiPathStreamable(typing.Protocol):
+class UiPathStreamableProtocol(typing.Protocol):
     """UiPath streaming interface."""
 
     async def stream(
@@ -111,7 +112,7 @@ class UiPathStreamable(typing.Protocol):
         yield
 
 
-class HasSchema(typing.Protocol):
+class UiPathSchemaProtocol(typing.Protocol):
     """Contains runtime input and output schema."""
 
     async def get_schema(self) -> UiPathRuntimeSchema:
@@ -122,13 +123,25 @@ class HasSchema(typing.Protocol):
         ...
 
 
+class UiPathDisposableProtocol(typing.Protocol):
+    """UiPath disposable interface."""
+
+    async def dispose(self) -> None:
+        """Close and clean up resources."""
+        ...
+
+
 # Note: explicitly marking it as a protocol for mypy.
 # https://mypy.readthedocs.io/en/stable/protocols.html#defining-subprotocols-and-subclassing-protocols
 # Note that inheriting from an existing protocol does not automatically turn the subclass into a protocol
 # – it just creates a regular (non-protocol) class or ABC that implements the given protocol (or protocols).
 # The Protocol base class must always be explicitly present if you are defining a protocol.
 class UiPathRuntimeProtocol(
-    UiPathExecutable, UiPathStreamable, HasSchema, typing.Protocol
+    UiPathExecutableProtocol,
+    UiPathStreamableProtocol,
+    UiPathSchemaProtocol,
+    UiPathDisposableProtocol,
+    Protocol,
 ):
     """UiPath Runtime Protocol."""
 

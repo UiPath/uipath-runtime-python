@@ -33,6 +33,10 @@ class BaseMockRuntime:
         raise NotImplementedError()
         yield
 
+    async def dispose(self) -> None:
+        """Dispose resources if any."""
+        pass
+
 
 class MockRuntimeA(BaseMockRuntime):
     """Mock runtime A for testing."""
@@ -109,7 +113,7 @@ class UiPathTestRuntimeFactory:
     def __init__(self, runtime_class: type[UiPathRuntimeProtocol]):
         self.runtime_class = runtime_class
 
-    def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
+    async def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
         return self.runtime_class()
 
 
@@ -124,21 +128,21 @@ async def test_multiple_factories_same_executor():
     factory_c = UiPathTestRuntimeFactory(MockRuntimeC)
 
     # Execute runtime A
-    runtime_a = factory_a.new_runtime(entrypoint="")
+    runtime_a = await factory_a.new_runtime(entrypoint="")
     execution_runtime_a = UiPathExecutionRuntime(
         runtime_a, trace_manager, "runtime-a-span", execution_id="exec-a"
     )
     result_a = await execution_runtime_a.execute({"input": "a"})
 
     # Execute runtime B
-    runtime_b = factory_b.new_runtime(entrypoint="")
+    runtime_b = await factory_b.new_runtime(entrypoint="")
     execution_runtime_b = UiPathExecutionRuntime(
         runtime_b, trace_manager, "runtime-b-span", execution_id="exec-b"
     )
     result_b = await execution_runtime_b.execute({"input": "b"})
 
     # Execute runtime C with custom spans
-    runtime_c = factory_c.new_runtime(entrypoint="")
+    runtime_c = await factory_c.new_runtime(entrypoint="")
     execution_runtime_c = UiPathExecutionRuntime(
         runtime_c, trace_manager, "runtime-c-span", execution_id="exec-c"
     )

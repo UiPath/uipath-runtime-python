@@ -122,13 +122,13 @@ class UiPathDebugRuntime:
 
         return final_result
 
-    async def cleanup(self) -> None:
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """Passthrough schema for the delegate."""
+        return await self.delegate.get_schema()
+
+    async def dispose(self) -> None:
         """Cleanup runtime resources."""
         try:
             await self.debug_bridge.disconnect()
         except Exception as e:
             logger.warning(f"Error disconnecting debug bridge: {e}")
-
-    async def get_schema(self) -> UiPathRuntimeSchema:
-        """Passthrough schema for the delegate."""
-        return await self.delegate.get_schema()
