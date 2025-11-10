@@ -7,14 +7,14 @@ Runtime abstractions and contracts for the UiPath Python SDK.
 
 ## Overview
 
-`uipath-runtime` provides the foundational interfaces and base classes for building agent runtimes in the UiPath ecosystem.
-It defines the contracts that all runtime implementations must follow and provides utilities for execution context, event streaming, tracing, and structured error handling.
+`uipath-runtime` provides the foundational interfaces and base contracts for building agent runtimes in the UiPath ecosystem.
+It defines the protocols that all runtime implementations must follow and provides utilities for execution context, event streaming, tracing, and structured error handling.
 
 This package is typically used as a dependency by higher-level SDKs such as:
+- [`uipath`](https://pypi.org/project/uipath)
 - [`uipath-langchain`](https://pypi.org/project/uipath-langchain)
 - [`uipath-llamaindex`](https://pypi.org/project/uipath-llamaindex)
 - [`uipath-mcp`](https://pypi.org/project/uipath-mcp)
-- the main [`uipath`](https://pypi.org/project/uipath) SDK.
 
 You would use this directly only if you're building custom runtime implementations.
 
@@ -24,20 +24,21 @@ You would use this directly only if you're building custom runtime implementatio
 uv add uipath-runtime
 ```
 
-## Runtime Base Class
+## Runtime Protocols
 
-All runtimes inherit from `UiPathBaseRuntime` and implement these core methods:
+All runtimes implement the `UiPathRuntimeProtocol` (or one of its sub-protocols):
 
 - `get_schema()` — defines input and output JSON schemas.
 - `execute(input, options)` — executes the runtime logic and returns a `UiPathRuntimeResult`.
 - `stream(input, options)` — optionally streams runtime events for real-time monitoring.
-- `cleanup()` — releases resources.
+- `dispose()` — releases resources when the runtime is no longer needed.
+
+Any class that structurally implements these methods satisfies the protocol.
 
 ```python
 from typing import Any, AsyncGenerator, Optional
+
 from uipath.runtime import (
-    UiPathBaseRuntime,
-    UiPathRuntimeContext,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
     UiPathRuntimeSchema,
@@ -46,11 +47,10 @@ from uipath.runtime import (
     UiPathStreamOptions,
 )
 from uipath.runtime.events import UiPathRuntimeStateEvent
-from uipath.runtime.errors import UiPathRuntimeError, UiPathErrorCode, UiPathErrorCategory
 
 
-class MyCustomRuntime(UiPathBaseRuntime):
-    """Example runtime demonstrating the base runtime interface."""
+class MyRuntime:
+    """Example runtime implementing the UiPath runtime protocols."""
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         return UiPathRuntimeSchema(
@@ -73,7 +73,7 @@ class MyCustomRuntime(UiPathBaseRuntime):
     ) -> UiPathRuntimeResult:
         message = (input or {}).get("message", "")
         return UiPathRuntimeResult(
-            output={"result": f"Echo: {message}"},
+            output={'message': 'Hello from MyRuntime'},
             status=UiPathRuntimeStatus.SUCCESSFUL,
         )
 
@@ -88,7 +88,7 @@ class MyCustomRuntime(UiPathBaseRuntime):
             status=UiPathRuntimeStatus.SUCCESSFUL,
         )
 
-    async def cleanup(self) -> None:
+    async def dispose(self) -> None:
         pass
 ```
 
@@ -98,6 +98,12 @@ class MyCustomRuntime(UiPathBaseRuntime):
 Runtimes can optionally emit real-time events during execution:
 
 ```python
+from uipath.runtime.events import (
+    UiPathRuntimeStateEvent,
+    UiPathRuntimeMessageEvent,
+)
+from uipath.runtime.result import UiPathRuntimeResult
+
 async for event in runtime.stream({"query": "hello"}):
     if isinstance(event, UiPathRuntimeStateEvent):
         print(f"State update: {event.payload}")
@@ -138,32 +144,41 @@ Resulting JSON contract:
 
 ## Runtime Factory
 
-`UiPathRuntimeFactory` provides a consistent way to create and manage runtime instances.
+`UiPathRuntimeFactoryProtocol` provides a consistent contract for discovering and creating runtime instances.
 
 Factories decouple runtime construction (configuration, dependencies) from runtime execution, allowing orchestration, discovery, reuse, and tracing across multiple types of runtimes.
 
 ```python
-from uipath.runtime import UiPathBaseRuntime, UiPathRuntimeFactory
+from typing import Any, AsyncGenerator, Optional
 
-class MyRuntime(UiPathBaseRuntime):
-    async def execute(self):
-        return {"message": f"Hello from {self.__class__.__name__}"}
+from uipath.runtime import (
+    UiPathRuntimeResult,
+    UiPathRuntimeStatus,
+    UiPathRuntimeSchema,
+    UiPathExecuteOptions,
+    UiPathStreamOptions,
+    UiPathRuntimeProtocol,
+    UiPathRuntimeFactoryProtocol
+)
 
-class MyRuntimeFactory(UiPathRuntimeFactory[MyRuntime]):
-    def new_runtime(self, entrypoint: str) -> MyRuntime:
+class MyRuntimeFactory:
+    async def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
         return MyRuntime()
 
-    def discover_runtimes(self) -> list[MyRuntime]:
+    def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
         return []
 
-# Usage
+    def discover_entrypoints(self) -> list[str]:
+        return []
+
+
 factory = MyRuntimeFactory()
-runtime = factory.new_runtime("example")
+runtime = await factory.new_runtime("example")
 
 result = await runtime.execute()
-print(result)  # {'message': 'Hello from MyRuntime'}
-
+print(result.output)  # {'message': 'Hello from MyRuntime'}
 ```
+
 ## Execution Context
 
 `UiPathRuntimeContext` manages configuration, file I/O, and logs across runtime execution.
@@ -220,7 +235,7 @@ from uipath.core import UiPathTraceManager
 from uipath.runtime import UiPathExecutionRuntime
 
 trace_manager = UiPathTraceManager()
-runtime = MyCustomRuntime()
+runtime = MyRuntime()
 executor = UiPathExecutionRuntime(
     runtime,
     trace_manager,
@@ -229,41 +244,37 @@ executor = UiPathExecutionRuntime(
 )
 
 result = await executor.execute({"message": "hello"})
-spans = trace_manager.get_execution_spans("exec-123") # captured spans
-logs = executor.log_handler.buffer # captured logs
-print(result.output)  # {'result': 'Echo: hello'}
+spans = trace_manager.get_execution_spans("exec-123")  # captured spans
+logs = executor.log_handler.buffer  # captured logs
+print(result.output)  # {'message': 'Hello from MyRuntime'}
 ```
 
 ## Example: Runtime Orchestration
 
-This example demonstrates an **orchestrator runtime** that receives a `UiPathRuntimeFactory`, creates child runtimes through it, and executes each one via `UiPathExecutionRuntime`, all within a single shared `UiPathTraceManager` and `UiPathRuntimeContext`.
+This example demonstrates an **orchestrator runtime** that receives a `UiPathRuntimeFactoryProtocol`, creates child runtimes through it, and executes each one via `UiPathExecutionRuntime`, all within a single shared `UiPathTraceManager`.
 
 <details>
  <summary>Orchestrator Runtime</summary>
 
 ```python
-from typing import Any, Optional, TypeVar, Generic
+from typing import Any, Optional, AsyncGenerator
 
 from uipath.core import UiPathTraceManager
 from uipath.runtime import (
-    UiPathRuntimeContext,
-    UiPathBaseRuntime,
     UiPathExecutionRuntime,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
     UiPathExecuteOptions,
-    UiPathRuntimeFactory,
+    UiPathStreamOptions,
+    UiPathRuntimeProtocol,
+    UiPathRuntimeFactoryProtocol
 )
 
 
-class ChildRuntime(UiPathBaseRuntime):
+class ChildRuntime:
     """A simple child runtime that echoes its name and input."""
 
-    def __init__(
-        self,
-        name: str,
-    ):
-        super().__init__()
+    def __init__(self, name: str):
         self.name = name
 
     async def get_schema(self):
@@ -283,29 +294,38 @@ class ChildRuntime(UiPathBaseRuntime):
             status=UiPathRuntimeStatus.SUCCESSFUL,
         )
 
-    async def cleanup(self) -> None:
+    async def stream(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathStreamOptions] = None,
+    ) -> AsyncGenerator[UiPathRuntimeResult, None]:
+        yield await self.execute(input, options)
+
+    async def dispose(self) -> None:
         pass
 
 
-class ChildRuntimeFactory(UiPathRuntimeFactory[ChildRuntime]):
+class ChildRuntimeFactory:
     """Factory that creates ChildRuntime instances."""
 
-    def new_runtime(self, entrypoint: str) -> ChildRuntime:
+    async def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
         return ChildRuntime(name=entrypoint)
 
-    def discover_runtimes(self) -> list[ChildRuntime]:
+    def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
+        return []
+
+    def discover_entrypoints(self) -> list[str]:
         return []
 
 
-class OrchestratorRuntime(UiPathBaseRuntime):
+class OrchestratorRuntime:
     """A runtime that orchestrates multiple child runtimes via a factory."""
 
     def __init__(
         self,
-        factory: UiPathRuntimeFactory[ChildRuntime],
+        factory: UiPathRuntimeFactoryProtocol,
         trace_manager: UiPathTraceManager,
     ):
-        super().__init__()
         self.factory = factory
         self.trace_manager = trace_manager
 
@@ -323,10 +343,10 @@ class OrchestratorRuntime(UiPathBaseRuntime):
 
         for i, child_input in enumerate(child_inputs):
             # Use the factory to create a new child runtime
-            child_runtime = self.factory.new_runtime(entrypoint=f"child-{i}")
+            child_runtime = await self.factory.new_runtime(entrypoint=f"child-{i}")
 
             # Wrap child runtime with tracing + logs
-            execution_id = f"{self.context.job_id}-child-{i}" if self.context else f"child-{i}"
+            execution_id = f"child-{i}"
             executor = UiPathExecutionRuntime(
                 delegate=child_runtime,
                 trace_manager=self.trace_manager,
@@ -336,11 +356,10 @@ class OrchestratorRuntime(UiPathBaseRuntime):
 
             # Execute child runtime
             result = await executor.execute(child_input, options=options)
-
             child_results.append(result.output or {})
-            child_spans = trace_manager.get_execution_spans(execution_id)
-
-            await child_runtime.cleanup()
+            child_spans = trace_manager.get_execution_spans(execution_id) # Captured spans
+            # Dispose the child runtime when finished
+            await child_runtime.dispose()
 
         return UiPathRuntimeResult(
             output={
@@ -350,7 +369,14 @@ class OrchestratorRuntime(UiPathBaseRuntime):
             status=UiPathRuntimeStatus.SUCCESSFUL,
         )
 
-    async def cleanup(self) -> None:
+    async def stream(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathStreamOptions] = None,
+    ) -> AsyncGenerator[UiPathRuntimeResult, None]:
+        yield await self.execute(input, options)
+
+    async def dispose(self) -> None:
         pass
 
 
@@ -361,7 +387,7 @@ async def main() -> None:
     options = UiPathExecuteOptions()
 
     with UiPathRuntimeContext(job_id="main-job-001") as ctx:
-        runtime = OrchestratorRuntime(factory=factory, trace_manager=trace_manager, context=ctx)
+        runtime = OrchestratorRuntime(factory=factory, trace_manager=trace_manager)
 
         input_data = {
             "children": [
@@ -384,4 +410,3 @@ async def main() -> None:
 ```
 
 </details>
-

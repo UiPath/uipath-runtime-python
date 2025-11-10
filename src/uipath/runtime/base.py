@@ -1,7 +1,6 @@
 """Base runtime class and async context manager implementation."""
 
 import logging
-import typing
 from typing import (
     Any,
     AsyncGenerator,
@@ -53,7 +52,7 @@ class UiPathStreamOptions(UiPathExecuteOptions):
     pass
 
 
-class UiPathExecutableProtocol(typing.Protocol):
+class UiPathExecutableProtocol(Protocol):
     """UiPath execution interface."""
 
     async def execute(
@@ -61,11 +60,11 @@ class UiPathExecutableProtocol(typing.Protocol):
         input: Optional[dict[str, Any]] = None,
         options: Optional[UiPathExecuteOptions] = None,
     ) -> UiPathRuntimeResult:
-        """Produce the agent output."""
+        """Execute the runtime with the given input and options."""
         ...
 
 
-class UiPathStreamableProtocol(typing.Protocol):
+class UiPathStreamableProtocol(Protocol):
     """UiPath streaming interface."""
 
     async def stream(
@@ -74,9 +73,6 @@ class UiPathStreamableProtocol(typing.Protocol):
         options: Optional[UiPathStreamOptions] = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream execution events in real-time.
-
-        This is an optional method that runtimes can implement to support streaming.
-        If not implemented, only the execute() method will be available.
 
         Yields framework-agnostic BaseEvent instances during execution,
         with the final event being UiPathRuntimeResult.
@@ -87,8 +83,7 @@ class UiPathStreamableProtocol(typing.Protocol):
             Final yield: UiPathRuntimeResult (or its subclass UiPathBreakpointResult)
 
         Raises:
-            UiPathStreamNotSupportedError: If the runtime doesn't support streaming
-            RuntimeError: If execution fails
+            UiPathRuntimeError: If execution fails
 
         Example:
             async for event in runtime.stream():
@@ -107,12 +102,10 @@ class UiPathStreamableProtocol(typing.Protocol):
             f"{self.__class__.__name__} does not implement streaming. "
             "Use execute() instead."
         )
-        # This yield is unreachable but makes this a proper generator function
-        # Without it, the function wouldn't match the AsyncGenerator return type
         yield
 
 
-class UiPathSchemaProtocol(typing.Protocol):
+class UiPathSchemaProtocol(Protocol):
     """Contains runtime input and output schema."""
 
     async def get_schema(self) -> UiPathRuntimeSchema:
@@ -123,7 +116,7 @@ class UiPathSchemaProtocol(typing.Protocol):
         ...
 
 
-class UiPathDisposableProtocol(typing.Protocol):
+class UiPathDisposableProtocol(Protocol):
     """UiPath disposable interface."""
 
     async def dispose(self) -> None:
@@ -220,6 +213,9 @@ class UiPathExecutionRuntime:
                 ):
                     async for event in self.delegate.stream(input, options=options):
                         yield event
+            else:
+                async for event in self.delegate.stream(input, options=options):
+                    yield event
         finally:
             self.trace_manager.flush_spans()
             if self.log_handler:
