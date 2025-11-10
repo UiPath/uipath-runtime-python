@@ -1,28 +1,45 @@
 """Simple test for runtime factory and executor span capture."""
 
-from typing import Any, Optional, TypeVar
+from typing import Any, AsyncGenerator, Optional, TypeVar
 
 import pytest
 from opentelemetry import trace
 from uipath.core import UiPathTraceManager
 
 from uipath.runtime import (
-    UiPathBaseRuntime,
     UiPathExecuteOptions,
     UiPathExecutionRuntime,
-    UiPathRuntimeFactory,
+    UiPathRuntimeEvent,
+    UiPathRuntimeProtocol,
 )
+from uipath.runtime.base import UiPathStreamOptions
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
+from uipath.runtime.schema import UiPathRuntimeSchema
 
 
-class MockRuntimeA(UiPathBaseRuntime):
+class BaseMockRuntime:
+    """Base runtime class with unimplemented methods."""
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """NotImplemented"""
+        raise NotImplementedError()
+
+    async def stream(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathStreamOptions] = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        """NotImplemented"""
+        raise NotImplementedError()
+        yield
+
+    async def dispose(self) -> None:
+        """Dispose resources if any."""
+        pass
+
+
+class MockRuntimeA(BaseMockRuntime):
     """Mock runtime A for testing."""
-
-    async def validate(self):
-        pass
-
-    async def cleanup(self):
-        pass
 
     async def execute(
         self,
@@ -35,14 +52,8 @@ class MockRuntimeA(UiPathBaseRuntime):
         )
 
 
-class MockRuntimeB(UiPathBaseRuntime):
+class MockRuntimeB(BaseMockRuntime):
     """Mock runtime B for testing."""
-
-    async def validate(self):
-        pass
-
-    async def cleanup(self):
-        pass
 
     async def execute(
         self,
@@ -55,14 +66,8 @@ class MockRuntimeB(UiPathBaseRuntime):
         )
 
 
-class MockRuntimeC(UiPathBaseRuntime):
+class MockRuntimeC(BaseMockRuntime):
     """Mock runtime C that emits custom spans."""
-
-    async def validate(self):
-        pass
-
-    async def cleanup(self):
-        pass
 
     async def execute(
         self,
@@ -101,18 +106,15 @@ class MockRuntimeC(UiPathBaseRuntime):
         )
 
 
-T = TypeVar("T", bound=UiPathBaseRuntime)
+T = TypeVar("T", bound=UiPathRuntimeProtocol)
 
 
-class UiPathTestRuntimeFactory(UiPathRuntimeFactory[T]):
-    def __init__(self, runtime_class: type[T]):
+class UiPathTestRuntimeFactory:
+    def __init__(self, runtime_class: type[UiPathRuntimeProtocol]):
         self.runtime_class = runtime_class
 
-    def new_runtime(self, entrypoint: str) -> T:
+    async def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
         return self.runtime_class()
-
-    def discover_runtimes(self) -> list[T]:
-        return []
 
 
 @pytest.mark.asyncio
@@ -126,21 +128,21 @@ async def test_multiple_factories_same_executor():
     factory_c = UiPathTestRuntimeFactory(MockRuntimeC)
 
     # Execute runtime A
-    runtime_a = factory_a.new_runtime(entrypoint="")
+    runtime_a = await factory_a.new_runtime(entrypoint="")
     execution_runtime_a = UiPathExecutionRuntime(
         runtime_a, trace_manager, "runtime-a-span", execution_id="exec-a"
     )
     result_a = await execution_runtime_a.execute({"input": "a"})
 
     # Execute runtime B
-    runtime_b = factory_b.new_runtime(entrypoint="")
+    runtime_b = await factory_b.new_runtime(entrypoint="")
     execution_runtime_b = UiPathExecutionRuntime(
         runtime_b, trace_manager, "runtime-b-span", execution_id="exec-b"
     )
     result_b = await execution_runtime_b.execute({"input": "b"})
 
     # Execute runtime C with custom spans
-    runtime_c = factory_c.new_runtime(entrypoint="")
+    runtime_c = await factory_c.new_runtime(entrypoint="")
     execution_runtime_c = UiPathExecutionRuntime(
         runtime_c, trace_manager, "runtime-c-span", execution_id="exec-c"
     )

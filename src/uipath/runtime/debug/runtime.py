@@ -1,39 +1,38 @@
 """Debug runtime implementation."""
 
 import logging
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, Optional
 
 from uipath.runtime import (
-    UiPathBaseRuntime,
     UiPathBreakpointResult,
     UiPathExecuteOptions,
+    UiPathRuntimeProtocol,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
     UiPathStreamNotSupportedError,
     UiPathStreamOptions,
 )
-from uipath.runtime.debug import UiPathDebugBridge, UiPathDebugQuitError
+from uipath.runtime.debug import UiPathDebugBridgeProtocol, UiPathDebugQuitError
 from uipath.runtime.events import (
     UiPathRuntimeStateEvent,
 )
+from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T", bound=UiPathBaseRuntime)
 
-
-class UiPathDebugRuntime(UiPathBaseRuntime, Generic[T]):
+class UiPathDebugRuntime:
     """Specialized runtime for debug runs that streams events to a debug bridge."""
 
     def __init__(
         self,
-        delegate: T,
-        debug_bridge: UiPathDebugBridge,
+        delegate: UiPathRuntimeProtocol,
+        debug_bridge: UiPathDebugBridgeProtocol,
     ):
         """Initialize the UiPathDebugRuntime."""
         super().__init__()
-        self.delegate: T = delegate
-        self.debug_bridge: UiPathDebugBridge = debug_bridge
+        self.delegate = delegate
+        self.debug_bridge: UiPathDebugBridgeProtocol = debug_bridge
 
     async def execute(
         self,
@@ -123,7 +122,11 @@ class UiPathDebugRuntime(UiPathBaseRuntime, Generic[T]):
 
         return final_result
 
-    async def cleanup(self) -> None:
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """Passthrough schema for the delegate."""
+        return await self.delegate.get_schema()
+
+    async def dispose(self) -> None:
         """Cleanup runtime resources."""
         try:
             await self.debug_bridge.disconnect()

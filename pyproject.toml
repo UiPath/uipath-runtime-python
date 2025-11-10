@@ -1,6 +1,6 @@
 [project]
 name = "uipath-runtime"
-version = "0.0.6"
+version = "0.0.7"
 description = "Runtime abstractions and interfaces for building agents and automation scripts in the UiPath ecosystem"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"

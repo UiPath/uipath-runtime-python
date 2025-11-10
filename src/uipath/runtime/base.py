@@ -1,18 +1,15 @@
 """Base runtime class and async context manager implementation."""
 
 import logging
-from abc import ABC, abstractmethod
 from typing import (
     Any,
     AsyncGenerator,
-    Generic,
     Literal,
     Optional,
-    TypeVar,
+    Protocol,
 )
 
 from pydantic import BaseModel, Field
-from typing_extensions import override
 from uipath.core import UiPathTraceManager
 
 from uipath.runtime.events import (
@@ -55,27 +52,20 @@ class UiPathStreamOptions(UiPathExecuteOptions):
     pass
 
 
-class UiPathBaseRuntime(ABC):
-    """Base runtime class implementing the async context manager protocol.
+class UiPathExecutableProtocol(Protocol):
+    """UiPath execution interface."""
 
-    This allows using the class with 'async with' statements.
-    """
-
-    async def get_schema(self) -> UiPathRuntimeSchema:
-        """Get schema for this runtime.
-
-        Returns: The runtime's schema (entrypoint type, input/output json schema).
-        """
-        raise NotImplementedError()
-
-    @abstractmethod
     async def execute(
         self,
         input: Optional[dict[str, Any]] = None,
         options: Optional[UiPathExecuteOptions] = None,
     ) -> UiPathRuntimeResult:
-        """Produce the agent output."""
-        raise NotImplementedError()
+        """Execute the runtime with the given input and options."""
+        ...
+
+
+class UiPathStreamableProtocol(Protocol):
+    """UiPath streaming interface."""
 
     async def stream(
         self,
@@ -83,9 +73,6 @@ class UiPathBaseRuntime(ABC):
         options: Optional[UiPathStreamOptions] = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream execution events in real-time.
-
-        This is an optional method that runtimes can implement to support streaming.
-        If not implemented, only the execute() method will be available.
 
         Yields framework-agnostic BaseEvent instances during execution,
         with the final event being UiPathRuntimeResult.
@@ -96,8 +83,7 @@ class UiPathBaseRuntime(ABC):
             Final yield: UiPathRuntimeResult (or its subclass UiPathBreakpointResult)
 
         Raises:
-            UiPathStreamNotSupportedError: If the runtime doesn't support streaming
-            RuntimeError: If execution fails
+            UiPathRuntimeError: If execution fails
 
         Example:
             async for event in runtime.stream():
@@ -116,25 +102,49 @@ class UiPathBaseRuntime(ABC):
             f"{self.__class__.__name__} does not implement streaming. "
             "Use execute() instead."
         )
-        # This yield is unreachable but makes this a proper generator function
-        # Without it, the function wouldn't match the AsyncGenerator return type
         yield
 
-    @abstractmethod
-    async def cleanup(self):
-        """Cleaup runtime resources."""
-        pass
+
+class UiPathSchemaProtocol(Protocol):
+    """Contains runtime input and output schema."""
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """Get schema for a runtime.
+
+        Returns: The runtime's schema (entrypoint type, input/output json schema).
+        """
+        ...
 
 
-T = TypeVar("T", bound=UiPathBaseRuntime)
+class UiPathDisposableProtocol(Protocol):
+    """UiPath disposable interface."""
+
+    async def dispose(self) -> None:
+        """Close and clean up resources."""
+        ...
 
 
-class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
+# Note: explicitly marking it as a protocol for mypy.
+# https://mypy.readthedocs.io/en/stable/protocols.html#defining-subprotocols-and-subclassing-protocols
+# Note that inheriting from an existing protocol does not automatically turn the subclass into a protocol
+# – it just creates a regular (non-protocol) class or ABC that implements the given protocol (or protocols).
+# The Protocol base class must always be explicitly present if you are defining a protocol.
+class UiPathRuntimeProtocol(
+    UiPathExecutableProtocol,
+    UiPathStreamableProtocol,
+    UiPathSchemaProtocol,
+    UiPathDisposableProtocol,
+    Protocol,
+):
+    """UiPath Runtime Protocol."""
+
+
+class UiPathExecutionRuntime:
     """Handles runtime execution with tracing/telemetry."""
 
     def __init__(
         self,
-        delegate: T,
+        delegate: UiPathRuntimeProtocol,
         trace_manager: UiPathTraceManager,
         root_span: str = "root",
         log_handler: Optional[UiPathRuntimeExecutionLogHandler] = None,
@@ -174,7 +184,6 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
             if self.log_handler:
                 log_interceptor.teardown()
 
-    @override
     async def stream(
         self,
         input: Optional[dict[str, Any]] = None,
@@ -204,11 +213,14 @@ class UiPathExecutionRuntime(UiPathBaseRuntime, Generic[T]):
                 ):
                     async for event in self.delegate.stream(input, options=options):
                         yield event
+            else:
+                async for event in self.delegate.stream(input, options=options):
+                    yield event
         finally:
             self.trace_manager.flush_spans()
             if self.log_handler:
                 log_interceptor.teardown()
 
-    def cleanup(self) -> None:
-        """Close runtime resources."""
-        pass
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """Passthrough schema for the delegate."""
+        return await self.delegate.get_schema()

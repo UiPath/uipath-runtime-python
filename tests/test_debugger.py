@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from uipath.runtime import (
-    UiPathBaseRuntime,
     UiPathBreakpointResult,
     UiPathExecuteOptions,
     UiPathRuntimeContext,
@@ -18,20 +17,21 @@ from uipath.runtime import (
     UiPathStreamOptions,
 )
 from uipath.runtime.debug import (
-    UiPathDebugBridge,
+    UiPathDebugBridgeProtocol,
     UiPathDebugQuitError,
     UiPathDebugRuntime,
 )
 from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeStateEvent
+from uipath.runtime.schema import UiPathRuntimeSchema
 
 
-def make_debug_bridge_mock() -> UiPathDebugBridge:
+def make_debug_bridge_mock() -> UiPathDebugBridgeProtocol:
     """Create a debug bridge mock with all methods that UiPathDebugRuntime uses.
 
     We use `spec=UiPathDebugBridge` so invalid attributes raise at runtime,
     but still operate as a unittest.mock.Mock with AsyncMock methods.
     """
-    bridge_mock: Mock = Mock(spec=UiPathDebugBridge)
+    bridge_mock: Mock = Mock(spec=UiPathDebugBridgeProtocol)
 
     bridge_mock.connect = AsyncMock()
     bridge_mock.disconnect = AsyncMock()
@@ -44,10 +44,10 @@ def make_debug_bridge_mock() -> UiPathDebugBridge:
 
     bridge_mock.get_breakpoints = Mock(return_value=["node-1"])
 
-    return cast(UiPathDebugBridge, bridge_mock)
+    return cast(UiPathDebugBridgeProtocol, bridge_mock)
 
 
-class StreamingMockRuntime(UiPathBaseRuntime):
+class StreamingMockRuntime:
     """Mock runtime that streams state events, breakpoint hits and a final result."""
 
     def __init__(
@@ -64,7 +64,7 @@ class StreamingMockRuntime(UiPathBaseRuntime):
 
         self.execute_called: bool = False
 
-    async def cleanup(self) -> None:
+    async def dispose(self) -> None:
         pass
 
     async def execute(
@@ -124,6 +124,11 @@ class StreamingMockRuntime(UiPathBaseRuntime):
             status=UiPathRuntimeStatus.SUCCESSFUL,
             output={"visited_nodes": self.node_sequence},
         )
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        """NotImplemented."""
+
+        raise NotImplementedError()
 
 
 @pytest.mark.asyncio
@@ -266,8 +271,8 @@ async def test_debug_runtime_execute_reports_errors_and_marks_faulted():
 
 
 @pytest.mark.asyncio
-async def test_debug_runtime_cleanup_calls_disconnect():
-    """cleanup() should call debug bridge disconnect."""
+async def test_debug_runtime_dispose_calls_disconnect():
+    """dispose() should call debug bridge disconnect."""
 
     runtime_impl = StreamingMockRuntime(node_sequence=["node-1"])
     bridge = make_debug_bridge_mock()
@@ -277,14 +282,14 @@ async def test_debug_runtime_cleanup_calls_disconnect():
         debug_bridge=bridge,
     )
 
-    await debug_runtime.cleanup()
+    await debug_runtime.dispose()
 
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_debug_runtime_cleanup_suppresses_disconnect_errors():
-    """Errors from debug_bridge.disconnect should be suppressed, inner cleanup still runs."""
+async def test_debug_runtime_dispose_suppresses_disconnect_errors():
+    """Errors from debug_bridge.disconnect should be suppressed."""
 
     runtime_impl = StreamingMockRuntime(node_sequence=["node-1"])
     bridge = make_debug_bridge_mock()
@@ -295,7 +300,7 @@ async def test_debug_runtime_cleanup_suppresses_disconnect_errors():
         debug_bridge=bridge,
     )
 
-    # No exception should bubble up from cleanup()
-    await debug_runtime.cleanup()
+    # No exception should bubble up from dispose()
+    await debug_runtime.dispose()
 
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()

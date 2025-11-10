@@ -1,25 +1,31 @@
-"""Factory for creating UiPath runtime instances."""
+"""Protocols for creating UiPath runtime instances."""
 
-from abc import ABC, abstractmethod
-from typing import (
-    Generic,
-    TypeVar,
-)
+from typing import Protocol
 
-from uipath.runtime.base import UiPathBaseRuntime
-
-T = TypeVar("T", bound=UiPathBaseRuntime)
+from uipath.runtime.base import UiPathRuntimeProtocol
 
 
-class UiPathRuntimeFactory(Generic[T], ABC):
-    """Generic factory for UiPath runtime classes."""
+class UiPathRuntimeScannerProtocol(Protocol):
+    """Protocol for discovering all UiPath runtime instances."""
 
-    @abstractmethod
-    def discover_runtimes(self) -> list[T]:
+    def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
         """Discover all runtime classes."""
-        raise NotImplementedError()
+        ...
 
-    @abstractmethod
-    def new_runtime(self, entrypoint: str) -> T:
+    def discover_entrypoints(self) -> list[str]:
+        """Discover all runtime entrypoints."""
+        ...
+
+
+class UiPathRuntimeCreatorProtocol(Protocol):
+    """Protocol for creating a UiPath runtime given an entrypoint."""
+
+    async def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
         """Create a new runtime instance."""
-        raise NotImplementedError()
+        ...
+
+
+class UiPathRuntimeFactoryProtocol(
+    UiPathRuntimeCreatorProtocol, UiPathRuntimeScannerProtocol, Protocol
+):
+    """Protocol for discovering and creating UiPath runtime instances."""

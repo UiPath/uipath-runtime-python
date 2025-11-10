@@ -1,15 +1,19 @@
 """UiPath Runtime Package."""
 
 from uipath.runtime.base import (
-    UiPathBaseRuntime,
     UiPathExecuteOptions,
     UiPathExecutionRuntime,
+    UiPathRuntimeProtocol,
     UiPathStreamNotSupportedError,
     UiPathStreamOptions,
 )
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.events import UiPathRuntimeEvent
-from uipath.runtime.factory import UiPathRuntimeFactory
+from uipath.runtime.factory import (
+    UiPathRuntimeCreatorProtocol,
+    UiPathRuntimeFactoryProtocol,
+    UiPathRuntimeScannerProtocol,
+)
 from uipath.runtime.result import (
     UiPathApiTrigger,
     UiPathBreakpointResult,
@@ -23,9 +27,11 @@ __all__ = [
     "UiPathExecuteOptions",
     "UiPathStreamOptions",
     "UiPathRuntimeContext",
-    "UiPathBaseRuntime",
+    "UiPathRuntimeProtocol",
     "UiPathExecutionRuntime",
-    "UiPathRuntimeFactory",
+    "UiPathRuntimeCreatorProtocol",
+    "UiPathRuntimeScannerProtocol",
+    "UiPathRuntimeFactoryProtocol",
     "UiPathRuntimeResult",
     "UiPathRuntimeStatus",
     "UiPathRuntimeEvent",
