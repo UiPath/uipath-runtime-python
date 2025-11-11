@@ -924,25 +924,23 @@ wheels = [
 
 [[package]]
 name = "uipath-core"
-version = "0.0.3"
+version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/1e/21f8280862ee24a05170873fb70d2e671301b624861c62896f42e6014628/uipath_core-0.0.3.tar.gz", hash = "sha256:d8afb8f3e4784c823a3bd109e822b11109919915f4cc21f7ef4c873c8320ee79", size = 77101, upload-time = "2025-11-08T01:34:38.776Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/10/77/b380db2902f1bf49d5f82eb8d7bc9d321b737a586b56eac35bb8460b91cb/uipath_core-0.0.4.tar.gz", hash = "sha256:e35949ae45e3752970add7160cc0f7ec8c523ec2535134b25b20eea17ec8fec7", size = 76950, upload-time = "2025-11-11T14:12:48.381Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/6c/bb5c7e6d182cd43da451301b8d6675d7f3f0680d5a23530ab1cf5a6a2da3/uipath_core-0.0.3-py3-none-any.whl", hash = "sha256:850232fb8b6a927e1563a537e31370d19b3e8250d7f611425dd2b6c8dcd808c7", size = 12759, upload-time = "2025-11-08T01:34:37.363Z" },
+    { url = "https://files.pythonhosted.org/packages/82/6c/1889fcf99063fbcaac4678de29696eb1d04f2f8e2c3bbbc20f8dbdfff0a9/uipath_core-0.0.4-py3-none-any.whl", hash = "sha256:05798f1a31f4569f0ae322591d815b6be26276d52869b5d94a58e1a84f590f9e", size = 12335, upload-time = "2025-11-11T14:12:46.808Z" },
 ]
 
 [[package]]
 name = "uipath-runtime"
-version = "0.0.6"
+version = "0.0.8"
 source = { editable = "." }
 dependencies = [
-    { name = "opentelemetry-instrumentation" },
-    { name = "opentelemetry-sdk" },
     { name = "pydantic" },
     { name = "uipath-core" },
 ]
@@ -964,10 +962,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "opentelemetry-instrumentation", specifier = ">=0.59b0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.38.0" },
     { name = "pydantic", specifier = ">=2.12.3" },
-    { name = "uipath-core", specifier = ">=0.0.3,<0.1.0" },
+    { name = "uipath-core", specifier = ">=0.0.4,<0.1.0" },
 ]
 
 [package.metadata.requires-dev]

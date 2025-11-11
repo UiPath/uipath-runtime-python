@@ -147,6 +147,7 @@ class UiPathExecutionRuntime:
         delegate: UiPathRuntimeProtocol,
         trace_manager: UiPathTraceManager,
         root_span: str = "root",
+        span_attributes: Optional[dict[str, str]] = None,
         log_handler: Optional[UiPathRuntimeExecutionLogHandler] = None,
         execution_id: Optional[str] = None,
     ):
@@ -154,6 +155,7 @@ class UiPathExecutionRuntime:
         self.delegate = delegate
         self.trace_manager = trace_manager
         self.root_span = root_span
+        self.span_attributes = span_attributes
         self.execution_id = execution_id
         self.log_handler = log_handler
         if execution_id is not None and log_handler is None:
@@ -174,7 +176,9 @@ class UiPathExecutionRuntime:
         try:
             if self.execution_id:
                 with self.trace_manager.start_execution_span(
-                    self.root_span, execution_id=self.execution_id
+                    self.root_span,
+                    execution_id=self.execution_id,
+                    attributes=self.span_attributes,
                 ):
                     return await self.delegate.execute(input, options=options)
             else:
@@ -209,7 +213,9 @@ class UiPathExecutionRuntime:
         try:
             if self.execution_id:
                 with self.trace_manager.start_execution_span(
-                    self.root_span, execution_id=self.execution_id
+                    self.root_span,
+                    execution_id=self.execution_id,
+                    attributes=self.span_attributes,
                 ):
                     async for event in self.delegate.stream(input, options=options):
                         yield event

@@ -9,10 +9,8 @@ from typing import (
     Optional,
     TypeVar,
 )
-from uuid import uuid4
 
 from pydantic import BaseModel
-from uipath.core.tracing.context import UiPathTraceContext
 
 from uipath.runtime.errors import (
     UiPathErrorCategory,
@@ -34,7 +32,6 @@ class UiPathRuntimeContext(BaseModel):
     entrypoint: Optional[str] = None
     input: Optional[dict[str, Any]] = None
     job_id: Optional[str] = None
-    trace_context: Optional[UiPathTraceContext] = None
     config_path: str = "uipath.json"
     runtime_dir: Optional[str] = "__uipath"
     result_file: str = "output.json"
@@ -207,19 +204,6 @@ class UiPathRuntimeContext(BaseModel):
         # Apply defaults from env
         base.job_id = os.environ.get("UIPATH_JOB_KEY")
         base.logs_min_level = os.environ.get("LOG_LEVEL", "INFO")
-
-        base.trace_context = UiPathTraceContext(
-            trace_id=os.environ.get("UIPATH_TRACE_ID"),
-            parent_span_id=os.environ.get("UIPATH_PARENT_SPAN_ID"),
-            root_span_id=os.environ.get("UIPATH_ROOT_SPAN_ID"),
-            enabled=tracing_enabled,
-            job_id=os.environ.get("UIPATH_JOB_KEY"),
-            org_id=os.environ.get("UIPATH_ORGANIZATION_ID"),
-            tenant_id=os.environ.get("UIPATH_TENANT_ID"),
-            process_key=os.environ.get("UIPATH_PROCESS_UUID"),
-            folder_key=os.environ.get("UIPATH_FOLDER_KEY"),
-            reference_id=os.environ.get("UIPATH_JOB_KEY") or str(uuid4()),
-        )
 
         # Override with kwargs
         for k, v in kwargs.items():
