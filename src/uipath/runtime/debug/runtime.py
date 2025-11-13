@@ -3,18 +3,23 @@
 import logging
 from typing import Any, Optional
 
-from uipath.runtime import (
-    UiPathBreakpointResult,
+from uipath.runtime.base import (
     UiPathExecuteOptions,
     UiPathRuntimeProtocol,
-    UiPathRuntimeResult,
-    UiPathRuntimeStatus,
     UiPathStreamNotSupportedError,
     UiPathStreamOptions,
 )
-from uipath.runtime.debug import UiPathDebugBridgeProtocol, UiPathDebugQuitError
+from uipath.runtime.debug import (
+    UiPathBreakpointResult,
+    UiPathDebugBridgeProtocol,
+    UiPathDebugQuitError,
+)
 from uipath.runtime.events import (
     UiPathRuntimeStateEvent,
+)
+from uipath.runtime.result import (
+    UiPathRuntimeResult,
+    UiPathRuntimeStatus,
 )
 from uipath.runtime.schema import UiPathRuntimeSchema
 

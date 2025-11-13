@@ -2,11 +2,11 @@
 
 from typing import Any, Literal, Protocol
 
-from uipath.runtime import (
-    UiPathBreakpointResult,
+from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
+from uipath.runtime.events import UiPathRuntimeStateEvent
+from uipath.runtime.result import (
     UiPathRuntimeResult,
 )
-from uipath.runtime.events import UiPathRuntimeStateEvent
 
 
 class UiPathDebugBridgeProtocol(Protocol):
