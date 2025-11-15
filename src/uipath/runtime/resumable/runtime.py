@@ -139,14 +139,14 @@ class UiPathResumableRuntime:
             return
 
         # Check if trigger already exists in result
-        if result.resume:
-            await self.storage.save_trigger(result.resume)
+        if result.trigger:
+            await self.storage.save_trigger(result.trigger)
             return
 
         if result.output:
             trigger = await self.trigger_manager.create_trigger(result.output)
 
-            result.resume = trigger
+            result.trigger = trigger
 
             await self.storage.save_trigger(trigger)
 

@@ -23,7 +23,7 @@ class UiPathRuntimeResult(UiPathRuntimeEvent):
 
     output: Optional[Union[dict[str, Any], BaseModel]] = None
     status: UiPathRuntimeStatus = UiPathRuntimeStatus.SUCCESSFUL
-    resume: Optional[UiPathResumeTrigger] = None
+    trigger: Optional[UiPathResumeTrigger] = None
     error: Optional[UiPathErrorContract] = None
 
     event_type: UiPathRuntimeEventType = Field(
@@ -44,8 +44,8 @@ class UiPathRuntimeResult(UiPathRuntimeEvent):
             "status": self.status,
         }
 
-        if self.resume:
-            result["resume"] = self.resume.model_dump(by_alias=True)
+        if self.trigger:
+            result["resume"] = self.trigger.model_dump(by_alias=True)
 
         if self.error:
             result["error"] = self.error.model_dump()
