@@ -1,5 +1,6 @@
 """Debug runtime implementation."""
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -21,6 +22,9 @@ from uipath.runtime.result import (
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
 )
+from uipath.runtime.resumable.protocols import UiPathResumeTriggerReaderProtocol
+from uipath.runtime.resumable.runtime import UiPathResumableRuntime
+from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)
@@ -33,11 +37,21 @@ class UiPathDebugRuntime:
         self,
         delegate: UiPathRuntimeProtocol,
         debug_bridge: UiPathDebugBridgeProtocol,
+        trigger_poll_interval: float = 5.0,
     ):
-        """Initialize the UiPathDebugRuntime."""
+        """Initialize the UiPathDebugRuntime.
+
+        Args:
+            delegate: The underlying runtime to wrap
+            debug_bridge: Bridge for debug event communication
+            trigger_poll_interval: Seconds between poll attempts for resume triggers (default: 5.0, disabled: 0.0)
+        """
         super().__init__()
         self.delegate = delegate
         self.debug_bridge: UiPathDebugBridgeProtocol = debug_bridge
+        if trigger_poll_interval < 0:
+            raise ValueError("trigger_poll_interval must be >= 0")
+        self.trigger_poll_interval = trigger_poll_interval
 
     async def execute(
         self,
@@ -90,12 +104,17 @@ class UiPathDebugRuntime:
             breakpoints=options.breakpoints if options else None,
         )
 
+        current_input = input
+
         # Keep streaming until execution completes (not just paused at breakpoint)
         while not execution_completed:
             # Update breakpoints from debug bridge
             debug_options.breakpoints = self.debug_bridge.get_breakpoints()
+
             # Stream events from inner runtime
-            async for event in self.delegate.stream(input, options=debug_options):
+            async for event in self.delegate.stream(
+                current_input, options=debug_options
+            ):
                 # Handle final result
                 if isinstance(event, UiPathRuntimeResult):
                     final_result = event
@@ -117,9 +136,55 @@ class UiPathDebugRuntime:
                             execution_completed = True
                     else:
                         # Normal completion or suspension with dynamic interrupt
-                        execution_completed = True
-                        # Handle dynamic interrupts if present
-                        # In the future, poll for resume trigger completion here, using the debug bridge
+
+                        # Check if this is a suspended execution that needs polling
+                        if (
+                            isinstance(self.delegate, UiPathResumableRuntime)
+                            and self.trigger_poll_interval > 0
+                            and final_result.status == UiPathRuntimeStatus.SUSPENDED
+                            and final_result.trigger
+                        ):
+                            await self.debug_bridge.emit_state_update(
+                                UiPathRuntimeStateEvent(
+                                    node_name="<suspended>",
+                                    payload={
+                                        "status": "suspended",
+                                        "trigger": final_result.trigger.model_dump(),
+                                    },
+                                )
+                            )
+
+                            resume_data: Optional[dict[str, Any]] = None
+                            try:
+                                resume_data = await self._poll_trigger(
+                                    final_result.trigger
+                                )
+                            except UiPathDebugQuitError:
+                                final_result = UiPathRuntimeResult(
+                                    status=UiPathRuntimeStatus.SUCCESSFUL,
+                                )
+                                execution_completed = True
+
+                            if resume_data is not None:
+                                await self.debug_bridge.emit_state_update(
+                                    UiPathRuntimeStateEvent(
+                                        node_name="<resumed>",
+                                        payload={
+                                            "status": "resumed",
+                                            "data": resume_data,
+                                        },
+                                    )
+                                )
+
+                                # Continue with resumed execution
+                                current_input = resume_data
+                                debug_options.resume = True
+                                # Don't mark as completed - continue the loop
+                            else:
+                                execution_completed = True
+                        else:
+                            # Normal completion - mark as done
+                            execution_completed = True
 
                 # Handle state update events - send to debug bridge
                 elif isinstance(event, UiPathRuntimeStateEvent):
@@ -137,3 +202,93 @@ class UiPathDebugRuntime:
             await self.debug_bridge.disconnect()
         except Exception as e:
             logger.warning(f"Error disconnecting debug bridge: {e}")
+
+    async def _poll_trigger(
+        self, trigger: UiPathResumeTrigger
+    ) -> Optional[dict[str, Any]]:
+        """Poll a resume trigger until data is available.
+
+        Args:
+            trigger: The trigger to poll
+
+        Returns:
+            Resume data when available, or None if polling exhausted
+
+        Raises:
+            UiPathDebugQuitError: If quit is requested during polling
+        """
+        reader: Optional[UiPathResumeTriggerReaderProtocol] = None
+        if isinstance(self.delegate, UiPathResumableRuntime):
+            reader = self.delegate.trigger_manager
+        if not reader:
+            return None
+
+        attempt = 0
+        while True:
+            attempt += 1
+
+            await self.debug_bridge.emit_state_update(
+                UiPathRuntimeStateEvent(
+                    node_name="<polling>",
+                    payload={
+                        "status": "polling",
+                        "attempt": attempt,
+                    },
+                )
+            )
+
+            try:
+                resume_data = await reader.read_trigger(trigger)
+
+                if resume_data is not None:
+                    return resume_data
+
+                await self._wait_with_quit_check()
+
+            except UiPathDebugQuitError:
+                logger.info("Quit requested during polling")
+                raise
+            except Exception as e:
+                logger.error(f"Error polling trigger: {e}", exc_info=True)
+                await self.debug_bridge.emit_state_update(
+                    UiPathRuntimeStateEvent(
+                        node_name="<polling>",
+                        payload={
+                            "status": "poll_error",
+                            "attempt": attempt,
+                            "error": str(e),
+                        },
+                    )
+                )
+
+                await self._wait_with_quit_check()
+
+    async def _wait_with_quit_check(self) -> None:
+        """Wait for specified seconds, but allow quit command to interrupt.
+
+        Raises:
+            UiPathDebugQuitError: If quit is requested during wait
+        """
+        sleep_task = asyncio.create_task(asyncio.sleep(self.trigger_poll_interval))
+        resume_task = asyncio.create_task(self.debug_bridge.wait_for_resume())
+
+        done, pending = await asyncio.wait(
+            {sleep_task, resume_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                # Expected when cancelling pending tasks; safe to ignore.
+                pass
+
+        # Check if quit was triggered
+        if resume_task in done:
+            try:
+                await (
+                    resume_task
+                )  # This will raise UiPathDebugQuitError if it was a quit
+            except UiPathDebugQuitError:
+                raise
