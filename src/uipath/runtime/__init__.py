@@ -8,6 +8,12 @@ from uipath.runtime.base import (
     UiPathStreamOptions,
 )
 from uipath.runtime.context import UiPathRuntimeContext
+from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
+from uipath.runtime.debug.bridge import UiPathDebugBridgeProtocol
+from uipath.runtime.debug.exception import UiPathDebugQuitError
+from uipath.runtime.debug.runtime import (
+    UiPathDebugRuntime,
+)
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.factory import (
     UiPathRuntimeCreatorProtocol,
@@ -15,12 +21,20 @@ from uipath.runtime.factory import (
     UiPathRuntimeScannerProtocol,
 )
 from uipath.runtime.result import (
-    UiPathApiTrigger,
-    UiPathBreakpointResult,
-    UiPathResumeTrigger,
-    UiPathResumeTriggerType,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
+)
+from uipath.runtime.resumable.protocols import (
+    UiPathResumableStorageProtocol,
+    UiPathResumeTriggerProtocol,
+)
+from uipath.runtime.resumable.runtime import (
+    UiPathResumableRuntime,
+)
+from uipath.runtime.resumable.trigger import (
+    UiPathApiTrigger,
+    UiPathResumeTrigger,
+    UiPathResumeTriggerType,
 )
 
 __all__ = [
@@ -35,9 +49,15 @@ __all__ = [
     "UiPathRuntimeResult",
     "UiPathRuntimeStatus",
     "UiPathRuntimeEvent",
-    "UiPathBreakpointResult",
+    "UiPathResumableStorageProtocol",
+    "UiPathResumeTriggerProtocol",
     "UiPathApiTrigger",
     "UiPathResumeTrigger",
     "UiPathResumeTriggerType",
+    "UiPathResumableRuntime",
+    "UiPathDebugQuitError",
+    "UiPathDebugBridgeProtocol",
+    "UiPathDebugRuntime",
+    "UiPathBreakpointResult",
     "UiPathStreamNotSupportedError",
 ]

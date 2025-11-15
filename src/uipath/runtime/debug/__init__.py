@@ -1,5 +1,6 @@
 """Initialization module for the debug package."""
 
+from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
 from uipath.runtime.debug.bridge import UiPathDebugBridgeProtocol
 from uipath.runtime.debug.exception import (
     UiPathDebugQuitError,
@@ -10,4 +11,5 @@ __all__ = [
     "UiPathDebugQuitError",
     "UiPathDebugBridgeProtocol",
     "UiPathDebugRuntime",
+    "UiPathBreakpointResult",
 ]
