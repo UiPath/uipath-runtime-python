@@ -938,7 +938,7 @@ wheels = [
 
 [[package]]
 name = "uipath-runtime"
-version = "0.0.9"
+version = "0.0.10"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -962,8 +962,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pydantic", specifier = ">=2.12.3" },
-    { name = "uipath-core", specifier = ">=0.0.4,<0.1.0" },
+    { name = "pydantic", specifier = "==2.12.3" },
+    { name = "uipath-core", specifier = "==0.0.4" },
 ]
 
 [package.metadata.requires-dev]
