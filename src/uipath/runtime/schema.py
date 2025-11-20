@@ -1,6 +1,6 @@
 """UiPath Runtime Schema Definitions."""
 
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,6 +13,35 @@ COMMON_MODEL_SCHEMA = ConfigDict(
 )
 
 
+class UiPathRuntimeNode(BaseModel):
+    """Represents a node in the runtime graph."""
+
+    id: str = Field(..., description="Unique node identifier")
+    name: str = Field(..., description="Display name of the node")
+    type: str = Field(..., description="Node type (e.g., 'tool', 'model')")
+
+    model_config = COMMON_MODEL_SCHEMA
+
+
+class UiPathRuntimeEdge(BaseModel):
+    """Represents an edge/connection in the runtime graph."""
+
+    source: str = Field(..., description="Source node")
+    target: str = Field(..., description="Target node")
+    label: Optional[str] = Field(None, description="Edge label or condition")
+
+    model_config = COMMON_MODEL_SCHEMA
+
+
+class UiPathRuntimeGraph(BaseModel):
+    """Represents the runtime structure as a graph."""
+
+    nodes: list[UiPathRuntimeNode] = Field(default_factory=list)
+    edges: list[UiPathRuntimeEdge] = Field(default_factory=list)
+
+    model_config = COMMON_MODEL_SCHEMA
+
+
 class UiPathRuntimeSchema(BaseModel):
     """Represents the UiPath runtime schema."""
 
@@ -21,10 +50,16 @@ class UiPathRuntimeSchema(BaseModel):
     type: str = Field(..., alias="type")
     input: dict[str, Any] = Field(..., alias="input")
     output: dict[str, Any] = Field(..., alias="output")
+    graph: Optional[UiPathRuntimeGraph] = Field(
+        None, description="Runtime graph structure for debugging"
+    )
 
     model_config = COMMON_MODEL_SCHEMA
 
 
 __all__ = [
     "UiPathRuntimeSchema",
+    "UiPathRuntimeGraph",
+    "UiPathRuntimeNode",
+    "UiPathRuntimeEdge",
 ]
