@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any, AsyncGenerator, Optional, cast
 
 from uipath.runtime.base import (
     UiPathExecuteOptions,
@@ -16,6 +16,7 @@ from uipath.runtime.debug import (
     UiPathDebugQuitError,
 )
 from uipath.runtime.events import (
+    UiPathRuntimeEvent,
     UiPathRuntimeStateEvent,
 )
 from uipath.runtime.result import (
@@ -59,16 +60,35 @@ class UiPathDebugRuntime:
         options: Optional[UiPathExecuteOptions] = None,
     ) -> UiPathRuntimeResult:
         """Execute the workflow with debug support."""
+        final_result = None
+        async for event in self.stream(input, cast(UiPathStreamOptions, options)):
+            if isinstance(event, UiPathRuntimeResult):
+                final_result = event
+
+        return (
+            final_result
+            if final_result
+            else UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+        )
+
+    async def stream(
+        self,
+        input: Optional[dict[str, Any]] = None,
+        options: Optional[UiPathStreamOptions] = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        """Stream execution events with debug support."""
         try:
             await self.debug_bridge.connect()
-
             await self.debug_bridge.emit_execution_started()
 
-            result: UiPathRuntimeResult
+            result: Optional[UiPathRuntimeResult] = None
 
             # Try to stream events from inner runtime
             try:
-                result = await self._stream_and_debug(input, options=options)
+                async for event in self._stream_and_debug(input, options=options):
+                    yield event
+                    if isinstance(event, UiPathRuntimeResult):
+                        result = event
             except UiPathStreamNotSupportedError:
                 # Fallback to regular execute if streaming not supported
                 logger.debug(
@@ -76,22 +96,20 @@ class UiPathDebugRuntime:
                     "streaming, falling back to execute()"
                 )
                 result = await self.delegate.execute(input, options=options)
+                yield result
 
-            await self.debug_bridge.emit_execution_completed(result)
-
-            return result
+            if result:
+                await self.debug_bridge.emit_execution_completed(result)
 
         except Exception as e:
-            await self.debug_bridge.emit_execution_error(
-                error=str(e),
-            )
+            await self.debug_bridge.emit_execution_error(error=str(e))
             raise
 
     async def _stream_and_debug(
         self,
         input: Optional[dict[str, Any]] = None,
         options: Optional[UiPathExecuteOptions] = None,
-    ) -> UiPathRuntimeResult:
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream events from inner runtime and handle debug interactions."""
         final_result: UiPathRuntimeResult
         execution_completed = False
@@ -103,9 +121,8 @@ class UiPathDebugRuntime:
             logger.warning(
                 "Initial resume wait timed out after 60s, assuming debug bridge disconnected"
             )
-            return UiPathRuntimeResult(
-                status=UiPathRuntimeStatus.SUCCESSFUL,
-            )
+            yield UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+            return
 
         debug_options = UiPathStreamOptions(
             resume=options.resume if options else False,
@@ -123,6 +140,8 @@ class UiPathDebugRuntime:
             async for event in self.delegate.stream(
                 current_input, options=debug_options
             ):
+                yield event
+
                 # Handle final result
                 if isinstance(event, UiPathRuntimeResult):
                     final_result = event
@@ -141,6 +160,7 @@ class UiPathDebugRuntime:
                             final_result = UiPathRuntimeResult(
                                 status=UiPathRuntimeStatus.SUCCESSFUL,
                             )
+                            yield final_result
                             execution_completed = True
                     else:
                         # Normal completion or suspension with dynamic interrupt
@@ -152,15 +172,14 @@ class UiPathDebugRuntime:
                             and final_result.status == UiPathRuntimeStatus.SUSPENDED
                             and final_result.trigger
                         ):
-                            await self.debug_bridge.emit_state_update(
-                                UiPathRuntimeStateEvent(
-                                    node_name="<suspended>",
-                                    payload={
-                                        "status": "suspended",
-                                        "trigger": final_result.trigger.model_dump(),
-                                    },
-                                )
+                            state_event = UiPathRuntimeStateEvent(
+                                node_name="<suspended>",
+                                payload={
+                                    "status": "suspended",
+                                    "trigger": final_result.trigger.model_dump(),
+                                },
                             )
+                            await self.debug_bridge.emit_state_update(state_event)
 
                             resume_data: Optional[dict[str, Any]] = None
                             try:
@@ -171,18 +190,18 @@ class UiPathDebugRuntime:
                                 final_result = UiPathRuntimeResult(
                                     status=UiPathRuntimeStatus.SUCCESSFUL,
                                 )
+                                yield final_result
                                 execution_completed = True
 
                             if resume_data is not None:
-                                await self.debug_bridge.emit_state_update(
-                                    UiPathRuntimeStateEvent(
-                                        node_name="<resumed>",
-                                        payload={
-                                            "status": "resumed",
-                                            "data": resume_data,
-                                        },
-                                    )
+                                resumed_event = UiPathRuntimeStateEvent(
+                                    node_name="<resumed>",
+                                    payload={
+                                        "status": "resumed",
+                                        "data": resume_data,
+                                    },
                                 )
+                                await self.debug_bridge.emit_state_update(resumed_event)
 
                                 # Continue with resumed execution
                                 current_input = resume_data
@@ -197,8 +216,6 @@ class UiPathDebugRuntime:
                 # Handle state update events - send to debug bridge
                 elif isinstance(event, UiPathRuntimeStateEvent):
                     await self.debug_bridge.emit_state_update(event)
-
-        return final_result
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Passthrough schema for the delegate."""
