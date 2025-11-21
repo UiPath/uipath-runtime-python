@@ -121,6 +121,10 @@ class UiPathDebugRuntime:
             logger.warning(
                 "Initial resume wait timed out after 60s, assuming debug bridge disconnected"
             )
+            yield UiPathRuntimeResult(status=UiPathRuntimeStatus.FAULTED)
+            return
+        except UiPathDebugQuitError:
+            logger.info("Debug session quit by user before execution started")
             yield UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
             return
 
