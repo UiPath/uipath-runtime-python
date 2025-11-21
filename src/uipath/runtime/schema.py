@@ -1,6 +1,6 @@
 """UiPath Runtime Schema Definitions."""
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,7 +28,7 @@ class UiPathRuntimeEdge(BaseModel):
 
     source: str = Field(..., description="Source node")
     target: str = Field(..., description="Target node")
-    label: Optional[str] = Field(None, description="Edge label or condition")
+    label: str | None = Field(None, description="Edge label or condition")
 
     model_config = COMMON_MODEL_SCHEMA
 
@@ -50,7 +50,7 @@ class UiPathRuntimeSchema(BaseModel):
     type: str = Field(..., alias="type")
     input: dict[str, Any] = Field(..., alias="input")
     output: dict[str, Any] = Field(..., alias="output")
-    graph: Optional[UiPathRuntimeGraph] = Field(
+    graph: UiPathRuntimeGraph | None = Field(
         None, description="Runtime graph structure for debugging"
     )
 

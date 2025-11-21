@@ -1,7 +1,6 @@
 """Standard error contract used across the runtime."""
 
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -38,6 +37,6 @@ class UiPathErrorContract(BaseModel):
     # - Deployment: Configuration, licensing, or permission issues
     # - System: Unexpected internal errors or infrastructure issues
 
-    status: Optional[int] = (
+    status: int | None = (
         None  # HTTP status code, if relevant (e.g., when forwarded from a web API)
     )

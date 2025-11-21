@@ -1,7 +1,7 @@
 """Resumable runtime protocol and implementation."""
 
 import logging
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator
 
 from uipath.runtime.base import (
     UiPathExecuteOptions,
@@ -48,8 +48,8 @@ class UiPathResumableRuntime:
 
     async def execute(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         """Execute with resume trigger handling.
 
@@ -74,8 +74,8 @@ class UiPathResumableRuntime:
 
     async def stream(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathStreamOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream with resume trigger handling.
 
@@ -91,7 +91,7 @@ class UiPathResumableRuntime:
             input = await self._restore_resume_input(input)
 
         # Stream from delegate
-        final_result: Optional[UiPathRuntimeResult] = None
+        final_result: UiPathRuntimeResult | None = None
         async for event in self.delegate.stream(input, options=options):
             yield event
 
@@ -104,8 +104,8 @@ class UiPathResumableRuntime:
             await self._handle_suspension(final_result)
 
     async def _restore_resume_input(
-        self, input: Optional[dict[str, Any]]
-    ) -> Optional[dict[str, Any]]:
+        self, input: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
         """Restore resume input from storage if not provided.
 
         Args:

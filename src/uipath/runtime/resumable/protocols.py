@@ -1,6 +1,6 @@
 """Module defining the protocol for resume trigger storage."""
 
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 
@@ -19,7 +19,7 @@ class UiPathResumableStorageProtocol(Protocol):
         """
         ...
 
-    async def get_latest_trigger(self) -> Optional[UiPathResumeTrigger]:
+    async def get_latest_trigger(self) -> UiPathResumeTrigger | None:
         """Retrieve the most recent resume trigger from storage.
 
         Returns:
@@ -54,7 +54,7 @@ class UiPathResumeTriggerCreatorProtocol(Protocol):
 class UiPathResumeTriggerReaderProtocol(Protocol):
     """Protocol for reading resume triggers and converting them to runtime input."""
 
-    async def read_trigger(self, trigger: UiPathResumeTrigger) -> Optional[Any]:
+    async def read_trigger(self, trigger: UiPathResumeTrigger) -> Any | None:
         """Read a resume trigger and convert it to runtime-compatible input.
 
         This method retrieves data from UiPath services (Actions, Jobs, API)

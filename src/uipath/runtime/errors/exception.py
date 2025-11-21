@@ -2,7 +2,7 @@
 
 import sys
 import traceback
-from typing import Any, Optional
+from typing import Any
 
 from uipath.runtime.errors.codes import UiPathErrorCode
 from uipath.runtime.errors.contract import UiPathErrorCategory, UiPathErrorContract
@@ -17,7 +17,7 @@ class UiPathBaseRuntimeError(Exception):
         title: str,
         detail: str,
         category: UiPathErrorCategory = UiPathErrorCategory.UNKNOWN,
-        status: Optional[int] = None,
+        status: int | None = None,
         prefix: str = "Python",
         include_traceback: bool = True,
     ):
@@ -42,13 +42,13 @@ class UiPathBaseRuntimeError(Exception):
         )
         super().__init__(detail)
 
-    def _extract_http_status(self) -> Optional[int]:
+    def _extract_http_status(self) -> int | None:
         """Extract HTTP status code from the exception chain if present."""
         exc_info = sys.exc_info()
         if not exc_info or len(exc_info) < 2 or exc_info[1] is None:
             return None
 
-        exc: Optional[BaseException] = exc_info[1]  # Current exception being handled
+        exc: BaseException | None = exc_info[1]  # Current exception being handled
         while exc is not None:
             if hasattr(exc, "status_code"):
                 return exc.status_code
@@ -85,7 +85,7 @@ class UiPathRuntimeError(UiPathBaseRuntimeError):
         title: str,
         detail: str,
         category: UiPathErrorCategory = UiPathErrorCategory.UNKNOWN,
-        status: Optional[int] = None,
+        status: int | None = None,
         prefix: str = "Python",
         include_traceback: bool = True,
     ):

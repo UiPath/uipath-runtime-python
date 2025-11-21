@@ -1,7 +1,7 @@
 """Base classes for UiPath runtime events."""
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,10 +21,10 @@ class UiPathRuntimeEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     event_type: UiPathRuntimeEventType
-    execution_id: Optional[str] = Field(
+    execution_id: str | None = Field(
         default=None, description="The runtime execution id associated with the event"
     )
-    metadata: Optional[dict[str, Any]] = Field(
+    metadata: dict[str, Any] | None = Field(
         default=None, description="Additional event context"
     )
 

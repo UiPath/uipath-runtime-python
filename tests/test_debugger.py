@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, AsyncGenerator, Optional, Sequence, cast
+from typing import Any, AsyncGenerator, Sequence, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -69,8 +69,8 @@ class StreamingMockRuntime:
 
     async def execute(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         """Fallback execute path (used when streaming is not supported)."""
         self.execute_called = True
@@ -81,8 +81,8 @@ class StreamingMockRuntime:
 
     async def stream(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathStreamOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Async generator yielding state events, breakpoint events, and final result."""
         if self.stream_unsupported:

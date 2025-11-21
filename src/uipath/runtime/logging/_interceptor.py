@@ -3,7 +3,7 @@
 import logging
 import os
 import sys
-from typing import Optional, TextIO, Union, cast
+from typing import TextIO, cast
 
 from uipath.runtime.logging._context import current_execution_id
 from uipath.runtime.logging._filters import (
@@ -21,12 +21,12 @@ class UiPathRuntimeLogsInterceptor:
 
     def __init__(
         self,
-        min_level: Optional[str] = "INFO",
-        dir: Optional[str] = "__uipath",
-        file: Optional[str] = "execution.log",
-        job_id: Optional[str] = None,
-        execution_id: Optional[str] = None,
-        log_handler: Optional[logging.Handler] = None,
+        min_level: str | None = "INFO",
+        dir: str | None = "__uipath",
+        file: str | None = "execution.log",
+        job_id: str | None = None,
+        execution_id: str | None = None,
+        log_handler: logging.Handler | None = None,
     ):
         """Initialize the log interceptor.
 
@@ -56,11 +56,11 @@ class UiPathRuntimeLogsInterceptor:
         self.original_stdout = cast(TextIO, sys.stdout)
         self.original_stderr = cast(TextIO, sys.stderr)
 
-        self.log_handler: Union[
-            UiPathRuntimeFileLogsHandler,
-            logging.StreamHandler[TextIO],
-            logging.Handler,
-        ]
+        self.log_handler: (
+            UiPathRuntimeFileLogsHandler
+            | logging.StreamHandler[TextIO]
+            | logging.Handler
+        )
 
         if log_handler:
             self.log_handler = log_handler
@@ -82,7 +82,7 @@ class UiPathRuntimeLogsInterceptor:
         self.log_handler.setLevel(self.numeric_min_level)
 
         # Add execution context filter if execution_id provided
-        self.execution_filter: Optional[logging.Filter] = None
+        self.execution_filter: logging.Filter | None = None
         if execution_id:
             self.execution_filter = UiPathRuntimeExecutionFilter(execution_id)
             self.log_handler.addFilter(self.execution_filter)

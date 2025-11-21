@@ -1,7 +1,7 @@
 """Result of an execution with status and optional error information."""
 
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -21,10 +21,10 @@ class UiPathRuntimeStatus(str, Enum):
 class UiPathRuntimeResult(UiPathRuntimeEvent):
     """Result of an execution with status and optional error information."""
 
-    output: Optional[Union[dict[str, Any], BaseModel]] = None
+    output: dict[str, Any] | BaseModel | None = None
     status: UiPathRuntimeStatus = UiPathRuntimeStatus.SUCCESSFUL
-    trigger: Optional[UiPathResumeTrigger] = None
-    error: Optional[UiPathErrorContract] = None
+    trigger: UiPathResumeTrigger | None = None
+    error: UiPathErrorContract | None = None
 
     event_type: UiPathRuntimeEventType = Field(
         default=UiPathRuntimeEventType.RUNTIME_RESULT, frozen=True

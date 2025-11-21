@@ -1,6 +1,6 @@
 """Events related to agent messages and state updates."""
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import Field
 
@@ -62,7 +62,7 @@ class UiPathRuntimeStateEvent(UiPathRuntimeEvent):
     """
 
     payload: dict[str, Any] = Field(description="Framework-specific state update")
-    node_name: Optional[str] = Field(
+    node_name: str | None = Field(
         default=None, description="Name of the node/agent that caused this update"
     )
     event_type: UiPathRuntimeEventType = Field(

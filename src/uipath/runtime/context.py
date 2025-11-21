@@ -6,11 +6,10 @@ import os
 from functools import cached_property
 from typing import (
     Any,
-    Optional,
     TypeVar,
 )
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from uipath.runtime.errors import (
     UiPathErrorCategory,
@@ -29,21 +28,21 @@ C = TypeVar("C", bound="UiPathRuntimeContext")
 class UiPathRuntimeContext(BaseModel):
     """Context information passed throughout the runtime execution."""
 
-    entrypoint: Optional[str] = None
-    input: Optional[dict[str, Any]] = None
-    job_id: Optional[str] = None
+    entrypoint: str | None = None
+    input: dict[str, Any] | None = None
+    job_id: str | None = None
     config_path: str = "uipath.json"
-    runtime_dir: Optional[str] = "__uipath"
+    runtime_dir: str | None = "__uipath"
     result_file: str = "output.json"
     state_file: str = "state.db"
-    input_file: Optional[str] = None
-    output_file: Optional[str] = None
-    trace_file: Optional[str] = None
-    logs_file: Optional[str] = "execution.log"
-    logs_min_level: Optional[str] = "INFO"
-    result: Optional[UiPathRuntimeResult] = None
+    input_file: str | None = None
+    output_file: str | None = None
+    trace_file: str | None = None
+    logs_file: str | None = "execution.log"
+    logs_min_level: str | None = "INFO"
+    result: UiPathRuntimeResult | None = None
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
     def __enter__(self):
         """Async enter method called when entering the 'async with' block.
@@ -188,7 +187,7 @@ class UiPathRuntimeContext(BaseModel):
         return os.path.join("__uipath", "state.db")
 
     @classmethod
-    def with_defaults(cls: type[C], config_path: Optional[str] = None, **kwargs) -> C:
+    def with_defaults(cls: type[C], config_path: str | None = None, **kwargs) -> C:
         """Construct a context with defaults, reading env vars and config file."""
         resolved_config_path = config_path or os.environ.get(
             "UIPATH_CONFIG_PATH", "uipath.json"
@@ -212,7 +211,7 @@ class UiPathRuntimeContext(BaseModel):
         return base
 
     @classmethod
-    def from_config(cls: type[C], config_path: Optional[str] = None, **kwargs) -> C:
+    def from_config(cls: type[C], config_path: str | None = None, **kwargs) -> C:
         """Load configuration from uipath.json file."""
         path = config_path or "uipath.json"
         config = {}
