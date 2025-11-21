@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, AsyncGenerator, Optional, cast
+from typing import Any, AsyncGenerator, cast
 
 from uipath.runtime.base import (
     UiPathExecuteOptions,
@@ -56,8 +56,8 @@ class UiPathDebugRuntime:
 
     async def execute(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         """Execute the workflow with debug support."""
         final_result = None
@@ -73,15 +73,15 @@ class UiPathDebugRuntime:
 
     async def stream(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathStreamOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream execution events with debug support."""
         try:
             await self.debug_bridge.connect()
             await self.debug_bridge.emit_execution_started()
 
-            result: Optional[UiPathRuntimeResult] = None
+            result: UiPathRuntimeResult | None = None
 
             # Try to stream events from inner runtime
             try:
@@ -107,8 +107,8 @@ class UiPathDebugRuntime:
 
     async def _stream_and_debug(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream events from inner runtime and handle debug interactions."""
         final_result: UiPathRuntimeResult
@@ -185,7 +185,7 @@ class UiPathDebugRuntime:
                             )
                             await self.debug_bridge.emit_state_update(state_event)
 
-                            resume_data: Optional[dict[str, Any]] = None
+                            resume_data: dict[str, Any] | None = None
                             try:
                                 resume_data = await self._poll_trigger(
                                     final_result.trigger, self.delegate.trigger_manager
@@ -234,7 +234,7 @@ class UiPathDebugRuntime:
 
     async def _poll_trigger(
         self, trigger: UiPathResumeTrigger, reader: UiPathResumeTriggerReaderProtocol
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Poll a resume trigger until data is available.
 
         Args:

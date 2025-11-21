@@ -5,7 +5,6 @@ from typing import (
     Any,
     AsyncGenerator,
     Literal,
-    Optional,
     Protocol,
 )
 
@@ -38,7 +37,7 @@ class UiPathExecuteOptions(BaseModel):
         default=False,
         description="Indicates whether to resume a suspended execution.",
     )
-    breakpoints: Optional[list[str] | Literal["*"]] = Field(
+    breakpoints: list[str] | Literal["*"] | None = Field(
         default=None,
         description="List of nodes or '*' to break on all steps.",
     )
@@ -57,8 +56,8 @@ class UiPathExecutableProtocol(Protocol):
 
     async def execute(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         """Execute the runtime with the given input and options."""
         ...
@@ -69,8 +68,8 @@ class UiPathStreamableProtocol(Protocol):
 
     async def stream(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathStreamOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream execution events in real-time.
 
@@ -147,9 +146,9 @@ class UiPathExecutionRuntime:
         delegate: UiPathRuntimeProtocol,
         trace_manager: UiPathTraceManager,
         root_span: str = "root",
-        span_attributes: Optional[dict[str, str]] = None,
-        log_handler: Optional[UiPathRuntimeExecutionLogHandler] = None,
-        execution_id: Optional[str] = None,
+        span_attributes: dict[str, str] | None = None,
+        log_handler: UiPathRuntimeExecutionLogHandler | None = None,
+        execution_id: str | None = None,
     ):
         """Initialize the executor."""
         self.delegate = delegate
@@ -163,8 +162,8 @@ class UiPathExecutionRuntime:
 
     async def execute(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         """Execute runtime with context."""
         if self.log_handler:
@@ -190,8 +189,8 @@ class UiPathExecutionRuntime:
 
     async def stream(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathStreamOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream runtime execution with context.
 

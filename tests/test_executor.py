@@ -1,6 +1,6 @@
 """Simple test for runtime factory and executor span capture."""
 
-from typing import Any, AsyncGenerator, Optional, TypeVar
+from typing import Any, AsyncGenerator, TypeVar
 
 import pytest
 from opentelemetry import trace
@@ -26,8 +26,8 @@ class BaseMockRuntime:
 
     async def stream(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathStreamOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """NotImplemented"""
         raise NotImplementedError()
@@ -43,8 +43,8 @@ class MockRuntimeA(BaseMockRuntime):
 
     async def execute(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         print(f"executing {input}")
         return UiPathRuntimeResult(
@@ -57,8 +57,8 @@ class MockRuntimeB(BaseMockRuntime):
 
     async def execute(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         print(f"executing {input}")
         return UiPathRuntimeResult(
@@ -71,8 +71,8 @@ class MockRuntimeC(BaseMockRuntime):
 
     async def execute(
         self,
-        input: Optional[dict[str, Any]] = None,
-        options: Optional[UiPathExecuteOptions] = None,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         print(f"executing {input}")
         tracer = trace.get_tracer("test-runtime-c")
