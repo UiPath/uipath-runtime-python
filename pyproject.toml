@@ -1,12 +1,11 @@
 [project]
 name = "uipath-runtime"
-version = "0.0.11"
+version = "0.0.12"
 description = "Runtime abstractions and interfaces for building agents and automation scripts in the UiPath ecosystem"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 dependencies = [
-  "pydantic==2.12.3",
-  "uipath-core==0.0.4",
+  "uipath-core>=0.0.5, <0.1.0",
 ]
 classifiers = [
   "Intended Audience :: Developers",
@@ -16,7 +15,6 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 maintainers = [
-  { name = "Marius Cosareanu", email = "marius.cosareanu@uipath.com" },
   { name = "Cristian Pufu", email = "cristian.pufu@uipath.com" },
 ]
 
