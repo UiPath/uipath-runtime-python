@@ -19,6 +19,8 @@ class UiPathErrorCode(str, Enum):
 
     # Input validation errors
     INVALID_INPUT_FILE_EXTENSION = "INVALID_INPUT_FILE_EXTENSION"
+    MISSING_INPUT_FILE = "MISSING_INPUT_FILE"
+
     INPUT_INVALID_JSON = "INPUT_INVALID_JSON"
 
     # HITL (Human-In-The-Loop) related errors

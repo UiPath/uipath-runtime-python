@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from functools import cached_property
+from pathlib import Path
 from typing import (
     Any,
     TypeVar,
@@ -29,7 +30,7 @@ class UiPathRuntimeContext(BaseModel):
     """Context information passed throughout the runtime execution."""
 
     entrypoint: str | None = None
-    input: dict[str, Any] | None = None
+    input: str | None = None
     job_id: str | None = None
     config_path: str = "uipath.json"
     runtime_dir: str | None = "__uipath"
@@ -44,34 +45,99 @@ class UiPathRuntimeContext(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
+    def get_input(self) -> dict[str, Any]:
+        """Get parsed input data.
+
+        Priority:
+        1. If input_file is specified, read and parse from file
+        2. Otherwise, parse the input string
+
+        Returns:
+            Parsed input dictionary
+
+        Raises:
+            UiPathRuntimeError: If JSON is invalid or file not found
+        """
+        if self.input_file:
+            return self._read_input_from_file(self.input_file)
+
+        return self._parse_input_string(self.input)
+
+    def _read_input_from_file(self, file_path: str) -> dict[str, Any]:
+        """Read and parse input from JSON file."""
+        path = Path(file_path)
+
+        # Validate file extension
+        if path.suffix != ".json":
+            raise UiPathRuntimeError(
+                code=UiPathErrorCode.INVALID_INPUT_FILE_EXTENSION,
+                title="Invalid Input File Extension",
+                detail=f"The provided input file must be in JSON format. Got: {path.suffix}",
+                category=UiPathErrorCategory.USER,
+            )
+
+        # Check if file exists
+        if not path.exists():
+            raise UiPathRuntimeError(
+                code=UiPathErrorCode.MISSING_INPUT_FILE,
+                title="Input File Not Found",
+                detail=f"The input file does not exist: {file_path}",
+                category=UiPathErrorCategory.USER,
+            )
+
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            raise UiPathRuntimeError(
+                code=UiPathErrorCode.INPUT_INVALID_JSON,
+                title="Invalid JSON in Input File",
+                detail=f"The input file contains invalid JSON: {e}",
+                category=UiPathErrorCategory.USER,
+            ) from e
+        except Exception as e:
+            raise UiPathRuntimeError(
+                code=UiPathErrorCode.INPUT_INVALID_JSON,
+                title="Failed to Read Input File",
+                detail=f"Error reading input file: {e}",
+                category=UiPathErrorCategory.SYSTEM,
+            ) from e
+
+    def _parse_input_string(self, input_str: str | None) -> dict[str, Any]:
+        """Parse input from JSON string."""
+        if not input_str or input_str.strip() == "":
+            return {}
+
+        try:
+            parsed = json.loads(input_str)
+
+            # Ensure we return a dict
+            if not isinstance(parsed, dict):
+                raise UiPathRuntimeError(
+                    code=UiPathErrorCode.INPUT_INVALID_JSON,
+                    title="Invalid Input Type",
+                    detail=f"Input must be a JSON object, got: {type(parsed).__name__}",
+                    category=UiPathErrorCategory.USER,
+                )
+
+            return parsed
+
+        except json.JSONDecodeError as e:
+            raise UiPathRuntimeError(
+                code=UiPathErrorCode.INPUT_INVALID_JSON,
+                title="Invalid JSON Input",
+                detail=f"The input data is not valid JSON: {e}",
+                category=UiPathErrorCategory.USER,
+            ) from e
+
     def __enter__(self):
-        """Async enter method called when entering the 'async with' block.
+        """Enter method called when entering the 'async with' block.
 
         Initializes and prepares the runtime contextual environment.
 
         Returns:
             The runtime context instance
         """
-        try:
-            if self.input_file:
-                # Read the input from file if provided
-                _, file_extension = os.path.splitext(self.input_file)
-                if file_extension != ".json":
-                    raise UiPathRuntimeError(
-                        code=UiPathErrorCode.INVALID_INPUT_FILE_EXTENSION,
-                        title="Invalid Input File Extension",
-                        detail="The provided input file must be in JSON format.",
-                    )
-                with open(self.input_file) as f:
-                    self.input = json.loads(f.read())
-        except json.JSONDecodeError as e:
-            raise UiPathRuntimeError(
-                UiPathErrorCode.INPUT_INVALID_JSON,
-                "Invalid JSON input",
-                f"The input data is not valid JSON: {str(e)}",
-                UiPathErrorCategory.USER,
-            ) from e
-
         # Intercept all stdout/stderr/logs
         # Write to file (runtime), stdout (debug) or log handler (if provided)
         self.logs_interceptor = UiPathRuntimeLogsInterceptor(
@@ -194,6 +260,7 @@ class UiPathRuntimeContext(BaseModel):
         )
 
         base = cls.from_config(resolved_config_path)
+        base.config_path = resolved_config_path
 
         bool_map = {"true": True, "false": False}
         tracing_enabled = os.environ.get("UIPATH_TRACING_ENABLED", True)
