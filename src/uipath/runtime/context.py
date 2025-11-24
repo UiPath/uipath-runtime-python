@@ -5,10 +5,7 @@ import logging
 import os
 from functools import cached_property
 from pathlib import Path
-from typing import (
-    Any,
-    TypeVar,
-)
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -23,8 +20,6 @@ from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 logger = logging.getLogger(__name__)
 
-C = TypeVar("C", bound="UiPathRuntimeContext")
-
 
 class UiPathRuntimeContext(BaseModel):
     """Context information passed throughout the runtime execution."""
@@ -32,6 +27,10 @@ class UiPathRuntimeContext(BaseModel):
     entrypoint: str | None = None
     input: str | None = None
     job_id: str | None = None
+    tenant_id: str | None = None
+    org_id: str | None = None
+    folder_key: str | None = None
+    process_key: str | None = None
     config_path: str = "uipath.json"
     runtime_dir: str | None = "__uipath"
     result_file: str = "output.json"
@@ -253,7 +252,9 @@ class UiPathRuntimeContext(BaseModel):
         return os.path.join("__uipath", "state.db")
 
     @classmethod
-    def with_defaults(cls: type[C], config_path: str | None = None, **kwargs) -> C:
+    def with_defaults(
+        cls, config_path: str | None = None, **kwargs
+    ) -> "UiPathRuntimeContext":
         """Construct a context with defaults, reading env vars and config file."""
         resolved_config_path = config_path or os.environ.get(
             "UIPATH_CONFIG_PATH", "uipath.json"
@@ -270,6 +271,10 @@ class UiPathRuntimeContext(BaseModel):
         # Apply defaults from env
         base.job_id = os.environ.get("UIPATH_JOB_KEY")
         base.logs_min_level = os.environ.get("LOG_LEVEL", "INFO")
+        base.org_id = os.environ.get("UIPATH_ORGANIZATION_ID")
+        base.tenant_id = os.environ.get("UIPATH_TENANT_ID")
+        base.process_key = os.environ.get("UIPATH_PROCESS_UUID")
+        base.folder_key = os.environ.get("UIPATH_FOLDER_KEY")
 
         # Override with kwargs
         for k, v in kwargs.items():
@@ -278,7 +283,9 @@ class UiPathRuntimeContext(BaseModel):
         return base
 
     @classmethod
-    def from_config(cls: type[C], config_path: str | None = None, **kwargs) -> C:
+    def from_config(
+        cls, config_path: str | None = None, **kwargs
+    ) -> "UiPathRuntimeContext":
         """Load configuration from uipath.json file."""
         path = config_path or "uipath.json"
         config = {}
