@@ -44,7 +44,7 @@ def test_context_loads_json_input_file(tmp_path: Path) -> None:
 
     with ctx:
         # input should be loaded from the JSON file
-        assert ctx.input == input_data
+        assert ctx.get_input() == input_data
         # logs interceptor should have been set up
         assert isinstance(ctx.logs_interceptor, DummyLogsInterceptor)
         assert ctx.logs_interceptor.setup_called
@@ -61,8 +61,8 @@ def test_context_raises_for_invalid_json(tmp_path: Path) -> None:
 
     with pytest.raises(UiPathRuntimeError) as excinfo:
         with ctx:
-            # __enter__ should fail before body executes
-            pass
+            # Explicitly call get_input() which will raise
+            ctx.get_input()
 
     err = excinfo.value.error_info
     assert err.code == f"Python.{UiPathErrorCode.INPUT_INVALID_JSON.value}"
