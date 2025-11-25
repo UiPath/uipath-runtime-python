@@ -35,6 +35,7 @@ from uipath.runtime.resumable.runtime import (
 from uipath.runtime.resumable.trigger import (
     UiPathApiTrigger,
     UiPathResumeTrigger,
+    UiPathResumeTriggerName,
     UiPathResumeTriggerType,
 )
 from uipath.runtime.schema import UiPathRuntimeSchema
@@ -64,4 +65,5 @@ __all__ = [
     "UiPathDebugRuntime",
     "UiPathBreakpointResult",
     "UiPathStreamNotSupportedError",
+    "UiPathResumeTriggerName",
 ]
