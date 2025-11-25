@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from uipath.runtime.base import UiPathRuntimeProtocol
+from uipath.runtime.base import UiPathDisposableProtocol, UiPathRuntimeProtocol
 
 
 class UiPathRuntimeScannerProtocol(Protocol):
@@ -28,6 +28,9 @@ class UiPathRuntimeCreatorProtocol(Protocol):
 
 
 class UiPathRuntimeFactoryProtocol(
-    UiPathRuntimeCreatorProtocol, UiPathRuntimeScannerProtocol, Protocol
+    UiPathRuntimeCreatorProtocol,
+    UiPathRuntimeScannerProtocol,
+    UiPathDisposableProtocol,
+    Protocol,
 ):
     """Protocol for discovering and creating UiPath runtime instances."""
