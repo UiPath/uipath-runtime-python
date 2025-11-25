@@ -3,11 +3,14 @@
 from pathlib import Path
 from typing import Callable, TypeAlias
 
+from uipath.core.tracing import UiPathTraceManager
+
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.factory import UiPathRuntimeFactoryProtocol
 
 FactoryCallable: TypeAlias = Callable[
-    [UiPathRuntimeContext | None], UiPathRuntimeFactoryProtocol
+    [UiPathRuntimeContext | None, UiPathTraceManager | None],
+    UiPathRuntimeFactoryProtocol,
 ]
 
 
@@ -41,6 +44,7 @@ class UiPathRuntimeFactoryRegistry:
         name: str | None = None,
         search_path: str = ".",
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         """Get factory instance by name or auto-detect from config files.
 
@@ -56,20 +60,20 @@ class UiPathRuntimeFactoryRegistry:
             if name not in cls._factories:
                 raise ValueError(f"Factory '{name}' not registered")
             factory_callable, _ = cls._factories[name]
-            return factory_callable(context)
+            return factory_callable(context, trace_manager)
 
         # Auto-detect based on config files in reverse registration order
         search_dir = Path(search_path)
         for factory_name in reversed(cls._registration_order):
             factory_callable, config_file = cls._factories[factory_name]
             if (search_dir / config_file).exists():
-                return factory_callable(context)
+                return factory_callable(context, trace_manager)
 
         # Fallback to default
         if cls._default_name is None:
             raise ValueError("No default factory registered and no config file found")
         factory_callable, _ = cls._factories[cls._default_name]
-        return factory_callable(context)
+        return factory_callable(context, trace_manager)
 
     @classmethod
     def set_default(cls, name: str) -> None:

@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, cast
 
 import pytest
+from uipath.core.tracing import UiPathTraceManager
 
 from uipath.runtime import (
     UiPathExecuteOptions,
@@ -139,6 +140,7 @@ def test_register_single_factory(clean_registry):
 
     def create_factory(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
@@ -154,16 +156,19 @@ def test_register_multiple_factories(clean_registry):
 
     def create_functions(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
     def create_langgraph(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
     def create_llamaindex(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLlamaIndexFactory(context)
 
@@ -187,6 +192,7 @@ def test_set_default_factory(clean_registry):
 
     def create_factory(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
@@ -207,6 +213,7 @@ def test_get_factory_by_name(clean_registry):
 
     def create_factory(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
@@ -222,6 +229,7 @@ def test_get_factory_by_name_with_context(clean_registry):
 
     def create_factory(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
@@ -244,11 +252,13 @@ def test_auto_detect_langgraph_json(clean_registry, temp_dir):
 
     def create_functions(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
     def create_langgraph(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
@@ -269,11 +279,13 @@ def test_auto_detect_llamaindex_json(clean_registry, temp_dir):
 
     def create_functions(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
     def create_llamaindex(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLlamaIndexFactory(context)
 
@@ -294,11 +306,13 @@ def test_auto_detect_uipath_json(clean_registry, temp_dir):
 
     def create_functions(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
     def create_langgraph(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
@@ -319,11 +333,13 @@ def test_fallback_to_default(clean_registry, temp_dir):
 
     def create_functions(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
     def create_langgraph(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
@@ -342,6 +358,7 @@ def test_no_default_no_config_raises_error(clean_registry, temp_dir):
 
     def create_factory(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
@@ -358,11 +375,13 @@ def test_priority_langgraph_over_uipath(clean_registry, temp_dir):
 
     def create_functions(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
     def create_langgraph(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
@@ -385,6 +404,7 @@ async def test_factory_discover_entrypoints(clean_registry):
 
     def create_factory(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
@@ -401,6 +421,7 @@ async def test_factory_create_runtime(clean_registry):
 
     def create_factory(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockLangGraphFactory(context)
 
@@ -417,6 +438,7 @@ def test_get_all_returns_copy(clean_registry):
 
     def create_factory(
         context: UiPathRuntimeContext | None = None,
+        trace_manager: UiPathTraceManager | None = None,
     ) -> UiPathRuntimeFactoryProtocol:
         return MockFunctionsFactory(context)
 
