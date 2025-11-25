@@ -12,7 +12,20 @@ class UiPathResumeTriggerType(str, Enum):
     NONE = "None"
     QUEUE_ITEM = "QueueItem"
     JOB = "Job"
-    ACTION = "Task"
+    TASK = "Task"
+    TIMER = "Timer"
+    INBOX = "Inbox"
+    API = "Api"
+
+
+class UiPathResumeTriggerName(str, Enum):
+    """Constants representing specific names for resume job triggers in the system."""
+
+    UNKNOWN = "Unknown"
+    QUEUE_ITEM = "QueueItem"
+    JOB = "Job"
+    TASK = "Task"
+    ESCALATION = "Escalation"
     TIMER = "Timer"
     INBOX = "Inbox"
     API = "Api"
@@ -33,10 +46,13 @@ class UiPathResumeTrigger(BaseModel):
     trigger_type: UiPathResumeTriggerType = Field(
         default=UiPathResumeTriggerType.API, alias="triggerType"
     )
+    trigger_name: UiPathResumeTriggerName = Field(
+        default=UiPathResumeTriggerName.UNKNOWN, alias="triggerName", exclude=True
+    )
     item_key: str | None = Field(default=None, alias="itemKey")
     api_resume: UiPathApiTrigger | None = Field(default=None, alias="apiResume")
     folder_path: str | None = Field(default=None, alias="folderPath")
     folder_key: str | None = Field(default=None, alias="folderKey")
-    payload: Any | None = Field(default=None, alias="interruptObject")
+    payload: Any | None = Field(default=None, alias="interruptObject", exclude=True)
 
     model_config = ConfigDict(validate_by_name=True)
