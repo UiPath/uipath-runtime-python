@@ -20,6 +20,7 @@ from uipath.runtime.factory import (
     UiPathRuntimeFactoryProtocol,
     UiPathRuntimeScannerProtocol,
 )
+from uipath.runtime.registry import UiPathRuntimeFactoryRegistry
 from uipath.runtime.result import (
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
@@ -36,6 +37,7 @@ from uipath.runtime.resumable.trigger import (
     UiPathResumeTrigger,
     UiPathResumeTriggerType,
 )
+from uipath.runtime.schema import UiPathRuntimeSchema
 
 __all__ = [
     "UiPathExecuteOptions",
@@ -46,9 +48,11 @@ __all__ = [
     "UiPathRuntimeCreatorProtocol",
     "UiPathRuntimeScannerProtocol",
     "UiPathRuntimeFactoryProtocol",
+    "UiPathRuntimeFactoryRegistry",
     "UiPathRuntimeResult",
     "UiPathRuntimeStatus",
     "UiPathRuntimeEvent",
+    "UiPathRuntimeSchema",
     "UiPathResumableStorageProtocol",
     "UiPathResumeTriggerProtocol",
     "UiPathApiTrigger",

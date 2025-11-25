@@ -8,7 +8,7 @@ from uipath.runtime.base import UiPathRuntimeProtocol
 class UiPathRuntimeScannerProtocol(Protocol):
     """Protocol for discovering all UiPath runtime instances."""
 
-    def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
+    async def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
         """Discover all runtime classes."""
         ...
 
