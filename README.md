@@ -162,7 +162,7 @@ from uipath.runtime import (
 )
 
 class MyRuntimeFactory:
-    async def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
+    async def new_runtime(self, entrypoint: str, runtime_id: str) -> UiPathRuntimeProtocol:
         return MyRuntime()
 
     def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
@@ -173,7 +173,7 @@ class MyRuntimeFactory:
 
 
 factory = MyRuntimeFactory()
-runtime = await factory.new_runtime("example")
+runtime = await factory.new_runtime("example", "id")
 
 result = await runtime.execute()
 print(result.output)  # {'message': 'Hello from MyRuntime'}
@@ -343,7 +343,7 @@ class OrchestratorRuntime:
 
         for i, child_input in enumerate(child_inputs):
             # Use the factory to create a new child runtime
-            child_runtime = await self.factory.new_runtime(entrypoint=f"child-{i}")
+            child_runtime = await self.factory.new_runtime(entrypoint=f"child-{i}", runtime_id=f"child-{i}")
 
             # Wrap child runtime with tracing + logs
             execution_id = f"child-{i}"

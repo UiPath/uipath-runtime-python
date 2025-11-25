@@ -20,7 +20,9 @@ class UiPathRuntimeScannerProtocol(Protocol):
 class UiPathRuntimeCreatorProtocol(Protocol):
     """Protocol for creating a UiPath runtime given an entrypoint."""
 
-    async def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
+    async def new_runtime(
+        self, entrypoint: str, runtime_id: str
+    ) -> UiPathRuntimeProtocol:
         """Create a new runtime instance."""
         ...
 
