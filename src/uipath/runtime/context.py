@@ -26,6 +26,7 @@ class UiPathRuntimeContext(BaseModel):
 
     entrypoint: str | None = None
     input: str | None = None
+    resume: bool = False
     job_id: str | None = None
     tenant_id: str | None = None
     org_id: str | None = None
