@@ -1,5 +1,7 @@
 """UiPath Runtime Schema Definitions."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,6 +21,9 @@ class UiPathRuntimeNode(BaseModel):
     id: str = Field(..., description="Unique node identifier")
     name: str = Field(..., description="Display name of the node")
     type: str = Field(..., description="Node type (e.g., 'tool', 'model')")
+    subgraph: UiPathRuntimeGraph | None = Field(
+        None, description="Nested subgraph if this node contains one"
+    )
 
     model_config = COMMON_MODEL_SCHEMA
 
