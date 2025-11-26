@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+from uipath.core.tracing import UiPathTraceManager
 
 from uipath.runtime.errors import (
     UiPathErrorCategory,
@@ -27,6 +28,7 @@ class UiPathRuntimeContext(BaseModel):
     entrypoint: str | None = None
     input: str | None = None
     resume: bool = False
+    command: str | None = None
     job_id: str | None = None
     tenant_id: str | None = None
     org_id: str | None = None
@@ -42,6 +44,7 @@ class UiPathRuntimeContext(BaseModel):
     logs_file: str | None = "execution.log"
     logs_min_level: str | None = "INFO"
     result: UiPathRuntimeResult | None = None
+    trace_manager: UiPathTraceManager | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
