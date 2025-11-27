@@ -24,6 +24,9 @@ class UiPathRuntimeNode(BaseModel):
     subgraph: UiPathRuntimeGraph | None = Field(
         None, description="Nested subgraph if this node contains one"
     )
+    metadata: dict[str, Any] | None = Field(
+        None, description="Additional node metadata (e.g., model config, tool names)"
+    )
 
     model_config = COMMON_MODEL_SCHEMA
 
