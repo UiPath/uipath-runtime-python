@@ -21,7 +21,7 @@ class UiPathRuntimeStatus(str, Enum):
 class UiPathRuntimeResult(UiPathRuntimeEvent):
     """Result of an execution with status and optional error information."""
 
-    output: dict[str, Any] | BaseModel | None = None
+    output: dict[str, Any] | BaseModel | str | None = None
     status: UiPathRuntimeStatus = UiPathRuntimeStatus.SUCCESSFUL
     trigger: UiPathResumeTrigger | None = None
     error: UiPathErrorContract | None = None
@@ -32,6 +32,7 @@ class UiPathRuntimeResult(UiPathRuntimeEvent):
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format for output."""
+        output_data: dict[str, Any] | str
         if self.output is None:
             output_data = {}
         elif isinstance(self.output, BaseModel):

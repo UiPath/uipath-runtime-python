@@ -68,9 +68,7 @@ class UiPathResumableRuntime:
         result = await self.delegate.execute(input, options=options)
 
         # If suspended, create and persist trigger
-        await self._handle_suspension(result)
-
-        return result
+        return await self._handle_suspension(result)
 
     async def stream(
         self,
@@ -90,18 +88,16 @@ class UiPathResumableRuntime:
         if options and options.resume:
             input = await self._restore_resume_input(input)
 
-        # Stream from delegate
         final_result: UiPathRuntimeResult | None = None
         async for event in self.delegate.stream(input, options=options):
-            yield event
-
-            # Capture final result
             if isinstance(event, UiPathRuntimeResult):
                 final_result = event
+            else:
+                yield event
 
         # If suspended, create and persist trigger
         if final_result:
-            await self._handle_suspension(final_result)
+            yield await self._handle_suspension(final_result)
 
     async def _restore_resume_input(
         self, input: dict[str, Any] | None
@@ -128,7 +124,9 @@ class UiPathResumableRuntime:
 
         return resume_data
 
-    async def _handle_suspension(self, result: UiPathRuntimeResult) -> None:
+    async def _handle_suspension(
+        self, result: UiPathRuntimeResult
+    ) -> UiPathRuntimeResult:
         """Create and persist resume trigger if execution was suspended.
 
         Args:
@@ -136,19 +134,25 @@ class UiPathResumableRuntime:
         """
         # Only handle suspensions
         if result.status != UiPathRuntimeStatus.SUSPENDED:
-            return
+            return result
 
         # Check if trigger already exists in result
         if result.trigger:
             await self.storage.save_trigger(result.trigger)
-            return
+            return result
+
+        suspended_result = UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUSPENDED,
+        )
 
         if result.output:
-            trigger = await self.trigger_manager.create_trigger(result.output)
+            suspended_result.trigger = await self.trigger_manager.create_trigger(
+                result.output
+            )
 
-            result.trigger = trigger
+            await self.storage.save_trigger(suspended_result.trigger)
 
-            await self.storage.save_trigger(trigger)
+        return suspended_result
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Passthrough schema from delegate runtime."""
