@@ -55,6 +55,10 @@ class UiPathDebugBridgeProtocol(Protocol):
         """Wait for resume command from debugger."""
         ...
 
+    async def wait_for_terminate(self) -> None:
+        """Wait until the user has requested to terminate debugging."""
+        ...
+
     def get_breakpoints(self) -> list[str] | Literal["*"]:
         """Get nodes to suspend execution at.
 

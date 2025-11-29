@@ -251,36 +251,32 @@ class UiPathDebugRuntime:
         while True:
             attempt += 1
 
-            await self.debug_bridge.emit_state_update(
-                UiPathRuntimeStateEvent(
-                    node_name="<polling>",
-                    payload={
-                        "status": "polling",
-                        "attempt": attempt,
-                    },
-                )
-            )
-
             try:
                 resume_data = await reader.read_trigger(trigger)
 
                 if resume_data is not None:
                     return resume_data
 
-                await self._wait_with_quit_check()
-
-            except UiPathDebugQuitError:
-                logger.info("Quit requested during polling")
-                raise
-            except Exception as e:
-                logger.error(f"Error polling trigger: {e}", exc_info=True)
                 await self.debug_bridge.emit_state_update(
                     UiPathRuntimeStateEvent(
                         node_name="<polling>",
                         payload={
-                            "status": "poll_error",
                             "attempt": attempt,
-                            "error": str(e),
+                        },
+                    )
+                )
+
+                await self._wait_with_quit_check()
+
+            except UiPathDebugQuitError:
+                raise
+            except Exception as e:
+                await self.debug_bridge.emit_state_update(
+                    UiPathRuntimeStateEvent(
+                        node_name="<polling>",
+                        payload={
+                            "attempt": attempt,
+                            "info": str(e),
                         },
                     )
                 )
@@ -294,10 +290,11 @@ class UiPathDebugRuntime:
             UiPathDebugQuitError: If quit is requested during wait
         """
         sleep_task = asyncio.create_task(asyncio.sleep(self.trigger_poll_interval))
-        resume_task = asyncio.create_task(self.debug_bridge.wait_for_resume())
+        term_task = asyncio.create_task(self.debug_bridge.wait_for_terminate())
 
         done, pending = await asyncio.wait(
-            {sleep_task, resume_task}, return_when=asyncio.FIRST_COMPLETED
+            {sleep_task, term_task},
+            return_when=asyncio.FIRST_COMPLETED,
         )
 
         for task in pending:
@@ -305,14 +302,7 @@ class UiPathDebugRuntime:
             try:
                 await task
             except asyncio.CancelledError:
-                # Expected when cancelling pending tasks; safe to ignore.
                 pass
 
-        # Check if quit was triggered
-        if resume_task in done:
-            try:
-                await (
-                    resume_task
-                )  # This will raise UiPathDebugQuitError if it was a quit
-            except UiPathDebugQuitError:
-                raise
+        if term_task in done:
+            raise UiPathDebugQuitError("Debugging terminated during polling.")
