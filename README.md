@@ -26,7 +26,7 @@ uv add uipath-runtime
 
 ## Developer Tools
 
-For testing and debugging your runtimes, check out [`uipath-dev`](https://github.com/uipath/uipath-dev-python) - an interactive terminal application for building, testing, and debugging UiPath Python runtimes, agents, and automation scripts.
+Check out [`uipath-dev`](https://github.com/uipath/uipath-dev-python) - an interactive terminal application for building, testing, and debugging UiPath Python runtimes, agents, and automation scripts.
 
 ## Runtime Protocols
 

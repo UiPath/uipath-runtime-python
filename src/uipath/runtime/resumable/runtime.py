@@ -8,6 +8,7 @@ from uipath.runtime.base import (
     UiPathRuntimeProtocol,
     UiPathStreamOptions,
 )
+from uipath.runtime.debug import UiPathBreakpointResult
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 from uipath.runtime.resumable.protocols import (
@@ -134,6 +135,9 @@ class UiPathResumableRuntime:
         """
         # Only handle suspensions
         if result.status != UiPathRuntimeStatus.SUSPENDED:
+            return result
+
+        if isinstance(result, UiPathBreakpointResult):
             return result
 
         # Check if trigger already exists in result
