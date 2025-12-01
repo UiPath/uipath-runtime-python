@@ -159,6 +159,9 @@ class UiPathDebugRuntime:
 
                             # Tell inner runtime we're resuming
                             debug_options.resume = True
+                            current_input = (
+                                None  # Resume with no new input (very important)
+                            )
 
                         except UiPathDebugQuitError:
                             final_result = UiPathRuntimeResult(
