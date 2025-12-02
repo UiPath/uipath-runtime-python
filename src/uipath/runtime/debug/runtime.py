@@ -4,6 +4,8 @@ import asyncio
 import logging
 from typing import Any, AsyncGenerator, cast
 
+from uipath.core.errors import UiPathPendingTriggerError
+
 from uipath.runtime.base import (
     UiPathExecuteOptions,
     UiPathRuntimeProtocol,
@@ -273,7 +275,8 @@ class UiPathDebugRuntime:
 
             except UiPathDebugQuitError:
                 raise
-            except Exception as e:
+
+            except UiPathPendingTriggerError as e:
                 await self.debug_bridge.emit_state_update(
                     UiPathRuntimeStateEvent(
                         node_name="<polling>",

@@ -67,7 +67,6 @@ class UiPathResumableRuntime:
 
         # Execute the delegate
         result = await self.delegate.execute(input, options=options)
-
         # If suspended, create and persist trigger
         return await self._handle_suspension(result)
 
