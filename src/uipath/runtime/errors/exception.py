@@ -4,6 +4,8 @@ import sys
 import traceback
 from typing import Any
 
+from uipath.core.errors import UiPathFaultedTriggerError
+
 from uipath.runtime.errors.codes import UiPathErrorCode
 from uipath.runtime.errors.contract import UiPathErrorCategory, UiPathErrorContract
 
@@ -98,4 +100,16 @@ class UiPathRuntimeError(UiPathBaseRuntimeError):
             status=status,
             prefix=prefix,
             include_traceback=include_traceback,
+        )
+
+    @classmethod
+    def from_resume_trigger_error(
+        cls, exc: UiPathFaultedTriggerError
+    ) -> "UiPathRuntimeError":
+        """Create UiPathRuntimeError from UiPathFaultedTriggerError."""
+        return cls(
+            code=UiPathErrorCode.RESUME_TRIGGER_ERROR,
+            title="Resume trigger error",
+            detail=exc.message,
+            category=UiPathErrorCategory(exc.category),
         )

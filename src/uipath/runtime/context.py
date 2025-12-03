@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+from uipath.core.errors import UiPathFaultedTriggerError
 from uipath.core.tracing import UiPathTraceManager
 
 from uipath.runtime.errors import (
@@ -167,16 +168,21 @@ class UiPathRuntimeContext(BaseModel):
 
             if exc_type:
                 # Create error info from exception
-                if isinstance(exc_val, UiPathRuntimeError):
-                    error_info = exc_val.error_info
-                else:
-                    # Generic error
-                    error_info = UiPathErrorContract(
-                        code=f"ERROR_{exc_type.__name__}",
-                        title=f"Runtime error: {exc_type.__name__}",
-                        detail=str(exc_val),
-                        category=UiPathErrorCategory.UNKNOWN,
-                    )
+                match exc_type:
+                    case UiPathFaultedTriggerError():
+                        error_info = UiPathRuntimeError.from_resume_trigger_error(
+                            exc_type
+                        ).error_info
+                    case UiPathRuntimeError():
+                        error_info = exc_val.error_info
+                    case _:
+                        # Generic error
+                        error_info = UiPathErrorContract(
+                            code=f"ERROR_{exc_type.__name__}",
+                            title=f"Runtime error: {exc_type.__name__}",
+                            detail=str(exc_val),
+                            category=UiPathErrorCategory.UNKNOWN,
+                        )
 
                 self.result.status = UiPathRuntimeStatus.FAULTED
                 self.result.error = error_info
