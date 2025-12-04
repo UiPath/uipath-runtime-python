@@ -111,7 +111,7 @@ class UiPathResumableRuntime:
             Input to use for resume, either provided or from storage
         """
         # If user provided explicit input, use it
-        if input:
+        if input is not None:
             return input
 
         # Otherwise, fetch from storage
@@ -146,6 +146,7 @@ class UiPathResumableRuntime:
 
         suspended_result = UiPathRuntimeResult(
             status=UiPathRuntimeStatus.SUSPENDED,
+            output=result.output,
         )
 
         if result.output:
