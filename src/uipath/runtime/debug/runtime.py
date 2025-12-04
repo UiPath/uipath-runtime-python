@@ -27,7 +27,10 @@ from uipath.runtime.result import (
 )
 from uipath.runtime.resumable.protocols import UiPathResumeTriggerReaderProtocol
 from uipath.runtime.resumable.runtime import UiPathResumableRuntime
-from uipath.runtime.resumable.trigger import UiPathResumeTrigger
+from uipath.runtime.resumable.trigger import (
+    UiPathResumeTrigger,
+    UiPathResumeTriggerType,
+)
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)
@@ -181,20 +184,24 @@ class UiPathDebugRuntime:
                             and final_result.status == UiPathRuntimeStatus.SUSPENDED
                             and final_result.trigger
                         ):
-                            state_event = UiPathRuntimeStateEvent(
-                                node_name="<suspended>",
-                                payload={
-                                    "status": "suspended",
-                                    "trigger": final_result.trigger.model_dump(),
-                                },
+                            await self.debug_bridge.emit_execution_suspended(
+                                final_result
                             )
-                            await self.debug_bridge.emit_state_update(state_event)
 
                             resume_data: dict[str, Any] | None = None
                             try:
-                                resume_data = await self._poll_trigger(
-                                    final_result.trigger, self.delegate.trigger_manager
-                                )
+                                if (
+                                    final_result.trigger.trigger_type
+                                    == UiPathResumeTriggerType.API
+                                ):
+                                    resume_data = (
+                                        await self.debug_bridge.wait_for_resume()
+                                    )
+                                else:
+                                    resume_data = await self._poll_trigger(
+                                        final_result.trigger,
+                                        self.delegate.trigger_manager,
+                                    )
                             except UiPathDebugQuitError:
                                 final_result = UiPathRuntimeResult(
                                     status=UiPathRuntimeStatus.SUCCESSFUL,
@@ -203,14 +210,9 @@ class UiPathDebugRuntime:
                                 execution_completed = True
 
                             if resume_data is not None:
-                                resumed_event = UiPathRuntimeStateEvent(
-                                    node_name="<resumed>",
-                                    payload={
-                                        "status": "resumed",
-                                        "data": resume_data,
-                                    },
+                                await self.debug_bridge.emit_execution_resumed(
+                                    resume_data
                                 )
-                                await self.debug_bridge.emit_state_update(resumed_event)
 
                                 # Continue with resumed execution
                                 current_input = resume_data

@@ -37,6 +37,16 @@ class UiPathDebugBridgeProtocol(Protocol):
         """Notify debugger that a breakpoint was hit."""
         ...
 
+    async def emit_execution_suspended(
+        self, runtime_result: UiPathRuntimeResult
+    ) -> None:
+        """Notify debugger that the execution has been suspended."""
+        ...
+
+    async def emit_execution_resumed(self, resume_data: Any) -> None:
+        """Notify debugger that the execution has resumed."""
+        ...
+
     async def emit_execution_completed(
         self,
         runtime_result: UiPathRuntimeResult,
