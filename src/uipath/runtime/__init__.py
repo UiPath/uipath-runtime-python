@@ -7,6 +7,8 @@ from uipath.runtime.base import (
     UiPathStreamNotSupportedError,
     UiPathStreamOptions,
 )
+from uipath.runtime.chat.protocol import UiPathChatProtocol
+from uipath.runtime.chat.runtime import UiPathChatRuntime
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
 from uipath.runtime.debug.bridge import UiPathDebugBridgeProtocol
@@ -66,4 +68,6 @@ __all__ = [
     "UiPathBreakpointResult",
     "UiPathStreamNotSupportedError",
     "UiPathResumeTriggerName",
+    "UiPathChatProtocol",
+    "UiPathChatRuntime",
 ]
