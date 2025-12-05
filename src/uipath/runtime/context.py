@@ -49,7 +49,7 @@ class UiPathRuntimeContext(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
-    def get_input(self) -> dict[str, Any]:
+    def get_input(self) -> dict[str, Any] | None:
         """Get parsed input data.
 
         Priority:
@@ -107,10 +107,10 @@ class UiPathRuntimeContext(BaseModel):
                 category=UiPathErrorCategory.SYSTEM,
             ) from e
 
-    def _parse_input_string(self, input_str: str | None) -> dict[str, Any]:
+    def _parse_input_string(self, input_str: str | None) -> dict[str, Any] | None:
         """Parse input from JSON string."""
         if not input_str or input_str.strip() == "":
-            return {}
+            return None
 
         try:
             parsed = json.loads(input_str)

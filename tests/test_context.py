@@ -146,3 +146,30 @@ def test_result_file_written_on_fault_contains_error_contract(tmp_path: Path) ->
     assert error["code"] == "ERROR_RuntimeError"
     assert error["title"] == "Runtime error: RuntimeError"
     assert "Stream blew up" in error["detail"]
+
+
+def test_parse_input_string_returns_none_for_empty_string() -> None:
+    """Test that empty input string returns None, not empty dict."""
+    ctx = UiPathRuntimeContext(input="")
+
+    result = ctx.get_input()
+
+    assert result is None
+
+
+def test_parse_input_string_returns_none_for_whitespace_only() -> None:
+    """Test that whitespace-only input string returns None, not empty dict."""
+    ctx = UiPathRuntimeContext(input="   ")
+
+    result = ctx.get_input()
+
+    assert result is None
+
+
+def test_parse_input_string_returns_none_for_none() -> None:
+    """Test that None input returns None."""
+    ctx = UiPathRuntimeContext(input=None)
+
+    result = ctx.get_input()
+
+    assert result is None
