@@ -111,7 +111,7 @@ class UiPathResumableRuntime:
             Input to use for resume, either provided or from storage
         """
         # If user provided explicit input, use it
-        if input is not None:
+        if input is not None and bool(input):
             return input
 
         # Otherwise, fetch from storage
