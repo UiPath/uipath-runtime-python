@@ -1,5 +1,6 @@
 """Main logging interceptor for execution context."""
 
+import io
 import logging
 import os
 import sys
@@ -41,6 +42,7 @@ class UiPathRuntimeLogsInterceptor:
         min_level = min_level or "INFO"
         self.job_id = job_id
         self.execution_id = execution_id
+        self._owns_handler: bool = log_handler is None
 
         # Convert to numeric level for consistent comparison
         self.numeric_min_level = getattr(logging, min_level.upper(), logging.INFO)
@@ -67,8 +69,24 @@ class UiPathRuntimeLogsInterceptor:
         else:
             # Create either file handler (runtime) or stdout handler (debug)
             if not job_id:
-                # Use stdout handler when not running as a job or eval
-                self.log_handler = logging.StreamHandler(sys.stdout)
+                # Only wrap if stdout is using a problematic encoding (like cp1252 on Windows)
+                if (
+                    hasattr(sys.stdout, "encoding")
+                    and sys.stdout.encoding
+                    and "utf" not in sys.stdout.encoding.lower()
+                ):
+                    # Wrap stdout with UTF-8 encoding for the handler
+                    utf8_stdout = io.TextIOWrapper(
+                        sys.stdout.buffer,
+                        encoding="utf-8",
+                        errors="replace",
+                        line_buffering=True,
+                    )
+                    self.log_handler = logging.StreamHandler(utf8_stdout)
+                else:
+                    # stdout already has good encoding, use it directly
+                    self.log_handler = logging.StreamHandler(sys.stdout)
+
                 formatter = logging.Formatter("%(message)s")
                 self.log_handler.setFormatter(formatter)
             else:
@@ -214,7 +232,8 @@ class UiPathRuntimeLogsInterceptor:
                 if handler not in self.root_logger.handlers:
                     self.root_logger.addHandler(handler)
 
-        self.log_handler.close()
+        if self._owns_handler:
+            self.log_handler.close()
 
         # Only restore streams if we redirected them
         if self.original_stdout and self.original_stderr:
