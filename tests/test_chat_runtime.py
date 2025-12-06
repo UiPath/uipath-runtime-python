@@ -110,6 +110,8 @@ async def test_chat_runtime_streams_and_emits_messages():
 
     result = await chat_runtime.execute({})
 
+    await chat_runtime.dispose()
+
     # Result propagation
     assert isinstance(result, UiPathRuntimeResult)
     assert result.status == UiPathRuntimeStatus.SUCCESSFUL
@@ -148,6 +150,8 @@ async def test_chat_runtime_stream_yields_all_events():
     events = []
     async for event in chat_runtime.stream({}):
         events.append(event)
+
+    await chat_runtime.dispose()
 
     # Should have 2 message events + 1 final result
     assert len(events) == 3

@@ -72,8 +72,6 @@ class UiPathChatRuntime:
 
             yield event
 
-        await self.chat_bridge.disconnect()
-
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Get schema from the delegate runtime."""
         return await self.delegate.get_schema()

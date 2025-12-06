@@ -31,6 +31,9 @@ class UiPathRuntimeContext(BaseModel):
     resume: bool = False
     command: str | None = None
     job_id: str | None = None
+    conversation_id: str | None = None
+    exchange_id: str | None = None
+    message_id: str | None = None
     tenant_id: str | None = None
     org_id: str | None = None
     folder_key: str | None = None
@@ -298,7 +301,7 @@ class UiPathRuntimeContext(BaseModel):
     ) -> "UiPathRuntimeContext":
         """Load configuration from uipath.json file."""
         path = config_path or "uipath.json"
-        config = {}
+        config: dict[str, Any] = {}
 
         if os.path.exists(path):
             with open(path, "r") as f:
@@ -313,13 +316,29 @@ class UiPathRuntimeContext(BaseModel):
             "logsFile": "logs_file",
         }
 
+        fps_mappings = {
+            "conversationId": "conversation_id",
+            "exchangeId": "exchange_id",
+            "messageId": "message_id",
+        }
+
         attributes_set = set()
-        if "runtime" in config:
-            runtime_config = config["runtime"]
+
+        runtime_config = config.get("runtime", {})
+        fps_config = config.get("fpsProperties", {})
+
+        if runtime_config or fps_config:
+            # Handle runtime mapping
             for config_key, attr_name in mapping.items():
                 if config_key in runtime_config and hasattr(instance, attr_name):
                     attributes_set.add(attr_name)
                     setattr(instance, attr_name, runtime_config[config_key])
+
+            # Handle fpsProperties mapping
+            for config_key, attr_name in fps_mappings.items():
+                if config_key in fps_config and hasattr(instance, attr_name):
+                    attributes_set.add(attr_name)
+                    setattr(instance, attr_name, fps_config[config_key])
 
         for _, attr_name in mapping.items():
             if attr_name in kwargs and hasattr(instance, attr_name):
