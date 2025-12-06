@@ -173,3 +173,56 @@ def test_parse_input_string_returns_none_for_none() -> None:
     result = ctx.get_input()
 
     assert result is None
+
+
+def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> None:
+    """fpsProperties should be loaded even if 'runtime' block is missing."""
+    cfg = {
+        "fpsProperties": {
+            "conversationId": "conv-123",
+            "exchangeId": "ex-456",
+            "messageId": "msg-789",
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.conversation_id == "conv-123"
+    assert ctx.exchange_id == "ex-456"
+    assert ctx.message_id == "msg-789"
+
+
+def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
+    """runtime.* keys and fpsProperties.* keys should both be applied."""
+    cfg = {
+        "runtime": {
+            "dir": "my_runtime",
+            "outputFile": "my_output.json",
+            "stateFile": "my_state.db",
+            "logsFile": "my_logs.log",
+        },
+        "fpsProperties": {
+            "conversationId": "conv-abc",
+            "exchangeId": "ex-def",
+            "messageId": "msg-ghi",
+        },
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    # runtime mapping
+    assert ctx.runtime_dir == "my_runtime"
+    assert (
+        ctx.result_file == "my_output.json"
+    )  # outputFile maps to result_file (serverless contract)
+    assert ctx.state_file == "my_state.db"
+    assert ctx.logs_file == "my_logs.log"
+
+    # fpsProperties mapping
+    assert ctx.conversation_id == "conv-abc"
+    assert ctx.exchange_id == "ex-def"
+    assert ctx.message_id == "msg-ghi"
