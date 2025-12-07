@@ -54,7 +54,7 @@ class UiPathChatRuntime:
         return (
             result
             if result
-            else UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+            else UiPathRuntimeResult(status=UiPathRuntimeStatus.SUSPENDED)
         )
 
     async def stream(
@@ -66,11 +66,21 @@ class UiPathChatRuntime:
         await self.chat_bridge.connect()
 
         async for event in self.delegate.stream(input, options=options):
-            if isinstance(event, UiPathRuntimeMessageEvent):
+            if isinstance(event, UiPathRuntimeResult):
+                # In chat mode, convert successful completion to SUSPENDED
+                # Breakpoints and resumable triggers are already suspended
+                # Faulted jobs remain faulted
+                if event.status == UiPathRuntimeStatus.SUCCESSFUL:
+                    yield UiPathRuntimeResult(
+                        status=UiPathRuntimeStatus.SUSPENDED,
+                        output=event.output,
+                    )
+                else:
+                    yield event
+            elif isinstance(event, UiPathRuntimeMessageEvent):
                 if event.payload:
                     await self.chat_bridge.emit_message_event(event.payload)
-
-            yield event
+                yield event
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Get schema from the delegate runtime."""
