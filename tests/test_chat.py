@@ -114,7 +114,7 @@ async def test_chat_runtime_streams_and_emits_messages():
 
     # Result propagation
     assert isinstance(result, UiPathRuntimeResult)
-    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert result.status == UiPathRuntimeStatus.SUSPENDED
     assert result.output == {"messages": ["Hello", "How are you?", "Goodbye"]}
 
     # Bridge lifecycle
@@ -158,6 +158,7 @@ async def test_chat_runtime_stream_yields_all_events():
     assert isinstance(events[0], UiPathRuntimeMessageEvent)
     assert isinstance(events[1], UiPathRuntimeMessageEvent)
     assert isinstance(events[2], UiPathRuntimeResult)
+    assert events[2].status == UiPathRuntimeStatus.SUSPENDED
 
     # Bridge methods called
     cast(AsyncMock, bridge.connect).assert_awaited_once()

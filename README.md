@@ -1,7 +1,7 @@
 # UiPath Runtime
 
-[![PyPI downloads](https://img.shields.io/pypi/dm/uipath-runtime.svg)](https://pypi.org/project/uipath-runtime/)
 [![PyPI - Version](https://img.shields.io/pypi/v/uipath-runtime)](https://pypi.org/project/uipath-runtime/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/uipath-runtime.svg)](https://pypi.org/project/uipath-runtime/)
 [![Python versions](https://img.shields.io/pypi/pyversions/uipath-runtime.svg)](https://pypi.org/project/uipath-runtime/)
 
 Runtime abstractions and contracts for the UiPath Python SDK.

@@ -1,5 +1,7 @@
 """Base exception class for UiPath runtime errors with structured error information."""
 
+from __future__ import annotations
+
 import sys
 import traceback
 from typing import Any
@@ -105,7 +107,7 @@ class UiPathRuntimeError(UiPathBaseRuntimeError):
     @classmethod
     def from_resume_trigger_error(
         cls, exc: UiPathFaultedTriggerError
-    ) -> "UiPathRuntimeError":
+    ) -> UiPathRuntimeError:
         """Create UiPathRuntimeError from UiPathFaultedTriggerError."""
         return cls(
             code=UiPathErrorCode.RESUME_TRIGGER_ERROR,
