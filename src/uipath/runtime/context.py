@@ -317,9 +317,9 @@ class UiPathRuntimeContext(BaseModel):
         }
 
         fps_mappings = {
-            "conversationId": "conversation_id",
-            "exchangeId": "exchange_id",
-            "messageId": "message_id",
+            "conversationalService.conversationId": "conversation_id",
+            "conversationalService.exchangeId": "exchange_id",
+            "conversationalService.messageId": "message_id",
         }
 
         attributes_set = set()
