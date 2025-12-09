@@ -179,9 +179,9 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
     """fpsProperties should be loaded even if 'runtime' block is missing."""
     cfg = {
         "fpsProperties": {
-            "conversationId": "conv-123",
-            "exchangeId": "ex-456",
-            "messageId": "msg-789",
+            "conversationalService.conversationId": "conv-123",
+            "conversationalService.exchangeId": "ex-456",
+            "conversationalService.messageId": "msg-789",
         }
     }
     config_path = tmp_path / "uipath.json"
@@ -204,9 +204,9 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
             "logsFile": "my_logs.log",
         },
         "fpsProperties": {
-            "conversationId": "conv-abc",
-            "exchangeId": "ex-def",
-            "messageId": "msg-ghi",
+            "conversationalService.conversationId": "conv-abc",
+            "conversationalService.exchangeId": "ex-def",
+            "conversationalService.messageId": "msg-ghi",
         },
     }
     config_path = tmp_path / "uipath.json"
