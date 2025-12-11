@@ -18,7 +18,7 @@ class UiPathResumeTriggerType(str, Enum):
     API = "Api"
     DEEP_RAG = "DeepRag"
     BATCH_RAG = "BatchRag"
-    IXP = "IXP"
+    IXP_EXTRACTION = "IxpExtraction"
 
 
 class UiPathResumeTriggerName(str, Enum):
@@ -34,7 +34,7 @@ class UiPathResumeTriggerName(str, Enum):
     API = "Api"
     DEEP_RAG = "DeepRag"
     BATCH_RAG = "BatchRag"
-    EXTRACTION = "EXTRACTION"
+    EXTRACTION = "Extraction"
 
 
 class UiPathApiTrigger(BaseModel):
