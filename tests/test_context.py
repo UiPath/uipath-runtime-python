@@ -182,6 +182,8 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
             "conversationalService.conversationId": "conv-123",
             "conversationalService.exchangeId": "ex-456",
             "conversationalService.messageId": "msg-789",
+            "mcpServer.id": "server-id-123",
+            "mcpServer.slug": "my-mcp-server",
         }
     }
     config_path = tmp_path / "uipath.json"
@@ -192,6 +194,8 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
     assert ctx.conversation_id == "conv-123"
     assert ctx.exchange_id == "ex-456"
     assert ctx.message_id == "msg-789"
+    assert ctx.mcp_server_id == "server-id-123"
+    assert ctx.mcp_server_slug == "my-mcp-server"
 
 
 def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
@@ -207,6 +211,8 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
             "conversationalService.conversationId": "conv-abc",
             "conversationalService.exchangeId": "ex-def",
             "conversationalService.messageId": "msg-ghi",
+            "mcpServer.id": "mcp-server-456",
+            "mcpServer.slug": "test-server-slug",
         },
     }
     config_path = tmp_path / "uipath.json"
@@ -226,3 +232,5 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
     assert ctx.conversation_id == "conv-abc"
     assert ctx.exchange_id == "ex-def"
     assert ctx.message_id == "msg-ghi"
+    assert ctx.mcp_server_id == "mcp-server-456"
+    assert ctx.mcp_server_slug == "test-server-slug"
