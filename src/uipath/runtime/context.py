@@ -34,6 +34,8 @@ class UiPathRuntimeContext(BaseModel):
     conversation_id: str | None = None
     exchange_id: str | None = None
     message_id: str | None = None
+    mcp_server_id: str | None = None
+    mcp_server_slug: str | None = None
     tenant_id: str | None = None
     org_id: str | None = None
     folder_key: str | None = None
@@ -320,6 +322,8 @@ class UiPathRuntimeContext(BaseModel):
             "conversationalService.conversationId": "conversation_id",
             "conversationalService.exchangeId": "exchange_id",
             "conversationalService.messageId": "message_id",
+            "mcpServer.id": "mcp_server_id",
+            "mcpServer.slug": "mcp_server_slug",
         }
 
         attributes_set = set()
