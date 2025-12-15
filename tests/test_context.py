@@ -234,3 +234,16 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
     assert ctx.message_id == "msg-ghi"
     assert ctx.mcp_server_id == "mcp-server-456"
     assert ctx.mcp_server_slug == "test-server-slug"
+
+
+def test_string_output_wrapped_in_dict() -> None:
+    """Test that string output is wrapped in a dict with key 'output'."""
+    result = UiPathRuntimeResult(
+        status=UiPathRuntimeStatus.SUCCESSFUL,
+        output="primitive str",
+    )
+
+    result_dict = result.to_dict()
+
+    assert result_dict["output"] == {"output": "primitive str"}
+    assert result_dict["status"] == UiPathRuntimeStatus.SUCCESSFUL

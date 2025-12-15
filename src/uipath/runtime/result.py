@@ -37,6 +37,8 @@ class UiPathRuntimeResult(UiPathRuntimeEvent):
             output_data = {}
         elif isinstance(self.output, BaseModel):
             output_data = self.output.model_dump()
+        elif isinstance(self.output, str):
+            output_data = {"output": self.output}
         else:
             output_data = self.output
 
