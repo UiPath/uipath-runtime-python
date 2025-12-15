@@ -1,8 +1,12 @@
 """Abstract conversation bridge interface."""
 
-from typing import Protocol
+from typing import Any, Protocol
 
-from uipath.core.chat import UiPathConversationMessageEvent
+from uipath.core.chat import (
+    UiPathConversationMessageEvent,
+)
+
+from uipath.runtime.result import UiPathRuntimeResult
 
 
 class UiPathChatProtocol(Protocol):
@@ -27,4 +31,23 @@ class UiPathChatProtocol(Protocol):
         Args:
             message_event: UiPathConversationMessageEvent to wrap and send
         """
+        ...
+
+    async def emit_interrupt_event(
+        self,
+        interrupt_event: UiPathRuntimeResult,
+    ) -> None:
+        """Wrap and send an interrupt event.
+
+        Args:
+            interrupt_event: UiPathConversationInterruptEvent to wrap and send
+        """
+        ...
+
+    async def emit_exchange_end_event(self) -> None:
+        """Send an exchange end event."""
+        ...
+
+    async def wait_for_resume(self) -> dict[str, Any]:
+        """Wait for the interrupt_end event to be received."""
         ...

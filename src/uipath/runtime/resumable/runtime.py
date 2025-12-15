@@ -8,7 +8,7 @@ from uipath.runtime.base import (
     UiPathRuntimeProtocol,
     UiPathStreamOptions,
 )
-from uipath.runtime.debug import UiPathBreakpointResult
+from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 from uipath.runtime.resumable.protocols import (

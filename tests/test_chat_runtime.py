@@ -13,6 +13,8 @@ from uipath.core.chat import (
 
 from uipath.runtime import (
     UiPathExecuteOptions,
+    UiPathResumeTrigger,
+    UiPathResumeTriggerType,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
     UiPathStreamOptions,
@@ -32,6 +34,8 @@ def make_chat_bridge_mock() -> UiPathChatProtocol:
     bridge_mock.connect = AsyncMock()
     bridge_mock.disconnect = AsyncMock()
     bridge_mock.emit_message_event = AsyncMock()
+    bridge_mock.emit_interrupt_event = AsyncMock()
+    bridge_mock.wait_for_resume = AsyncMock()
 
     return cast(UiPathChatProtocol, bridge_mock)
 
@@ -88,6 +92,79 @@ class StreamingMockRuntime:
         yield UiPathRuntimeResult(
             status=UiPathRuntimeStatus.SUCCESSFUL,
             output={"messages": self.messages},
+        )
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        raise NotImplementedError()
+
+
+class SuspendingMockRuntime:
+    """Mock runtime that can suspend with API triggers."""
+
+    def __init__(
+        self,
+        suspend_at_message: int | None = None,
+    ) -> None:
+        self.suspend_at_message = suspend_at_message
+
+    async def dispose(self) -> None:
+        pass
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        """Fallback execute path."""
+        return UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUCCESSFUL,
+            output={"mode": "execute"},
+        )
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        """Stream events with potential API trigger suspension."""
+        is_resume = options and options.resume
+
+        if not is_resume:
+            # Initial execution - yield message and then suspend
+            message_event = UiPathConversationMessageEvent(
+                message_id="msg-0",
+                start=UiPathConversationMessageStartEvent(
+                    role="assistant",
+                    timestamp="2025-01-01T00:00:00.000Z",
+                ),
+            )
+            yield UiPathRuntimeMessageEvent(payload=message_event)
+
+            if self.suspend_at_message is not None:
+                # Suspend with API trigger
+                yield UiPathRuntimeResult(
+                    status=UiPathRuntimeStatus.SUSPENDED,
+                    trigger=UiPathResumeTrigger(
+                        trigger_type=UiPathResumeTriggerType.API,
+                        payload={"action": "confirm_tool_call"},
+                    ),
+                )
+                return
+        else:
+            # Resumed execution - yield another message and complete
+            message_event = UiPathConversationMessageEvent(
+                message_id="msg-1",
+                start=UiPathConversationMessageStartEvent(
+                    role="assistant",
+                    timestamp="2025-01-01T00:00:01.000Z",
+                ),
+            )
+            yield UiPathRuntimeMessageEvent(payload=message_event)
+
+        # Final successful result
+        yield UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUCCESSFUL,
+            output={"resumed": is_resume, "input": input},
         )
 
     async def get_schema(self) -> UiPathRuntimeSchema:
@@ -221,3 +298,73 @@ async def test_chat_runtime_dispose_suppresses_disconnect_errors():
     await chat_runtime.dispose()
 
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_handles_api_trigger_suspension():
+    """UiPathChatRuntime should intercept suspensions and resume execution."""
+
+    runtime_impl = SuspendingMockRuntime(suspend_at_message=0)
+    bridge = make_chat_bridge_mock()
+
+    cast(AsyncMock, bridge.wait_for_resume).return_value = {"approved": True}
+
+    chat_runtime = UiPathChatRuntime(
+        delegate=runtime_impl,
+        chat_bridge=bridge,
+    )
+
+    result = await chat_runtime.execute({})
+
+    await chat_runtime.dispose()
+
+    # Result should be SUCCESSFUL
+    assert isinstance(result, UiPathRuntimeResult)
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert result.output == {"resumed": True, "input": {"approved": True}}
+
+    cast(AsyncMock, bridge.connect).assert_awaited_once()
+    cast(AsyncMock, bridge.disconnect).assert_awaited_once()
+
+    cast(AsyncMock, bridge.emit_interrupt_event).assert_awaited_once()
+    cast(AsyncMock, bridge.wait_for_resume).assert_awaited_once()
+
+    # Message events emitted (one before suspend, one after resume)
+    assert cast(AsyncMock, bridge.emit_message_event).await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_yields_events_during_suspension_flow():
+    """UiPathChatRuntime.stream() should not yield SUSPENDED result, only final result."""
+
+    runtime_impl = SuspendingMockRuntime(suspend_at_message=0)
+    bridge = make_chat_bridge_mock()
+
+    # wait_for_resume returns approval data
+    cast(AsyncMock, bridge.wait_for_resume).return_value = {"approved": True}
+
+    chat_runtime = UiPathChatRuntime(
+        delegate=runtime_impl,
+        chat_bridge=bridge,
+    )
+
+    events = []
+    async for event in chat_runtime.stream({}):
+        events.append(event)
+
+    await chat_runtime.dispose()
+
+    # Should have 2 message events + 1 final SUCCESSFUL result
+    # SUSPENDED result should NOT be yielded
+    assert len(events) == 3
+    assert isinstance(events[0], UiPathRuntimeMessageEvent)
+    assert events[0].payload.message_id == "msg-0"
+    assert isinstance(events[1], UiPathRuntimeMessageEvent)
+    assert events[1].payload.message_id == "msg-1"
+    assert isinstance(events[2], UiPathRuntimeResult)
+    assert events[2].status == UiPathRuntimeStatus.SUCCESSFUL
+
+    # Verify no SUSPENDED result was yielded
+    for event in events:
+        if isinstance(event, UiPathRuntimeResult):
+            assert event.status != UiPathRuntimeStatus.SUSPENDED

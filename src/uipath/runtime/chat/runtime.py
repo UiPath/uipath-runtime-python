@@ -17,6 +17,7 @@ from uipath.runtime.result import (
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
 )
+from uipath.runtime.resumable.trigger import UiPathResumeTriggerType
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)
@@ -65,12 +66,44 @@ class UiPathChatRuntime:
         """Stream execution events with chat support."""
         await self.chat_bridge.connect()
 
-        async for event in self.delegate.stream(input, options=options):
-            if isinstance(event, UiPathRuntimeMessageEvent):
-                if event.payload:
-                    await self.chat_bridge.emit_message_event(event.payload)
+        execution_completed = False
+        current_input = input
+        current_options = UiPathStreamOptions(
+            resume=options.resume if options else False,
+            breakpoints=options.breakpoints if options else None,
+        )
 
-            yield event
+        while not execution_completed:
+            async for event in self.delegate.stream(
+                current_input, options=current_options
+            ):
+                if isinstance(event, UiPathRuntimeMessageEvent):
+                    if event.payload:
+                        await self.chat_bridge.emit_message_event(event.payload)
+
+                if isinstance(event, UiPathRuntimeResult):
+                    runtime_result = event
+
+                    if (
+                        runtime_result.status == UiPathRuntimeStatus.SUSPENDED
+                        and runtime_result.trigger
+                        and runtime_result.trigger.trigger_type
+                        == UiPathResumeTriggerType.API
+                    ):
+                        await self.chat_bridge.emit_interrupt_event(runtime_result)
+                        resume_data = await self.chat_bridge.wait_for_resume()
+
+                        # Continue with resumed execution
+                        current_input = resume_data
+                        current_options.resume = True
+                        break
+                    else:
+                        yield event
+                        execution_completed = True
+                else:
+                    yield event
+
+        await self.chat_bridge.emit_exchange_end_event()
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Get schema from the delegate runtime."""
