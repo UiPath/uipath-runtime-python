@@ -14,7 +14,7 @@ from uipath.runtime.base import (
 )
 from uipath.runtime.debug import (
     UiPathBreakpointResult,
-    UiPathDebugBridgeProtocol,
+    UiPathDebugProtocol,
     UiPathDebugQuitError,
 )
 from uipath.runtime.events import (
@@ -42,7 +42,7 @@ class UiPathDebugRuntime:
     def __init__(
         self,
         delegate: UiPathRuntimeProtocol,
-        debug_bridge: UiPathDebugBridgeProtocol,
+        debug_bridge: UiPathDebugProtocol,
         trigger_poll_interval: float = 5.0,
     ):
         """Initialize the UiPathDebugRuntime.
@@ -54,7 +54,7 @@ class UiPathDebugRuntime:
         """
         super().__init__()
         self.delegate = delegate
-        self.debug_bridge: UiPathDebugBridgeProtocol = debug_bridge
+        self.debug_bridge: UiPathDebugProtocol = debug_bridge
         if trigger_poll_interval < 0:
             raise ValueError("trigger_poll_interval must be >= 0")
         self.trigger_poll_interval = trigger_poll_interval

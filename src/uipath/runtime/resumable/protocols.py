@@ -8,7 +8,7 @@ from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 class UiPathResumableStorageProtocol(Protocol):
     """Protocol for storing and retrieving resume triggers."""
 
-    async def save_trigger(self, trigger: UiPathResumeTrigger) -> None:
+    async def save_trigger(self, runtime_id: str, trigger: UiPathResumeTrigger) -> None:
         """Save a resume trigger to storage.
 
         Args:
@@ -19,7 +19,7 @@ class UiPathResumableStorageProtocol(Protocol):
         """
         ...
 
-    async def get_latest_trigger(self) -> UiPathResumeTrigger | None:
+    async def get_latest_trigger(self, runtime_id: str) -> UiPathResumeTrigger | None:
         """Retrieve the most recent resume trigger from storage.
 
         Returns:

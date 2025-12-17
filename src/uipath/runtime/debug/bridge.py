@@ -9,7 +9,7 @@ from uipath.runtime.result import (
 )
 
 
-class UiPathDebugBridgeProtocol(Protocol):
+class UiPathDebugProtocol(Protocol):
     """Abstract interface for debug communication.
 
     Implementations: SignalR, Console, WebSocket, etc.
