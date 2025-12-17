@@ -35,7 +35,7 @@ class UiPathResumableRuntime:
         delegate: UiPathRuntimeProtocol,
         storage: UiPathResumableStorageProtocol,
         trigger_manager: UiPathResumeTriggerProtocol,
-        runtime_id: str
+        runtime_id: str,
     ):
         """Initialize the resumable runtime wrapper.
 
