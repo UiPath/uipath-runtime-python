@@ -8,7 +8,7 @@ from uipath.runtime.base import (
     UiPathRuntimeProtocol,
     UiPathStreamOptions,
 )
-from uipath.runtime.debug import UiPathBreakpointResult
+from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 from uipath.runtime.resumable.protocols import (
@@ -35,6 +35,7 @@ class UiPathResumableRuntime:
         delegate: UiPathRuntimeProtocol,
         storage: UiPathResumableStorageProtocol,
         trigger_manager: UiPathResumeTriggerProtocol,
+        runtime_id: str,
     ):
         """Initialize the resumable runtime wrapper.
 
@@ -42,10 +43,12 @@ class UiPathResumableRuntime:
             delegate: The underlying runtime to wrap
             storage: Storage for persisting/retrieving resume triggers
             trigger_manager: Manager for creating and reading resume triggers
+            runtime_id: Id used for runtime orchestration
         """
         self.delegate = delegate
         self.storage = storage
         self.trigger_manager = trigger_manager
+        self.runtime_id = runtime_id
 
     async def execute(
         self,
@@ -115,7 +118,7 @@ class UiPathResumableRuntime:
             return input
 
         # Otherwise, fetch from storage
-        trigger = await self.storage.get_latest_trigger()
+        trigger = await self.storage.get_latest_trigger(self.runtime_id)
         if not trigger:
             return None
 
@@ -141,7 +144,7 @@ class UiPathResumableRuntime:
 
         # Check if trigger already exists in result
         if result.trigger:
-            await self.storage.save_trigger(result.trigger)
+            await self.storage.save_trigger(self.runtime_id, result.trigger)
             return result
 
         suspended_result = UiPathRuntimeResult(
@@ -154,7 +157,7 @@ class UiPathResumableRuntime:
                 result.output
             )
 
-            await self.storage.save_trigger(suspended_result.trigger)
+            await self.storage.save_trigger(self.runtime_id, suspended_result.trigger)
 
         return suspended_result
 

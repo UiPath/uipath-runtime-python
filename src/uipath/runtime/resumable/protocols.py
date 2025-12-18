@@ -8,7 +8,7 @@ from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 class UiPathResumableStorageProtocol(Protocol):
     """Protocol for storing and retrieving resume triggers."""
 
-    async def save_trigger(self, trigger: UiPathResumeTrigger) -> None:
+    async def save_trigger(self, runtime_id: str, trigger: UiPathResumeTrigger) -> None:
         """Save a resume trigger to storage.
 
         Args:
@@ -19,11 +19,43 @@ class UiPathResumableStorageProtocol(Protocol):
         """
         ...
 
-    async def get_latest_trigger(self) -> UiPathResumeTrigger | None:
+    async def get_latest_trigger(self, runtime_id: str) -> UiPathResumeTrigger | None:
         """Retrieve the most recent resume trigger from storage.
 
         Returns:
             The latest resume trigger, or None if no triggers exist
+
+        Raises:
+            Exception: If retrieval operation fails
+        """
+        ...
+
+    async def set_value(
+        self, runtime_id: str, namespace: str, key: str, value: Any
+    ) -> None:
+        """Store values for a specific runtime.
+
+        Args:
+            runtime_id: The runtime ID
+            namespace: The namespace of the persisted value
+            key: The key associated with the persisted value
+            value: The value to persist
+
+        Raises:
+            Exception: If storage operation fails
+        """
+        ...
+
+    async def get_value(self, runtime_id: str, namespace: str, key: str) -> Any:
+        """Retrieve values for a specific runtime from storage.
+
+        Args:
+            runtime_id: The runtime ID
+            namespace: The namespace of the persisted value
+            key: The key associated with the persisted value
+
+        Returns:
+            The value matching the method's parameters, or None if it does not exist
 
         Raises:
             Exception: If retrieval operation fails

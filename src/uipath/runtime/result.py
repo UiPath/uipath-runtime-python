@@ -24,6 +24,7 @@ class UiPathRuntimeResult(UiPathRuntimeEvent):
     output: dict[str, Any] | BaseModel | str | None = None
     status: UiPathRuntimeStatus = UiPathRuntimeStatus.SUCCESSFUL
     trigger: UiPathResumeTrigger | None = None
+    triggers: list[UiPathResumeTrigger] | None = None
     error: UiPathErrorContract | None = None
 
     event_type: UiPathRuntimeEventType = Field(
@@ -42,13 +43,19 @@ class UiPathRuntimeResult(UiPathRuntimeEvent):
         else:
             output_data = self.output
 
-        result = {
+        result: dict[str, Any] = {
             "output": output_data,
             "status": self.status,
         }
 
         if self.trigger:
             result["resume"] = self.trigger.model_dump(by_alias=True)
+
+        if self.triggers:
+            result["resumeTriggers"] = [
+                resume_trigger.model_dump(by_alias=True)
+                for resume_trigger in self.triggers
+            ]
 
         if self.error:
             result["error"] = self.error.model_dump()
