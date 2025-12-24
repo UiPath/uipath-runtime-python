@@ -145,6 +145,7 @@ class SuspendingMockRuntime:
                 yield UiPathRuntimeResult(
                     status=UiPathRuntimeStatus.SUSPENDED,
                     trigger=UiPathResumeTrigger(
+                        interrupt_id="interrupt-1",
                         trigger_type=UiPathResumeTriggerType.API,
                         payload={"action": "confirm_tool_call"},
                     ),

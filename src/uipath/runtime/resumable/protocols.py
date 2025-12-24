@@ -8,25 +8,41 @@ from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 class UiPathResumableStorageProtocol(Protocol):
     """Protocol for storing and retrieving resume triggers."""
 
-    async def save_trigger(self, runtime_id: str, trigger: UiPathResumeTrigger) -> None:
-        """Save a resume trigger to storage.
+    async def save_triggers(
+        self, runtime_id: str, triggers: list[UiPathResumeTrigger]
+    ) -> None:
+        """Save resume triggers to storage.
 
         Args:
-            trigger: The resume trigger to persist
+            triggers: The resume triggers to persist
 
         Raises:
             Exception: If storage operation fails
         """
         ...
 
-    async def get_latest_trigger(self, runtime_id: str) -> UiPathResumeTrigger | None:
-        """Retrieve the most recent resume trigger from storage.
+    async def get_triggers(self, runtime_id: str) -> list[UiPathResumeTrigger] | None:
+        """Retrieve the resume triggers from storage.
 
         Returns:
-            The latest resume trigger, or None if no triggers exist
+            The resume triggers, or None if no triggers exist
 
         Raises:
             Exception: If retrieval operation fails
+        """
+        ...
+
+    async def delete_trigger(
+        self, runtime_id: str, trigger: UiPathResumeTrigger
+    ) -> None:
+        """Delete resume trigger from storage.
+
+        Args:
+            runtime_id: The runtime ID
+            trigger: The resume trigger to delete
+
+        Raises:
+            Exception: If deletion operation fails
         """
         ...
 

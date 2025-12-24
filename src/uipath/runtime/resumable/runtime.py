@@ -3,6 +3,8 @@
 import logging
 from typing import Any, AsyncGenerator
 
+from uipath.core.errors import UiPathPendingTriggerError
+
 from uipath.runtime.base import (
     UiPathExecuteOptions,
     UiPathRuntimeProtocol,
@@ -111,21 +113,32 @@ class UiPathResumableRuntime:
             input: User-provided input (takes precedence)
 
         Returns:
-            Input to use for resume, either provided or from storage
+            Input to use for resume: {interrupt_id: resume_data, ...}
         """
         # If user provided explicit input, use it
         if input is not None:
             return input
 
-        # Otherwise, fetch from storage
-        trigger = await self.storage.get_latest_trigger(self.runtime_id)
-        if not trigger:
+        # Fetch all triggers from storage
+        triggers = await self.storage.get_triggers(self.runtime_id)
+        if not triggers:
             return None
 
-        # Read trigger data via trigger_manager
-        resume_data = await self.trigger_manager.read_trigger(trigger)
+        # Build resume map: {interrupt_id: resume_data}
+        resume_map: dict[str, Any] = {}
+        for trigger in triggers:
+            try:
+                data = await self.trigger_manager.read_trigger(trigger)
+                assert trigger.interrupt_id is not None, (
+                    "Trigger interrupt_id cannot be None"
+                )
+                resume_map[trigger.interrupt_id] = data
+                await self.storage.delete_trigger(self.runtime_id, trigger)
+            except UiPathPendingTriggerError:
+                # Trigger still pending, skip it
+                pass
 
-        return resume_data
+        return resume_map
 
     async def _handle_suspension(
         self, result: UiPathRuntimeResult
@@ -142,22 +155,39 @@ class UiPathResumableRuntime:
         if isinstance(result, UiPathBreakpointResult):
             return result
 
-        # Check if trigger already exists in result
-        if result.trigger:
-            await self.storage.save_trigger(self.runtime_id, result.trigger)
-            return result
-
         suspended_result = UiPathRuntimeResult(
             status=UiPathRuntimeStatus.SUSPENDED,
             output=result.output,
         )
 
-        if result.output:
-            suspended_result.trigger = await self.trigger_manager.create_trigger(
-                result.output
-            )
+        assert result.output is None or isinstance(result.output, dict), (
+            "Suspended runtime output must be a dict of interrupt IDs to resume data"
+        )
 
-            await self.storage.save_trigger(self.runtime_id, suspended_result.trigger)
+        # Get existing triggers and current interrupts
+        suspended_result.triggers = (
+            await self.storage.get_triggers(self.runtime_id) or []
+        )
+        current_interrupts = result.output or {}
+
+        # Diff: find new interrupts
+        existing_ids = {t.interrupt_id for t in suspended_result.triggers}
+        new_ids = current_interrupts.keys() - existing_ids
+
+        # Create triggers only for new interrupts
+        for interrupt_id in new_ids:
+            trigger = await self.trigger_manager.create_trigger(
+                current_interrupts[interrupt_id]
+            )
+            trigger.interrupt_id = interrupt_id
+            suspended_result.triggers.append(trigger)
+
+        if suspended_result.triggers:
+            await self.storage.save_triggers(self.runtime_id, suspended_result.triggers)
+
+        # Backward compatibility: set single trigger directly
+        if len(suspended_result.triggers) == 1:
+            suspended_result.trigger = suspended_result.triggers[0]
 
         return suspended_result
 
