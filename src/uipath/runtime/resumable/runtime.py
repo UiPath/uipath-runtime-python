@@ -115,12 +115,30 @@ class UiPathResumableRuntime:
         Returns:
             Input to use for resume: {interrupt_id: resume_data, ...}
         """
-        # If user provided explicit input, use it
-        if input is not None:
-            return input
-
         # Fetch all triggers from storage
         triggers = await self.storage.get_triggers(self.runtime_id)
+
+        # If user provided explicit input, use it
+        if input is not None:
+            if triggers:
+                if len(triggers) == 1:
+                    # Single trigger - just delete it
+                    await self.storage.delete_trigger(self.runtime_id, triggers[0])
+                else:
+                    # Multiple triggers - match by interrupt_id
+                    found = False
+                    for trigger in triggers:
+                        if trigger.interrupt_id in input:
+                            await self.storage.delete_trigger(self.runtime_id, trigger)
+                            found = True
+                    if not found:
+                        logger.warning(
+                            f"Multiple triggers detected but none match the provided input. "
+                            f"Please specify which trigger to resume by {{interrupt_id: value}}. "
+                            f"Available interrupt_ids: {[t.interrupt_id for t in triggers]}."
+                        )
+            return input
+
         if not triggers:
             return None
 
@@ -184,9 +202,7 @@ class UiPathResumableRuntime:
 
         if suspended_result.triggers:
             await self.storage.save_triggers(self.runtime_id, suspended_result.triggers)
-
-        # Backward compatibility: set single trigger directly
-        if len(suspended_result.triggers) == 1:
+            # Backward compatibility: set single trigger directly
             suspended_result.trigger = suspended_result.triggers[0]
 
         return suspended_result
