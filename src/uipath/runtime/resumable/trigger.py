@@ -49,6 +49,7 @@ class UiPathApiTrigger(BaseModel):
 class UiPathResumeTrigger(BaseModel):
     """Information needed to resume execution."""
 
+    interrupt_id: str | None = Field(default=None, alias="interruptId")
     trigger_type: UiPathResumeTriggerType = Field(
         default=UiPathResumeTriggerType.API, alias="triggerType"
     )
