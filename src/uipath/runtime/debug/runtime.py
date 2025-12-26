@@ -188,20 +188,25 @@ class UiPathDebugRuntime:
                                 final_result
                             )
 
+                            interrupt_id = final_result.trigger.interrupt_id
+                            assert interrupt_id is not None
+
                             resume_data: dict[str, Any] | None = None
                             try:
+                                trigger_data: dict[str, Any] | None = None
                                 if (
                                     final_result.trigger.trigger_type
                                     == UiPathResumeTriggerType.API
                                 ):
-                                    resume_data = (
+                                    trigger_data = (
                                         await self.debug_bridge.wait_for_resume()
                                     )
                                 else:
-                                    resume_data = await self._poll_trigger(
+                                    trigger_data = await self._poll_trigger(
                                         final_result.trigger,
                                         self.delegate.trigger_manager,
                                     )
+                                resume_data = {interrupt_id: trigger_data}
                             except UiPathDebugQuitError:
                                 final_result = UiPathRuntimeResult(
                                     status=UiPathRuntimeStatus.SUCCESSFUL,
