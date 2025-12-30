@@ -189,8 +189,8 @@ class UiPathResumableRuntime:
         current_interrupts = result.output or {}
 
         # Diff: find new interrupts
-        existing_ids = {t.interrupt_id for t in suspended_result.triggers}
-        new_ids = current_interrupts.keys() - existing_ids
+        existing_ids = [t.interrupt_id for t in suspended_result.triggers]
+        new_ids = [key for key in current_interrupts.keys() if key not in existing_ids]
 
         # Create triggers only for new interrupts
         for interrupt_id in new_ids:

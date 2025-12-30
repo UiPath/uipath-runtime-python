@@ -160,10 +160,11 @@ async def test_resumable_creates_multiple_triggers_on_first_suspension():
     assert len(result.triggers) == 2
     assert {t.interrupt_id for t in result.triggers} == {"int-1", "int-2"}
 
-    # Check payloads by interrupt_id (order not guaranteed)
-    payloads_by_id = {t.interrupt_id: t.payload for t in result.triggers}
-    assert payloads_by_id["int-1"] == {"action": "approve_branch_1"}
-    assert payloads_by_id["int-2"] == {"action": "approve_branch_2"}
+    # Check payloads by interrupt_id (order should be preserved)
+    assert result.triggers[0].interrupt_id == "int-1"
+    assert result.triggers[0].payload == {"action": "approve_branch_1"}
+    assert result.triggers[1].interrupt_id == "int-2"
+    assert result.triggers[1].payload == {"action": "approve_branch_2"}
 
     # Both triggers should be created and saved
     assert cast(AsyncMock, trigger_manager.create_trigger).await_count == 2
