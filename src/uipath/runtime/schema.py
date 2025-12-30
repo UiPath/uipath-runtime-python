@@ -61,6 +61,9 @@ class UiPathRuntimeSchema(BaseModel):
     graph: UiPathRuntimeGraph | None = Field(
         None, description="Runtime graph structure for debugging"
     )
+    metadata: dict[str, Any] | None = Field(
+        None, description="Additional metadata for the runtime schema"
+    )
 
     model_config = COMMON_MODEL_SCHEMA
 
