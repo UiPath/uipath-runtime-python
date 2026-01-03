@@ -63,7 +63,7 @@ class MockFunctionsFactory(UiPathRuntimeFactoryProtocol):
         return []
 
     async def new_runtime(
-        self, entrypoint: str, runtime_id: str
+        self, entrypoint: str, runtime_id: str, **kwargs
     ) -> UiPathRuntimeProtocol:
         return cast(UiPathRuntimeProtocol, MockRuntime(f"functions-{entrypoint}"))
 
@@ -85,7 +85,7 @@ class MockLangGraphFactory(UiPathRuntimeFactoryProtocol):
         return []
 
     async def new_runtime(
-        self, entrypoint: str, runtime_id: str
+        self, entrypoint: str, runtime_id: str, **kwargs
     ) -> UiPathRuntimeProtocol:
         return cast(UiPathRuntimeProtocol, MockRuntime(f"langgraph-{entrypoint}"))
 
@@ -107,7 +107,7 @@ class MockLlamaIndexFactory(UiPathRuntimeFactoryProtocol):
         return []
 
     async def new_runtime(
-        self, entrypoint: str, runtime_id: str
+        self, entrypoint: str, runtime_id: str, **kwargs
     ) -> UiPathRuntimeProtocol:
         return cast(UiPathRuntimeProtocol, MockRuntime(f"llamaindex-{entrypoint}"))
 
