@@ -57,6 +57,8 @@ class UiPathRuntimeSchema(BaseModel):
     unique_id: str = Field(..., alias="uniqueId")
     type: str = Field(..., alias="type")
     input: dict[str, Any] = Field(..., alias="input")
+    has_input_circular_dependency: bool = Field(default=False, exclude=True)
+    has_output_circular_dependency: bool = Field(default=False, exclude=True)
     output: dict[str, Any] = Field(..., alias="output")
     graph: UiPathRuntimeGraph | None = Field(
         None, description="Runtime graph structure for debugging"
