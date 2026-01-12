@@ -5,7 +5,7 @@ description = "Runtime abstractions and interfaces for building agents and autom
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 dependencies = [
-  "uipath-core>=0.1.1, <0.2.0",
+  "uipath-core>=0.1.1,<0.2.0",
 ]
 classifiers = [
   "Intended Audience :: Developers",
@@ -106,3 +106,6 @@ name = "testpypi"
 url = "https://test.pypi.org/simple/"
 publish-url = "https://test.pypi.org/legacy/"
 explicit = true
+
+[tool.uv.sources]
+uipath-core = { path = "../uipath-core-python", editable = true }
