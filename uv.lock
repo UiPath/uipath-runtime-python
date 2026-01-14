@@ -1005,7 +1005,7 @@ wheels = [
 
 [[package]]
 name = "uipath-runtime"
-version = "0.4.1"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "uipath-core" },

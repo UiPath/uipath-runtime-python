@@ -104,7 +104,7 @@ def test_result_file_written_on_success_contains_output(tmp_path: Path) -> None:
         pass
 
     # Assert: result file is written whether successful or faulted
-    result_path = Path(ctx.result_file_path)
+    result_path = Path(ctx.resolved_result_file_path)
     assert result_path.exists()
 
     content = json.loads(result_path.read_text())
@@ -130,7 +130,7 @@ def test_result_file_written_on_fault_contains_error_contract(tmp_path: Path) ->
             raise RuntimeError("Stream blew up")
 
     # Assert: result file is written even when faulted
-    result_path = Path(ctx.result_file_path)
+    result_path = Path(ctx.resolved_result_file_path)
     assert result_path.exists()
 
     content = json.loads(result_path.read_text())
