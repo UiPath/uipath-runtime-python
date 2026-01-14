@@ -77,6 +77,9 @@ class UiPathRuntimeContext(BaseModel):
     logs_min_level: str | None = Field("INFO", description="Minimum log level")
     result: UiPathRuntimeResult | None = None
     trace_manager: UiPathTraceManager | None = None
+    keep_state_file: bool = Field(
+        False, description="Prevents deletion of state file before running."
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
