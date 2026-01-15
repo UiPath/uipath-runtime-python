@@ -7,7 +7,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from uipath.core.errors import UiPathFaultedTriggerError
 from uipath.core.tracing import UiPathTraceManager
 
@@ -31,9 +31,11 @@ class UiPathRuntimeContext(BaseModel):
     resume: bool = False
     command: str | None = None
     job_id: str | None = None
-    conversation_id: str | None = None
-    exchange_id: str | None = None
-    message_id: str | None = None
+    conversation_id: str | None = Field(
+        None, description="Conversation identifier for CAS"
+    )
+    exchange_id: str | None = Field(None, description="Exchange identifier for CAS")
+    message_id: str | None = Field(None, description="Message identifier for CAS")
     mcp_server_id: str | None = None
     mcp_server_slug: str | None = None
     tenant_id: str | None = None
@@ -41,16 +43,43 @@ class UiPathRuntimeContext(BaseModel):
     folder_key: str | None = None
     process_key: str | None = None
     config_path: str = "uipath.json"
-    runtime_dir: str | None = "__uipath"
-    result_file: str = "output.json"
-    state_file: str = "state.db"
-    input_file: str | None = None
-    output_file: str | None = None
-    trace_file: str | None = None
-    logs_file: str | None = "execution.log"
-    logs_min_level: str | None = "INFO"
+    runtime_dir: str | None = Field(
+        "__uipath", description="Directory for runtime files"
+    )
+    result_file: str = Field(
+        "output.json", description="Filename for the result output"
+    )
+    result_file_path: str | None = Field(
+        None,
+        description=(
+            "Full path override for the result file. "
+            "When specified, takes priority over runtime_dir + result_file. "
+            "If not specified, path is constructed from runtime_dir and result_file."
+        ),
+    )
+    state_file: str = Field("state.db", description="Filename for the state database")
+    state_file_path: str | None = Field(
+        None,
+        description=(
+            "Full path override for the state file. "
+            "When specified, takes priority over runtime_dir + state_file. "
+            "If not specified, path is constructed from runtime_dir and state_file."
+        ),
+    )
+    input_file: str | None = Field(None, description="Full path to the input JSON file")
+    output_file: str | None = Field(
+        None, description="Full path to the output JSON file"
+    )
+    trace_file: str | None = Field(None, description="Full path to the trace file")
+    logs_file: str | None = Field(
+        "execution.log", description="Filename for the logs file"
+    )
+    logs_min_level: str | None = Field("INFO", description="Minimum log level")
     result: UiPathRuntimeResult | None = None
     trace_manager: UiPathTraceManager | None = None
+    keep_state_file: bool = Field(
+        False, description="Prevents deletion of state file before running."
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
@@ -197,7 +226,7 @@ class UiPathRuntimeContext(BaseModel):
             # Always write output file at runtime, except for inner runtimes
             # Inner runtimes have execution_id
             if self.job_id:
-                with open(self.result_file_path, "w") as f:
+                with open(self.resolved_result_file_path, "w") as f:
                     json.dump(content, f, indent=2, default=str)
 
             # Write the execution output to file if requested
@@ -230,7 +259,7 @@ class UiPathRuntimeContext(BaseModel):
                 )
                 error_result_content = error_result.to_dict()
                 if self.job_id:
-                    with open(self.result_file_path, "w") as f:
+                    with open(self.resolved_result_file_path, "w") as f:
                         json.dump(error_result_content, f, indent=2, default=str)
             except Exception as write_error:
                 logger.error(f"Failed to write error output file: {str(write_error)}")
@@ -251,16 +280,24 @@ class UiPathRuntimeContext(BaseModel):
                 self.logs_interceptor.teardown()
 
     @cached_property
-    def result_file_path(self) -> str:
+    def resolved_result_file_path(self) -> str:
         """Get the full path to the result file."""
+        # If full path is explicitly specified, use that
+        if self.result_file_path:
+            return self.result_file_path
+        # Otherwise, construct from runtime_dir and result_file
         if self.runtime_dir and self.result_file:
             os.makedirs(self.runtime_dir, exist_ok=True)
             return os.path.join(self.runtime_dir, self.result_file)
         return os.path.join("__uipath", "output.json")
 
     @cached_property
-    def state_file_path(self) -> str:
+    def resolved_state_file_path(self) -> str:
         """Get the full path to the state file."""
+        # If full path is explicitly specified, use that
+        if self.state_file_path:
+            return self.state_file_path
+        # Otherwise, construct from runtime_dir and state_file
         if self.runtime_dir and self.state_file:
             os.makedirs(self.runtime_dir, exist_ok=True)
             return os.path.join(self.runtime_dir, self.state_file)
