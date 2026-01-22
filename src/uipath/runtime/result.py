@@ -31,6 +31,10 @@ class UiPathRuntimeResult(UiPathRuntimeEvent):
         default=UiPathRuntimeEventType.RUNTIME_RESULT, frozen=True
     )
 
+    def is_suspended(self) -> bool:
+        """Checks if runtime execution is suspended."""
+        return self.status == UiPathRuntimeStatus.SUSPENDED
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format for output."""
         output_data: dict[str, Any] | str
