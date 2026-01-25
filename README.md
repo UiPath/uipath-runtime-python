@@ -169,9 +169,6 @@ class MyRuntimeFactory:
     async def new_runtime(self, entrypoint: str, runtime_id: str) -> UiPathRuntimeProtocol:
         return MyRuntime()
 
-    async def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
-        return []
-
     def discover_entrypoints(self) -> list[str]:
         return []
 
@@ -314,9 +311,6 @@ class ChildRuntimeFactory:
 
     async def new_runtime(self, entrypoint: str) -> UiPathRuntimeProtocol:
         return ChildRuntime(name=entrypoint)
-
-    async def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
-        return []
 
     def discover_entrypoints(self) -> list[str]:
         return []
