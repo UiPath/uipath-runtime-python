@@ -2,23 +2,33 @@
 
 from typing import Protocol
 
-from uipath.runtime.base import UiPathDisposableProtocol, UiPathRuntimeProtocol
+from pydantic import BaseModel
+from uipath.core.tracing import UiPathTraceSettings
+
+from uipath.runtime.base import (
+    UiPathDisposableProtocol,
+    UiPathRuntimeProtocol,
+)
+from uipath.runtime.storage import UiPathRuntimeStorageProtocol
 
 
-class UiPathRuntimeScannerProtocol(Protocol):
-    """Protocol for discovering all UiPath runtime instances."""
+class UiPathRuntimeFactorySettings(BaseModel):
+    """Runtime settings for execution behavior."""
 
-    async def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
-        """Discover all runtime classes."""
-        ...
+    model_config = {"arbitrary_types_allowed": True}  # Needed for Callable
+
+    trace_settings: UiPathTraceSettings | None = None
+
+
+class UiPathRuntimeFactoryProtocol(
+    UiPathDisposableProtocol,
+    Protocol,
+):
+    """Protocol for discovering and creating UiPath runtime instances."""
 
     def discover_entrypoints(self) -> list[str]:
         """Discover all runtime entrypoints."""
         ...
-
-
-class UiPathRuntimeCreatorProtocol(Protocol):
-    """Protocol for creating a UiPath runtime given an entrypoint."""
 
     async def new_runtime(
         self, entrypoint: str, runtime_id: str, **kwargs
@@ -26,11 +36,10 @@ class UiPathRuntimeCreatorProtocol(Protocol):
         """Create a new runtime instance."""
         ...
 
+    async def get_storage(self) -> UiPathRuntimeStorageProtocol | None:
+        """Get the factory storage."""
+        ...
 
-class UiPathRuntimeFactoryProtocol(
-    UiPathRuntimeCreatorProtocol,
-    UiPathRuntimeScannerProtocol,
-    UiPathDisposableProtocol,
-    Protocol,
-):
-    """Protocol for discovering and creating UiPath runtime instances."""
+    async def get_settings(self) -> UiPathRuntimeFactorySettings | None:
+        """Get factory settings."""
+        ...

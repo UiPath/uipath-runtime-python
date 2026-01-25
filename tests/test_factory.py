@@ -8,12 +8,29 @@ from uipath.runtime import (
     UiPathRuntimeProtocol,
     UiPathRuntimeResult,
     UiPathRuntimeSchema,
+    UiPathRuntimeStorageProtocol,
     UiPathStreamOptions,
 )
-from uipath.runtime.factory import UiPathRuntimeCreatorProtocol
+from uipath.runtime.factory import (
+    UiPathRuntimeFactoryProtocol,
+    UiPathRuntimeFactorySettings,
+)
 
 
-class MockRuntime:
+class MockStorage(UiPathRuntimeStorageProtocol):
+    """Mock storage implementation"""
+
+    def __init__(self):
+        self._store = {}
+
+    async def set_value(self, runtime_id, namespace, key, value):
+        self._store.setdefault(runtime_id, {}).setdefault(namespace, {})[key] = value
+
+    async def get_value(self, runtime_id, namespace, key):
+        return self._store.get(runtime_id, {}).get(namespace, {}).get(key)
+
+
+class MockRuntime(UiPathRuntimeProtocol):
     """Mock runtime that implements UiPathRuntimeProtocol."""
 
     def __init__(self, settings: dict[str, Any] | None = None) -> None:
@@ -49,16 +66,28 @@ class MockRuntime:
 class CreatorWithKwargs:
     """Implementation with kwargs."""
 
+    def discover_entrypoints(self) -> list[str]:
+        return ["main.py"]
+
     async def new_runtime(
         self, entrypoint: str, runtime_id: str, **kwargs
     ) -> UiPathRuntimeProtocol:
         return MockRuntime(kwargs.get("settings"))
 
+    async def get_storage(self) -> UiPathRuntimeStorageProtocol | None:
+        return MockStorage()
+
+    async def get_settings(self) -> UiPathRuntimeFactorySettings | None:
+        return UiPathRuntimeFactorySettings()
+
+    async def dispose(self) -> None:
+        pass
+
 
 @pytest.mark.asyncio
 async def test_protocol_works_with_kwargs_not_specified():
     """Test protocol works with implementation that has kwargs."""
-    creator: UiPathRuntimeCreatorProtocol = CreatorWithKwargs()
+    creator: UiPathRuntimeFactoryProtocol = CreatorWithKwargs()
     runtime = await creator.new_runtime("main.py", "runtime-123")
     assert isinstance(runtime, MockRuntime)
 
@@ -66,7 +95,7 @@ async def test_protocol_works_with_kwargs_not_specified():
 @pytest.mark.asyncio
 async def test_protocol_works_with_kwargs_specified():
     """Test protocol works with implementation that has kwargs."""
-    creator: UiPathRuntimeCreatorProtocol = CreatorWithKwargs()
+    creator: UiPathRuntimeFactoryProtocol = CreatorWithKwargs()
     runtime = await creator.new_runtime(
         "main.py", "runtime-123", settings={"timeout": 30, "model": "gpt-4"}
     )

@@ -10,12 +10,27 @@ from uipath.runtime import (
     UiPathRuntimeEvent,
     UiPathRuntimeFactoryProtocol,
     UiPathRuntimeFactoryRegistry,
+    UiPathRuntimeFactorySettings,
     UiPathRuntimeProtocol,
     UiPathRuntimeResult,
     UiPathRuntimeSchema,
     UiPathRuntimeStatus,
+    UiPathRuntimeStorageProtocol,
     UiPathStreamOptions,
 )
+
+
+class MockStorage(UiPathRuntimeStorageProtocol):
+    """Mock storage implementation"""
+
+    def __init__(self):
+        self._store = {}
+
+    async def set_value(self, runtime_id, namespace, key, value):
+        self._store.setdefault(runtime_id, {}).setdefault(namespace, {})[key] = value
+
+    async def get_value(self, runtime_id, namespace, key):
+        return self._store.get(runtime_id, {}).get(namespace, {}).get(key)
 
 
 class MockRuntime(UiPathRuntimeProtocol):
@@ -59,8 +74,11 @@ class MockFunctionsFactory(UiPathRuntimeFactoryProtocol):
     def discover_entrypoints(self) -> list[str]:
         return ["main.py", "handler.py"]
 
-    async def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
-        return []
+    async def get_storage(self) -> UiPathRuntimeStorageProtocol | None:
+        return MockStorage()
+
+    async def get_settings(self) -> UiPathRuntimeFactorySettings | None:
+        return UiPathRuntimeFactorySettings()
 
     async def new_runtime(
         self, entrypoint: str, runtime_id: str, **kwargs
@@ -81,8 +99,11 @@ class MockLangGraphFactory(UiPathRuntimeFactoryProtocol):
     def discover_entrypoints(self) -> list[str]:
         return ["agent", "workflow"]
 
-    async def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
-        return []
+    async def get_storage(self) -> UiPathRuntimeStorageProtocol | None:
+        return MockStorage()
+
+    async def get_settings(self) -> UiPathRuntimeFactorySettings | None:
+        return UiPathRuntimeFactorySettings()
 
     async def new_runtime(
         self, entrypoint: str, runtime_id: str, **kwargs
@@ -103,8 +124,11 @@ class MockLlamaIndexFactory(UiPathRuntimeFactoryProtocol):
     def discover_entrypoints(self) -> list[str]:
         return ["chatbot", "rag"]
 
-    async def discover_runtimes(self) -> list[UiPathRuntimeProtocol]:
-        return []
+    async def get_storage(self) -> UiPathRuntimeStorageProtocol | None:
+        return MockStorage()
+
+    async def get_settings(self) -> UiPathRuntimeFactorySettings | None:
+        return UiPathRuntimeFactorySettings()
 
     async def new_runtime(
         self, entrypoint: str, runtime_id: str, **kwargs
