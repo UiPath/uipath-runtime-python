@@ -20,6 +20,7 @@ class UiPathResumeTriggerType(str, Enum):
     BATCH_RAG = "BatchRag"
     INDEX_INGESTION = "IndexIngestion"
     IXP_EXTRACTION = "IxpExtraction"
+    IXP_VS_ESCALATION = "IxpVsEscalation"
 
 
 class UiPathResumeTriggerName(str, Enum):
@@ -37,6 +38,7 @@ class UiPathResumeTriggerName(str, Enum):
     BATCH_RAG = "BatchRag"
     INDEX_INGESTION = "IndexIngestion"
     EXTRACTION = "Extraction"
+    IXP_VS_ESCALATION = "IxpVsEscalation"
 
 
 class UiPathApiTrigger(BaseModel):
