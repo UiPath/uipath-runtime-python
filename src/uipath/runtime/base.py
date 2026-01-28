@@ -149,14 +149,28 @@ class UiPathExecutionRuntime:
         span_attributes: dict[str, str] | None = None,
         log_handler: UiPathRuntimeExecutionLogHandler | None = None,
         execution_id: str | None = None,
+        create_root_span: bool = True,
     ):
-        """Initialize the executor."""
+        """Initialize the executor.
+
+        Args:
+            delegate: The runtime to wrap with execution context
+            trace_manager: Trace manager for span management
+            root_span: Name of the root span to create (if create_root_span=True)
+            span_attributes: Attributes to add to the root span
+            log_handler: Optional log handler for this execution
+            execution_id: Execution ID for logging context and span propagation
+            create_root_span: Whether to create a root span (default: True).
+                When False, only logging context is set up, allowing child
+                spans to inherit execution.id from parent spans in the call stack.
+        """
         self.delegate = delegate
         self.trace_manager = trace_manager
         self.root_span = root_span
         self.span_attributes = span_attributes
         self.execution_id = execution_id
         self.log_handler = log_handler
+        self.create_root_span = create_root_span
         if execution_id is not None and log_handler is None:
             self.log_handler = UiPathRuntimeExecutionLogHandler(execution_id)
 
@@ -173,7 +187,7 @@ class UiPathExecutionRuntime:
             log_interceptor.setup()
 
         try:
-            if self.execution_id:
+            if self.create_root_span and self.execution_id:
                 with self.trace_manager.start_execution_span(
                     self.root_span,
                     execution_id=self.execution_id,
@@ -210,7 +224,7 @@ class UiPathExecutionRuntime:
             )
             log_interceptor.setup()
         try:
-            if self.execution_id:
+            if self.create_root_span and self.execution_id:
                 with self.trace_manager.start_execution_span(
                     self.root_span,
                     execution_id=self.execution_id,
