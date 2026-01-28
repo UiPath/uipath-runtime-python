@@ -4,8 +4,6 @@ import asyncio
 import logging
 from typing import Any, AsyncGenerator, cast
 
-from uipath.core.errors import UiPathPendingTriggerError
-
 from uipath.runtime.base import (
     UiPathExecuteOptions,
     UiPathRuntimeProtocol,
@@ -25,7 +23,7 @@ from uipath.runtime.result import (
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
 )
-from uipath.runtime.resumable.protocols import UiPathResumeTriggerReaderProtocol
+from uipath.runtime.resumable.polling import TriggerPoller
 from uipath.runtime.resumable.runtime import UiPathResumableRuntime
 from uipath.runtime.resumable.trigger import (
     UiPathResumeTrigger,
@@ -203,8 +201,7 @@ class UiPathDebugRuntime:
                                     )
                                 else:
                                     trigger_data = await self._poll_trigger(
-                                        final_result.trigger,
-                                        self.delegate.trigger_manager,
+                                        final_result.trigger
                                     )
                                 resume_data = {interrupt_id: trigger_data}
                             except UiPathDebugQuitError:
@@ -245,77 +242,65 @@ class UiPathDebugRuntime:
             logger.warning(f"Error disconnecting debug bridge: {e}")
 
     async def _poll_trigger(
-        self, trigger: UiPathResumeTrigger, reader: UiPathResumeTriggerReaderProtocol
+        self, trigger: UiPathResumeTrigger
     ) -> dict[str, Any] | None:
         """Poll a resume trigger until data is available.
 
         Args:
             trigger: The trigger to poll
-            reader: The trigger reader to use for polling
 
         Returns:
-            Resume data when available, or None if polling exhausted
+            Resume data when available, or None if polling was stopped
 
         Raises:
             UiPathDebugQuitError: If quit is requested during polling
         """
-        attempt = 0
-        while True:
-            attempt += 1
+        self._quit_requested = False
 
+        async def on_poll_attempt(attempt: int, info: str | None) -> None:
+            """Callback for each poll attempt."""
+            payload: dict[str, Any] = {"attempt": attempt}
+            if info:
+                payload["info"] = info
+            await self.debug_bridge.emit_state_update(
+                UiPathRuntimeStateEvent(
+                    node_name="<polling>",
+                    payload=payload,
+                )
+            )
+
+        async def should_stop() -> bool:
+            """Check if quit was requested."""
+            # Check for termination request with a short timeout
             try:
-                resume_data = await reader.read_trigger(trigger)
-
-                if resume_data is not None:
-                    return resume_data
-
-                await self.debug_bridge.emit_state_update(
-                    UiPathRuntimeStateEvent(
-                        node_name="<polling>",
-                        payload={
-                            "attempt": attempt,
-                        },
-                    )
+                term_task = asyncio.create_task(self.debug_bridge.wait_for_terminate())
+                done, _ = await asyncio.wait(
+                    {term_task},
+                    timeout=0.01,  # Very short timeout just to check
                 )
+                if term_task in done:
+                    self._quit_requested = True
+                    return True
+                else:
+                    term_task.cancel()
+                    try:
+                        await term_task
+                    except asyncio.CancelledError:
+                        pass
+            except Exception:
+                pass
+            return False
 
-                await self._wait_with_quit_check()
-
-            except UiPathDebugQuitError:
-                raise
-
-            except UiPathPendingTriggerError as e:
-                await self.debug_bridge.emit_state_update(
-                    UiPathRuntimeStateEvent(
-                        node_name="<polling>",
-                        payload={
-                            "attempt": attempt,
-                            "info": str(e),
-                        },
-                    )
-                )
-
-                await self._wait_with_quit_check()
-
-    async def _wait_with_quit_check(self) -> None:
-        """Wait for specified seconds, but allow quit command to interrupt.
-
-        Raises:
-            UiPathDebugQuitError: If quit is requested during wait
-        """
-        sleep_task = asyncio.create_task(asyncio.sleep(self.trigger_poll_interval))
-        term_task = asyncio.create_task(self.debug_bridge.wait_for_terminate())
-
-        done, pending = await asyncio.wait(
-            {sleep_task, term_task},
-            return_when=asyncio.FIRST_COMPLETED,
+        poller = TriggerPoller(
+            reader=self.delegate.trigger_manager,
+            poll_interval=self.trigger_poll_interval,
+            on_poll_attempt=on_poll_attempt,
+            should_stop=should_stop,
         )
 
-        for task in pending:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        result = await poller.poll_trigger(trigger)
 
-        if term_task in done:
+        if self._quit_requested:
             raise UiPathDebugQuitError("Debugging terminated during polling.")
+
+        return result

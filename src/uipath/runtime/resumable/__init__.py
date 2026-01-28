@@ -1,5 +1,6 @@
 """Module for resumable runtime features."""
 
+from uipath.runtime.resumable.polling import TriggerPoller
 from uipath.runtime.resumable.protocols import (
     UiPathResumableStorageProtocol,
     UiPathResumeTriggerCreatorProtocol,
@@ -20,4 +21,5 @@ __all__ = [
     "UiPathResumeTrigger",
     "UiPathResumeTriggerType",
     "UiPathApiTrigger",
+    "TriggerPoller",
 ]

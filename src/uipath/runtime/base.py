@@ -41,6 +41,16 @@ class UiPathExecuteOptions(BaseModel):
         default=None,
         description="List of nodes or '*' to break on all steps.",
     )
+    wait_for_triggers: bool = Field(
+        default=False,
+        description="When True, poll triggers until completion instead of suspending. "
+        "This keeps the process running and automatically resumes when triggers complete.",
+    )
+    trigger_poll_interval: float = Field(
+        default=5.0,
+        description="Seconds between poll attempts when wait_for_triggers is True.",
+        ge=0.1,
+    )
 
     model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
 
