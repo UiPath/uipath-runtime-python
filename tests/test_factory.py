@@ -66,6 +66,9 @@ class MockRuntime(UiPathRuntimeProtocol):
 class CreatorWithKwargs:
     """Implementation with kwargs."""
 
+    async def warmup(self) -> None:
+        pass
+
     def discover_entrypoints(self) -> list[str]:
         return ["main.py"]
 

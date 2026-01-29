@@ -71,6 +71,9 @@ class MockFunctionsFactory(UiPathRuntimeFactoryProtocol):
         self.context = context
         self.name = "functions"
 
+    async def warmup(self) -> None:
+        pass
+
     def discover_entrypoints(self) -> list[str]:
         return ["main.py", "handler.py"]
 
@@ -96,6 +99,9 @@ class MockLangGraphFactory(UiPathRuntimeFactoryProtocol):
         self.context = context
         self.name = "langgraph"
 
+    async def warmup(self) -> None:
+        pass
+
     def discover_entrypoints(self) -> list[str]:
         return ["agent", "workflow"]
 
@@ -120,6 +126,9 @@ class MockLlamaIndexFactory(UiPathRuntimeFactoryProtocol):
     def __init__(self, context: Optional[UiPathRuntimeContext] = None):
         self.context = context
         self.name = "llamaindex"
+
+    async def warmup(self) -> None:
+        pass
 
     def discover_entrypoints(self) -> list[str]:
         return ["chatbot", "rag"]

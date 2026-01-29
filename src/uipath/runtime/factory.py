@@ -26,6 +26,10 @@ class UiPathRuntimeFactoryProtocol(
 ):
     """Protocol for discovering and creating UiPath runtime instances."""
 
+    async def warmup(self) -> None:
+        """Pre-load modules and resources to reduce cold start latency."""
+        ...
+
     def discover_entrypoints(self) -> list[str]:
         """Discover all runtime entrypoints."""
         ...
