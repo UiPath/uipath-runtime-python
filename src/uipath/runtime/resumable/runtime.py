@@ -12,11 +12,15 @@ from uipath.runtime.base import (
 )
 from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
 from uipath.runtime.events import UiPathRuntimeEvent
-from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
+from uipath.runtime.result import (
+    UiPathRuntimeResult,
+    UiPathRuntimeStatus,
+)
 from uipath.runtime.resumable.protocols import (
     UiPathResumableStorageProtocol,
     UiPathResumeTriggerProtocol,
 )
+from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)
@@ -68,12 +72,28 @@ class UiPathResumableRuntime:
         """
         # If resuming, restore trigger from storage
         if options and options.resume:
+            # restore trigger from storage
             input = await self._restore_resume_input(input)
 
-        # Execute the delegate
-        result = await self.delegate.execute(input, options=options)
-        # If suspended, create and persist trigger
-        return await self._handle_suspension(result)
+        while True:
+            # Execute the delegate
+            result = await self.delegate.execute(input, options=options)
+            # If suspended, create and persist trigger
+            suspension_result = await self._handle_suspension(result)
+
+            # check if any trigger may be resumed
+            if not suspension_result.is_suspended() or not (
+                fired_triggers := await self._restore_resume_input(None)
+            ):
+                return suspension_result
+
+            # Note: when resuming a job, orchestrator deletes all triggers associated with it,
+            # thus we can resume the runtime at this point without worrying a trigger may be fired 'twice'
+            input = fired_triggers
+            if not options:
+                options = UiPathExecuteOptions(resume=True)
+            else:
+                options.resume = True
 
     async def stream(
         self,
@@ -94,15 +114,31 @@ class UiPathResumableRuntime:
             input = await self._restore_resume_input(input)
 
         final_result: UiPathRuntimeResult | None = None
-        async for event in self.delegate.stream(input, options=options):
-            if isinstance(event, UiPathRuntimeResult):
-                final_result = event
-            else:
-                yield event
+        while True:
+            async for event in self.delegate.stream(input, options=options):
+                if isinstance(event, UiPathRuntimeResult):
+                    final_result = event
+                else:
+                    yield event
 
-        # If suspended, create and persist trigger
-        if final_result:
-            yield await self._handle_suspension(final_result)
+            # If suspended, create and persist trigger
+            if final_result:
+                suspension_result = await self._handle_suspension(final_result)
+
+                if suspension_result.status != UiPathRuntimeStatus.SUSPENDED or not (
+                    fired_triggers := await self._restore_resume_input(None)
+                ):
+                    yield suspension_result
+                    return
+
+                # Note: when resuming a job, orchestrator deletes all triggers associated with it,
+                # thus we can resume the runtime at this point without worrying a trigger may be fired 'twice'
+                input = fired_triggers
+
+                if not options:
+                    options = UiPathStreamOptions(resume=True)
+                else:
+                    options.resume = True
 
     async def _restore_resume_input(
         self, input: dict[str, Any] | None
@@ -142,6 +178,11 @@ class UiPathResumableRuntime:
         if not triggers:
             return None
 
+        return await self._build_resume_map(triggers)
+
+    async def _build_resume_map(
+        self, triggers: list[UiPathResumeTrigger]
+    ) -> dict[str, Any]:
         # Build resume map: {interrupt_id: resume_data}
         resume_map: dict[str, Any] = {}
         for trigger in triggers:
@@ -166,11 +207,10 @@ class UiPathResumableRuntime:
         Args:
             result: The execution result to check for suspension
         """
-        # Only handle suspensions
-        if result.status != UiPathRuntimeStatus.SUSPENDED:
-            return result
-
-        if isinstance(result, UiPathBreakpointResult):
+        # Only handle interrupt suspensions
+        if result.status != UiPathRuntimeStatus.SUSPENDED or isinstance(
+            result, UiPathBreakpointResult
+        ):
             return result
 
         suspended_result = UiPathRuntimeResult(
