@@ -86,17 +86,38 @@ class UiPathChatRuntime:
 
                     if (
                         runtime_result.status == UiPathRuntimeStatus.SUSPENDED
-                        and runtime_result.trigger
-                        and runtime_result.trigger.trigger_type
-                        == UiPathResumeTriggerType.API
+                        and runtime_result.triggers
                     ):
-                        await self.chat_bridge.emit_interrupt_event(runtime_result)
-                        resume_data = await self.chat_bridge.wait_for_resume()
+                        api_triggers = [
+                            t
+                            for t in runtime_result.triggers
+                            if t.trigger_type == UiPathResumeTriggerType.API
+                        ]
 
-                        # Continue with resumed execution
-                        current_input = resume_data
-                        current_options.resume = True
-                        break
+                        if api_triggers:
+                            resume_map: dict[str, Any] = {}
+
+                            for trigger in api_triggers:
+
+                                # Emit startInterrupt event
+                                await self.chat_bridge.emit_interrupt_event(
+                                    trigger
+                                )
+
+                                resume_data = await self.chat_bridge.wait_for_resume()
+
+                                assert trigger.interrupt_id is not None, (
+                                    "Trigger interrupt_id cannot be None"
+                                )
+                                resume_map[trigger.interrupt_id] = resume_data
+
+                            current_input = resume_map
+                            current_options.resume = True
+                            break
+                        else:
+                            # No API triggers - yield result and complete
+                            yield event
+                            execution_completed = True
                     else:
                         yield event
                         execution_completed = True
