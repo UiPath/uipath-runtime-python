@@ -6,7 +6,7 @@ from uipath.core.chat import (
     UiPathConversationMessageEvent,
 )
 
-from uipath.runtime.result import UiPathRuntimeResult
+from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 
 
 class UiPathChatProtocol(Protocol):
@@ -35,12 +35,12 @@ class UiPathChatProtocol(Protocol):
 
     async def emit_interrupt_event(
         self,
-        interrupt_event: UiPathRuntimeResult,
+        resume_trigger: UiPathResumeTrigger,
     ) -> None:
         """Wrap and send an interrupt event.
 
         Args:
-            interrupt_event: UiPathConversationInterruptEvent to wrap and send
+            resume_trigger: UiPathResumeTrigger to wrap and send
         """
         ...
 

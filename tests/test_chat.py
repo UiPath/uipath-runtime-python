@@ -142,13 +142,15 @@ class SuspendingMockRuntime:
 
             if self.suspend_at_message is not None:
                 # Suspend with API trigger
+                trigger = UiPathResumeTrigger(
+                    interrupt_id="interrupt-1",
+                    trigger_type=UiPathResumeTriggerType.API,
+                    payload={"action": "confirm_tool_call"},
+                )
                 yield UiPathRuntimeResult(
                     status=UiPathRuntimeStatus.SUSPENDED,
-                    trigger=UiPathResumeTrigger(
-                        interrupt_id="interrupt-1",
-                        trigger_type=UiPathResumeTriggerType.API,
-                        payload={"action": "confirm_tool_call"},
-                    ),
+                    trigger=trigger,
+                    triggers=[trigger],
                 )
                 return
         else:
@@ -322,7 +324,10 @@ async def test_chat_runtime_handles_api_trigger_suspension():
     # Result should be SUCCESSFUL
     assert isinstance(result, UiPathRuntimeResult)
     assert result.status == UiPathRuntimeStatus.SUCCESSFUL
-    assert result.output == {"resumed": True, "input": {"approved": True}}
+    assert result.output == {
+        "resumed": True,
+        "input": {"interrupt-1": {"approved": True}},
+    }
 
     cast(AsyncMock, bridge.connect).assert_awaited_once()
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
@@ -369,3 +374,242 @@ async def test_chat_runtime_yields_events_during_suspension_flow():
     for event in events:
         if isinstance(event, UiPathRuntimeResult):
             assert event.status != UiPathRuntimeStatus.SUSPENDED
+
+
+class MultiTriggerMockRuntime:
+    """Mock runtime that suspends with multiple API triggers."""
+
+    def __init__(self) -> None:
+        self.execution_count = 0
+
+    async def dispose(self) -> None:
+        pass
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        """Execute with multiple trigger suspension."""
+        result: UiPathRuntimeResult | None = None
+        async for event in self.stream(input, cast(UiPathStreamOptions, options)):
+            if isinstance(event, UiPathRuntimeResult):
+                result = event
+        return (
+            result
+            if result
+            else UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+        )
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        """Stream with multiple trigger suspension."""
+        self.execution_count += 1
+        is_resume = options and options.resume
+
+        if not is_resume:
+            # Initial execution - suspend with 3 API triggers
+            trigger_a = UiPathResumeTrigger(
+                interrupt_id="email-confirm",
+                trigger_type=UiPathResumeTriggerType.API,
+                payload={"action": "send_email", "to": "user@example.com"},
+            )
+            trigger_b = UiPathResumeTrigger(
+                interrupt_id="file-delete",
+                trigger_type=UiPathResumeTriggerType.API,
+                payload={"action": "delete_file", "path": "/logs/old.txt"},
+            )
+            trigger_c = UiPathResumeTrigger(
+                interrupt_id="api-call",
+                trigger_type=UiPathResumeTriggerType.API,
+                payload={"action": "call_api", "endpoint": "/users"},
+            )
+
+            yield UiPathRuntimeResult(
+                status=UiPathRuntimeStatus.SUSPENDED,
+                trigger=trigger_a,
+                triggers=[trigger_a, trigger_b, trigger_c],
+            )
+        else:
+            # Resumed - verify all triggers resolved
+            assert input is not None
+            assert "email-confirm" in input
+            assert "file-delete" in input
+            assert "api-call" in input
+
+            yield UiPathRuntimeResult(
+                status=UiPathRuntimeStatus.SUCCESSFUL,
+                output={"resumed": True, "input": input},
+            )
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        raise NotImplementedError()
+
+
+class MixedTriggerMockRuntime:
+    """Mock runtime that suspends with mixed trigger types (API + non-API)."""
+
+    async def dispose(self) -> None:
+        pass
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        """Execute with mixed triggers."""
+        result: UiPathRuntimeResult | None = None
+        async for event in self.stream(input, cast(UiPathStreamOptions, options)):
+            if isinstance(event, UiPathRuntimeResult):
+                result = event
+        return (
+            result
+            if result
+            else UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+        )
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        """Stream with mixed trigger types."""
+        is_resume = options and options.resume
+
+        if not is_resume:
+            # Initial execution - 2 API + 1 QUEUE trigger
+            trigger_a = UiPathResumeTrigger(
+                interrupt_id="email-confirm",
+                trigger_type=UiPathResumeTriggerType.API,
+                payload={"action": "send_email"},
+            )
+            trigger_b = UiPathResumeTrigger(
+                interrupt_id="file-delete",
+                trigger_type=UiPathResumeTriggerType.API,
+                payload={"action": "delete_file"},
+            )
+            trigger_c = UiPathResumeTrigger(
+                interrupt_id="queue-item",
+                trigger_type=UiPathResumeTriggerType.QUEUE_ITEM,
+                payload={"queue": "inbox", "item": "123"},
+            )
+
+            yield UiPathRuntimeResult(
+                status=UiPathRuntimeStatus.SUSPENDED,
+                trigger=trigger_a,
+                triggers=[trigger_a, trigger_b, trigger_c],
+            )
+        else:
+            # Resumed - verify only API triggers resolved
+            assert input is not None
+            assert "email-confirm" in input
+            assert "file-delete" in input
+            # QUEUE trigger should NOT be in input (handled externally)
+
+            # Suspend again with only QUEUE trigger
+            trigger_c = UiPathResumeTrigger(
+                interrupt_id="queue-item",
+                trigger_type=UiPathResumeTriggerType.QUEUE_ITEM,
+                payload={"queue": "inbox", "item": "123"},
+            )
+
+            yield UiPathRuntimeResult(
+                status=UiPathRuntimeStatus.SUSPENDED,
+                trigger=trigger_c,
+                triggers=[trigger_c],
+            )
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        raise NotImplementedError()
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_handles_multiple_api_triggers():
+    """ChatRuntime should resolve all API triggers before resuming."""
+
+    runtime_impl = MultiTriggerMockRuntime()
+    bridge = make_chat_bridge_mock()
+
+    # Bridge returns approval for each trigger
+    cast(AsyncMock, bridge.wait_for_resume).side_effect = [
+        {"approved": True},  # email-confirm
+        {"approved": True},  # file-delete
+        {"approved": True},  # api-call
+    ]
+
+    chat_runtime = UiPathChatRuntime(
+        delegate=runtime_impl,
+        chat_bridge=bridge,
+    )
+
+    result = await chat_runtime.execute({})
+
+    await chat_runtime.dispose()
+
+    # Result should be SUCCESSFUL
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert isinstance(result.output, dict)
+    assert result.output["resumed"] is True
+
+    # Verify all 3 triggers were wrapped with interrupt_ids
+    resume_input = cast(dict[str, Any], result.output["input"])
+    assert "email-confirm" in resume_input
+    assert "file-delete" in resume_input
+    assert "api-call" in resume_input
+    assert resume_input["email-confirm"] == {"approved": True}
+    assert resume_input["file-delete"] == {"approved": True}
+    assert resume_input["api-call"] == {"approved": True}
+
+    # Bridge should have been called 3 times (once per trigger)
+    assert cast(AsyncMock, bridge.emit_interrupt_event).await_count == 3
+    assert cast(AsyncMock, bridge.wait_for_resume).await_count == 3
+
+    # Verify each emit_interrupt_event received a trigger
+    emit_calls = cast(AsyncMock, bridge.emit_interrupt_event).await_args_list
+    assert emit_calls[0][0][0].interrupt_id == "email-confirm"
+    assert emit_calls[1][0][0].interrupt_id == "file-delete"
+    assert emit_calls[2][0][0].interrupt_id == "api-call"
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_filters_non_api_triggers():
+    """ChatRuntime should only handle API triggers, pass through non-API triggers."""
+
+    runtime_impl = MixedTriggerMockRuntime()
+    bridge = make_chat_bridge_mock()
+
+    # Bridge returns approval for API triggers only
+    cast(AsyncMock, bridge.wait_for_resume).side_effect = [
+        {"approved": True},  # email-confirm
+        {"approved": True},  # file-delete
+    ]
+
+    chat_runtime = UiPathChatRuntime(
+        delegate=runtime_impl,
+        chat_bridge=bridge,
+    )
+
+    result = await chat_runtime.execute({})
+
+    await chat_runtime.dispose()
+
+    # Result should be SUSPENDED with QUEUE trigger (non-API)
+    assert result.status == UiPathRuntimeStatus.SUSPENDED
+    assert result.triggers is not None
+    assert len(result.triggers) == 1
+    assert result.triggers[0].interrupt_id == "queue-item"
+    assert result.triggers[0].trigger_type == UiPathResumeTriggerType.QUEUE_ITEM
+
+    # Bridge should have been called only 2 times (for 2 API triggers)
+    assert cast(AsyncMock, bridge.emit_interrupt_event).await_count == 2
+    assert cast(AsyncMock, bridge.wait_for_resume).await_count == 2
+
+    # Verify only API triggers were emitted
+    emit_calls = cast(AsyncMock, bridge.emit_interrupt_event).await_args_list
+    assert emit_calls[0][0][0].interrupt_id == "email-confirm"
+    assert emit_calls[0][0][0].trigger_type == UiPathResumeTriggerType.API
+    assert emit_calls[1][0][0].interrupt_id == "file-delete"
+    assert emit_calls[1][0][0].trigger_type == UiPathResumeTriggerType.API
