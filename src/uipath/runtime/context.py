@@ -12,6 +12,7 @@ from uipath.core.errors import UiPathFaultedTriggerError
 from uipath.core.tracing import UiPathTraceManager
 
 from uipath.runtime.errors import (
+    UiPathBaseRuntimeError,
     UiPathErrorCategory,
     UiPathErrorCode,
     UiPathErrorContract,
@@ -200,14 +201,14 @@ class UiPathRuntimeContext(BaseModel):
             if self.result is None:
                 self.result = UiPathRuntimeResult()
 
-            if exc_type:
+            if exc_type and exc_val:
                 # Create error info from exception
-                match exc_type:
+                match exc_val:
                     case UiPathFaultedTriggerError():
                         error_info = UiPathRuntimeError.from_resume_trigger_error(
                             exc_type
                         ).error_info
-                    case UiPathRuntimeError():
+                    case UiPathBaseRuntimeError():
                         error_info = exc_val.error_info
                     case _:
                         # Generic error
