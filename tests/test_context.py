@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from uipath.core.errors import ErrorCategory, UiPathFaultedTriggerError
 
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.errors import (
@@ -234,6 +235,38 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
     assert ctx.message_id == "msg-ghi"
     assert ctx.mcp_server_id == "mcp-server-456"
     assert ctx.mcp_server_slug == "test-server-slug"
+
+
+def test_result_file_written_on_faulted_trigger_error(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    ctx = UiPathRuntimeContext(
+        job_id="job-trigger-test",
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+    )
+
+    trigger_error = UiPathFaultedTriggerError(
+        ErrorCategory.SYSTEM, "Failed to create HITL action", "validation error"
+    )
+    trigger_error.category = ErrorCategory.SYSTEM
+    trigger_error.message = "Failed to create HITL action"
+
+    with pytest.raises(UiPathFaultedTriggerError):
+        with ctx:
+            raise trigger_error
+
+    result_path = Path(ctx.resolved_result_file_path)
+    assert result_path.exists()
+
+    content = json.loads(result_path.read_text())
+    assert content["status"] == UiPathRuntimeStatus.FAULTED.value
+    assert "error" in content
+
+    error = content["error"]
+    assert error["code"] == f"Python.{UiPathErrorCode.RESUME_TRIGGER_ERROR.value}"
+    assert error["title"] == "Resume trigger error"
+    assert "Failed to create HITL action" in error["detail"]
+    assert error["category"] == ErrorCategory.SYSTEM.value
 
 
 def test_string_output_wrapped_in_dict() -> None:
