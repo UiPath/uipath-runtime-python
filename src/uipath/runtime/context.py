@@ -206,7 +206,7 @@ class UiPathRuntimeContext(BaseModel):
                 match exc_val:
                     case UiPathFaultedTriggerError():
                         error_info = UiPathRuntimeError.from_resume_trigger_error(
-                            exc_type
+                            exc_val
                         ).error_info
                     case UiPathBaseRuntimeError():
                         error_info = exc_val.error_info
