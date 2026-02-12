@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from uipath.core.errors import UiPathPendingTriggerError
+from uipath.core.errors import ErrorCategory, UiPathPendingTriggerError
 
 from uipath.runtime import (
     UiPathExecuteOptions,
@@ -195,7 +195,7 @@ async def test_resumable_adds_only_new_triggers_on_partial_resume():
     async def read_trigger_impl(trigger: UiPathResumeTrigger) -> dict[str, Any]:
         if trigger.interrupt_id == "int-1":
             return {"approved": True}
-        raise UiPathPendingTriggerError("still pending")
+        raise UiPathPendingTriggerError(ErrorCategory.USER, "still pending")
 
     # Replace the mock with new side_effect
     trigger_manager.read_trigger = AsyncMock(side_effect=read_trigger_impl)  # type: ignore
@@ -235,7 +235,7 @@ async def test_resumable_completes_after_all_triggers_resolved():
     async def read_trigger_impl_2(trigger: UiPathResumeTrigger) -> dict[str, Any]:
         if trigger.interrupt_id == "int-1":
             return {"approved": True}
-        raise UiPathPendingTriggerError("pending")
+        raise UiPathPendingTriggerError(ErrorCategory.USER, "pending")
 
     trigger_manager.read_trigger = AsyncMock(side_effect=read_trigger_impl_2)  # type: ignore
 
