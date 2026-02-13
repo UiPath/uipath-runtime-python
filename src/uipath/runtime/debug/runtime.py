@@ -179,7 +179,7 @@ class UiPathDebugRuntime:
 
                         # Check if this is a suspended execution that needs polling
                         if (
-                            isinstance(self.delegate, UiPathResumableRuntime)
+                            (resumable_runtime := self.get_resumable_runtime())
                             and self.trigger_poll_interval > 0
                             and final_result.status == UiPathRuntimeStatus.SUSPENDED
                             and final_result.trigger
@@ -204,7 +204,7 @@ class UiPathDebugRuntime:
                                 else:
                                     trigger_data = await self._poll_trigger(
                                         final_result.trigger,
-                                        self.delegate.trigger_manager,
+                                        resumable_runtime.trigger_manager,
                                     )
                                 resume_data = {interrupt_id: trigger_data}
                             except UiPathDebugQuitError:
@@ -232,6 +232,18 @@ class UiPathDebugRuntime:
                 # Handle state update events - send to debug bridge
                 elif isinstance(event, UiPathRuntimeStateEvent):
                     await self.debug_bridge.emit_state_update(event)
+
+    def get_resumable_runtime(
+        self, max_depth: int = 10
+    ) -> UiPathResumableRuntime | None:
+        """Get the delegate resumable runtime, if exists."""
+        current_runtime: UiPathRuntimeProtocol = self
+        while hasattr(current_runtime, "delegate") and max_depth:
+            max_depth -= 1
+            current_runtime = current_runtime.delegate
+            if isinstance(current_runtime, UiPathResumableRuntime):
+                return current_runtime
+        return None
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Passthrough schema for the delegate."""
