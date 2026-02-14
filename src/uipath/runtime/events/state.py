@@ -65,6 +65,10 @@ class UiPathRuntimeStateEvent(UiPathRuntimeEvent):
     node_name: str | None = Field(
         default=None, description="Name of the node/agent that caused this update"
     )
+    qualified_node_name: str | None = Field(
+        default=None,
+        description="Fully qualified node name including subgraph hierarchy prefix",
+    )
     event_type: UiPathRuntimeEventType = Field(
         default=UiPathRuntimeEventType.RUNTIME_STATE, frozen=True
     )
