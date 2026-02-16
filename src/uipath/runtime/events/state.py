@@ -4,7 +4,11 @@ from typing import Any
 
 from pydantic import Field
 
-from uipath.runtime.events.base import UiPathRuntimeEvent, UiPathRuntimeEventType
+from uipath.runtime.events.base import (
+    UiPathRuntimeEvent,
+    UiPathRuntimeEventType,
+    UiPathRuntimeStatePhase,
+)
 
 
 class UiPathRuntimeMessageEvent(UiPathRuntimeEvent):
@@ -68,6 +72,10 @@ class UiPathRuntimeStateEvent(UiPathRuntimeEvent):
     qualified_node_name: str | None = Field(
         default=None,
         description="Fully qualified node name including subgraph hierarchy prefix",
+    )
+    phase: UiPathRuntimeStatePhase = Field(
+        default=UiPathRuntimeStatePhase.UPDATED,
+        description="Lifecycle phase: started, updated, or completed",
     )
     event_type: UiPathRuntimeEventType = Field(
         default=UiPathRuntimeEventType.RUNTIME_STATE, frozen=True
