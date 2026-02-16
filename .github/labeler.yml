@@ -1,0 +1,7 @@
+test:uipath-langchain:
+  - changed-files:
+    - any-glob-to-any-file: ['src/**/*.py']
+
+test:uipath:
+  - changed-files:
+    - any-glob-to-any-file: ['src/**/*.py']
