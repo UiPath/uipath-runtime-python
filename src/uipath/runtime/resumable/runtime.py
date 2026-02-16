@@ -16,6 +16,7 @@ from uipath.runtime.result import (
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
 )
+from uipath.runtime.resumable import UiPathResumeTriggerType
 from uipath.runtime.resumable.protocols import (
     UiPathResumableStorageProtocol,
     UiPathResumeTriggerProtocol,
@@ -82,8 +83,11 @@ class UiPathResumableRuntime:
             suspension_result = await self._handle_suspension(result)
 
             # check if any trigger may be resumed
+            # api triggers cannot be completed before suspending the job, skip them
             if suspension_result.status != UiPathRuntimeStatus.SUSPENDED or not (
-                fired_triggers := await self._restore_resume_input(None)
+                fired_triggers := await self._restore_resume_input(
+                    None, skip_trigger_types=[UiPathResumeTriggerType.API]
+                )
             ):
                 return suspension_result
 
@@ -115,6 +119,7 @@ class UiPathResumableRuntime:
 
         final_result: UiPathRuntimeResult | None = None
         execution_completed = False
+        fired_triggers = None
 
         while not execution_completed:
             async for event in self.delegate.stream(input, options=options):
@@ -127,8 +132,12 @@ class UiPathResumableRuntime:
             if final_result:
                 suspension_result = await self._handle_suspension(final_result)
 
+                # check if any trigger may be resumed
+                # api triggers cannot be completed before suspending the job, skip them
                 if suspension_result.status != UiPathRuntimeStatus.SUSPENDED or not (
-                    fired_triggers := await self._restore_resume_input(None)
+                    fired_triggers := await self._restore_resume_input(
+                        None, skip_trigger_types=[UiPathResumeTriggerType.API]
+                    )
                 ):
                     yield suspension_result
                     execution_completed = True
@@ -143,7 +152,9 @@ class UiPathResumableRuntime:
                     options.resume = True
 
     async def _restore_resume_input(
-        self, input: dict[str, Any] | None
+        self,
+        input: dict[str, Any] | None,
+        skip_trigger_types: list[UiPathResumeTriggerType] | None = None,
     ) -> dict[str, Any] | None:
         """Restore resume input from storage if not provided.
 
@@ -180,14 +191,18 @@ class UiPathResumableRuntime:
         if not triggers:
             return None
 
-        return await self._build_resume_map(triggers)
+        return await self._build_resume_map(triggers, skip_trigger_types)
 
     async def _build_resume_map(
-        self, triggers: list[UiPathResumeTrigger]
+        self,
+        triggers: list[UiPathResumeTrigger],
+        skip_trigger_types: list[UiPathResumeTriggerType] | None,
     ) -> dict[str, Any]:
         # Build resume map: {interrupt_id: resume_data}
         resume_map: dict[str, Any] = {}
         for trigger in triggers:
+            if skip_trigger_types and trigger.trigger_type in skip_trigger_types:
+                continue
             try:
                 data = await self.trigger_manager.read_trigger(trigger)
                 assert trigger.interrupt_id is not None, (
