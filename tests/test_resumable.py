@@ -127,7 +127,7 @@ def make_trigger_manager_mock() -> UiPathResumeTriggerProtocol:
     def create_trigger_impl(data: dict[str, Any]) -> UiPathResumeTrigger:
         return UiPathResumeTrigger(
             interrupt_id="",  # Will be set by resumable runtime
-            trigger_type=UiPathResumeTriggerType.API,
+            trigger_type=UiPathResumeTriggerType.TASK,
             payload=data,
         )
 
@@ -453,3 +453,101 @@ class TestResumableRuntime:
 
         # Delegate should have been executed only once)
         assert runtime_impl.execution_count == 1
+
+    @pytest.mark.asyncio
+    async def test_resumable_skips_api_triggers_on_auto_resume_check(self) -> None:
+        """API triggers should be skipped when checking for auto-resume after suspension."""
+
+        runtime_impl = MultiTriggerMockRuntime()
+        storage = StatefulStorageMock()
+        trigger_manager = make_trigger_manager_mock()
+
+        # Create trigger manager that returns API trigger type
+        def create_api_trigger(data: dict[str, Any]) -> UiPathResumeTrigger:
+            return UiPathResumeTrigger(
+                interrupt_id="",  # Will be set by resumable runtime
+                trigger_type=UiPathResumeTriggerType.API,
+                payload=data,
+            )
+
+        trigger_manager.create_trigger = AsyncMock(side_effect=create_api_trigger)  # type: ignore
+
+        async def read_trigger_impl(trigger: UiPathResumeTrigger) -> dict[str, Any]:
+            return {"approved": True}
+
+        trigger_manager.read_trigger = AsyncMock(side_effect=read_trigger_impl)  # type: ignore
+
+        resumable = UiPathResumableRuntime(
+            delegate=runtime_impl,
+            storage=storage,
+            trigger_manager=trigger_manager,
+            runtime_id="runtime-1",
+        )
+
+        # Execute - should suspend and NOT auto-resume because they are API triggers
+        result = await resumable.execute({})
+
+        assert result.status == UiPathRuntimeStatus.SUSPENDED
+        assert result.triggers is not None
+        assert len(result.triggers) == 2
+        assert {t.interrupt_id for t in result.triggers} == {"int-1", "int-2"}
+
+        # Verify all triggers are API type
+        assert all(
+            t.trigger_type == UiPathResumeTriggerType.API for t in result.triggers
+        )
+
+        # Delegate should have been executed only once (no auto-resume)
+        assert runtime_impl.execution_count == 1
+
+    @pytest.mark.asyncio
+    async def test_resumable_auto_resumes_task_triggers_but_not_api_triggers(
+        self,
+    ) -> None:
+        """Mixed triggers: TASK triggers should trigger auto-resume, API triggers should not."""
+
+        runtime_impl = MultiTriggerMockRuntime()
+        storage = StatefulStorageMock()
+        trigger_manager = make_trigger_manager_mock()
+
+        # Create different trigger types: int-1 is TASK, int-2 is API
+        def create_typed_trigger(data: dict[str, Any]) -> UiPathResumeTrigger:
+            # Determine trigger type based on payload action
+            if "approve_branch_1" in str(data):
+                trigger_type = UiPathResumeTriggerType.TASK
+            else:
+                trigger_type = UiPathResumeTriggerType.API
+
+            return UiPathResumeTrigger(
+                interrupt_id="",  # Will be set by resumable runtime
+                trigger_type=trigger_type,
+                payload=data,
+            )
+
+        trigger_manager.create_trigger = AsyncMock(side_effect=create_typed_trigger)  # type: ignore
+
+        # only TASK should trigger auto-resume
+        async def read_trigger_impl(trigger: UiPathResumeTrigger) -> dict[str, Any]:
+            return {"approved": True}
+
+        trigger_manager.read_trigger = AsyncMock(side_effect=read_trigger_impl)  # type: ignore
+
+        resumable = UiPathResumableRuntime(
+            delegate=runtime_impl,
+            storage=storage,
+            trigger_manager=trigger_manager,
+            runtime_id="runtime-1",
+        )
+
+        # Execute - should auto-resume based on int-1 (TASK) but skip int-2 (API)
+        result = await resumable.execute({})
+
+        # Should have auto-resumed once (because of TASK trigger)
+        assert result.status == UiPathRuntimeStatus.SUSPENDED
+        assert result.triggers is not None
+
+        # After auto-resume with int-1, should be at second suspension with int-2 and int-3
+        assert {t.interrupt_id for t in result.triggers} == {"int-2", "int-3"}
+
+        # Delegate should have been executed twice (initial + auto-resume for TASK trigger)
+        assert runtime_impl.execution_count == 2
