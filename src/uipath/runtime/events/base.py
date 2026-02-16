@@ -15,6 +15,15 @@ class UiPathRuntimeEventType(str, Enum):
     RUNTIME_RESULT = "runtime_result"
 
 
+class UiPathRuntimeStatePhase(str, Enum):
+    """Lifecycle phase of a state event."""
+
+    STARTED = "started"
+    UPDATED = "updated"
+    COMPLETED = "completed"
+    FAULTED = "faulted"
+
+
 class UiPathRuntimeEvent(BaseModel):
     """Base class for all UiPath runtime events."""
 
@@ -29,4 +38,4 @@ class UiPathRuntimeEvent(BaseModel):
     )
 
 
-__all__ = ["UiPathRuntimeEventType", "UiPathRuntimeEvent"]
+__all__ = ["UiPathRuntimeEventType", "UiPathRuntimeStatePhase", "UiPathRuntimeEvent"]
