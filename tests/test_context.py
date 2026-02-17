@@ -207,6 +207,7 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
             "outputFile": "my_output.json",
             "stateFile": "my_state.db",
             "logsFile": "my_logs.log",
+            "internalArguments": {"parentOperationId": "operationId-123"},
         },
         "fpsProperties": {
             "conversationalService.conversationId": "conv-abc",
@@ -228,6 +229,9 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
     )  # outputFile maps to result_file (serverless contract)
     assert ctx.state_file == "my_state.db"
     assert ctx.logs_file == "my_logs.log"
+
+    # parentOperationId is mapped correctly from internal_arguments
+    assert ctx.parent_operation_id == "operationId-123"
 
     # fpsProperties mapping
     assert ctx.conversation_id == "conv-abc"
