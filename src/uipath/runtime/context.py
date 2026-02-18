@@ -43,6 +43,7 @@ class UiPathRuntimeContext(BaseModel):
     org_id: str | None = None
     folder_key: str | None = None
     process_key: str | None = None
+    parent_operation_id: str | None = None
     config_path: str = "uipath.json"
     runtime_dir: str | None = Field(
         "__uipath", description="Directory for runtime files"
@@ -375,6 +376,14 @@ class UiPathRuntimeContext(BaseModel):
                 if config_key in runtime_config and hasattr(instance, attr_name):
                     attributes_set.add(attr_name)
                     setattr(instance, attr_name, runtime_config[config_key])
+
+            # Handle InternalArguments
+            internal_arguments = runtime_config.get("internalArguments", {})
+            if internal_arguments and isinstance(internal_arguments, dict):
+                parent_operation_id = internal_arguments.get("parentOperationId")
+                if parent_operation_id:
+                    attributes_set.add("parent_operation_id")
+                    instance.parent_operation_id = parent_operation_id
 
             # Handle fpsProperties mapping
             for config_key, attr_name in fps_mappings.items():
