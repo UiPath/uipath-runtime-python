@@ -79,11 +79,9 @@ uipath-{framework}/
 │           ├── loader.py                   # Dynamic agent/workflow loading
 │           ├── config.py                   # Config file parser ({framework}.json)
 │           ├── errors.py                   # Framework-specific error codes
-│           ├── _serialize.py               # Output serialization utility
 │           └── _storage.py                 # Optional: SQLite storage for HITL
 ├── tests/
 │   ├── test_schema_inference.py
-│   ├── test_serialization.py
 │   ├── test_context.py
 │   ├── test_graph.py
 │   ├── test_integration.py
@@ -353,99 +351,108 @@ For each framework, identify:
 | **OpenAI Agents** | `messages: str\|list` + `Agent[Context]` generic param | `agent.output_type` (Pydantic model or string) | Agents + handoffs + tools (flat) |
 | **LlamaIndex** | `StartEvent` Pydantic model | `StopEvent` or `workflow.output_cls` | Workflow steps + event flow |
 | **LangGraph** | `graph.get_input_jsonschema()` | `graph.get_output_jsonschema()` | `graph.get_graph(xray=N)` |
-| **Google ADK** | Agent's input schema / session state | Agent's output schema | Agent tree with sub-agents |
+| **Google ADK** | `LlmAgent.input_schema` (Pydantic `BaseModel`) — only on `LlmAgent`, not `BaseAgent` | `LlmAgent.output_schema` (Pydantic `BaseModel`) or `LlmAgent.output_key` (str) | `BaseAgent.sub_agents` tree + `LlmAgent.tools` list (`BaseTool`, `Callable`, `AgentTool`) |
 | **Pydantic AI** | `agent.run()` params / `deps_type` | `agent.result_type` | Agent + tools |
 | **CrewAI** | Crew's input variables | Crew's output type | Agents + tasks graph |
 
-#### 2.2 Implement Schema Extraction (`schema.py`)
+#### 2.2 Schema Inference Principles
 
-**Input schema** must always include a `"messages"` field if the framework supports conversational input:
+**The user's code dictates the schemas.** If the framework agent has strongly-typed input/output (e.g., Pydantic models), those types ARE the schemas. Messages is only the fallback for conversational agents without typed I/O.
+
+**Key rules:**
+1. **Use `isinstance` checks, not `getattr` guessing.** Verify the agent's actual type before accessing framework-specific attributes. Different agent types (e.g., LlmAgent vs composite agents) expose different attributes.
+2. **Import types from their actual module paths**, not from `__init__.py` re-exports that may not be stable. E.g., `from framework.tools.base_tool import BaseTool` instead of `from framework.tools import BaseTool`.
+3. **Use `uipath.runtime.schema` helpers** (`transform_references`, `transform_nullable_types`) instead of reimplementing ref resolution or nullable handling.
+4. **Typed input replaces messages.** If the agent defines `input_schema` (Pydantic model), use that as the full input schema. Don't merge it with messages.
+5. **Typed output replaces the generic result.** If the agent defines `output_schema` or equivalent, use that as the full output schema.
+
+#### 2.3 Implement Schema Extraction (`schema.py`)
 
 ```python
 """Schema inference for {Framework} agents."""
 from typing import Any
+from pydantic import BaseModel, TypeAdapter
 from uipath.runtime.schema import (
     UiPathRuntimeSchema, UiPathRuntimeGraph, UiPathRuntimeNode, UiPathRuntimeEdge,
-    transform_references, transform_nullable_types, transform_attachments,
+    transform_references, transform_nullable_types,
 )
 
-def get_entrypoints_schema(agent) -> dict[str, Any]:
+# Import the actual agent types for isinstance checks
+from framework import BaseAgent, LlmAgent  # Use real framework types
+
+
+def get_entrypoints_schema(agent: BaseAgent) -> dict[str, Any]:
     """Extract input/output JSON schemas from a framework agent.
 
-    Returns:
-        dict with "input" and "output" keys, each containing a JSON schema.
+    The user's code defines the agent type and its I/O schemas.
+    Use isinstance checks to determine what attributes are available.
     """
-    input_schema = _build_input_schema(agent)
-    output_schema = _build_output_schema(agent)
-    return {"input": input_schema, "output": output_schema}
-
-
-def _build_input_schema(agent) -> dict[str, Any]:
-    """Build JSON schema for agent input.
-
-    Strategy (adapt per framework):
-    1. Check if agent has typed input (Pydantic model, dataclass, TypedDict)
-    2. If yes: extract JSON schema from that type using TypeAdapter or model_json_schema()
-    3. Always include "messages" field for conversational agents
-    4. Resolve $ref references and handle nullable types
-    """
-    properties = {}
-    required = []
-
-    # ALWAYS include messages for conversational agents
-    properties["messages"] = {
-        "anyOf": [
-            {"type": "string"},
-            {"type": "array", "items": {"type": "object"}}
-        ],
-        "title": "Messages",
-        "description": "User messages to send to the agent",
+    schema: dict[str, Any] = {
+        "input": _default_input_schema(),
+        "output": _default_output_schema(),
     }
-    required.append("messages")
 
-    # Framework-specific: extract additional input fields
-    # Example for typed context/deps:
-    input_type = _get_agent_input_type(agent)  # Framework-specific detection
-    if input_type is not None:
+    # Only access typed I/O attributes on agent types that have them
+    if not isinstance(agent, LlmAgent):
+        return schema
+
+    # Input: if agent has typed input_schema, use it as the full input
+    input_type = agent.input_schema  # Framework-specific attribute
+    if input_type is not None and _is_pydantic_model(input_type):
         try:
-            from pydantic import TypeAdapter
-            schema = TypeAdapter(input_type).json_schema()
-            schema, _ = transform_references(schema)
-            schema = transform_nullable_types(schema)
-            if "properties" in schema:
-                properties.update(schema["properties"])
-                required.extend(schema.get("required", []))
+            adapter = TypeAdapter(input_type)
+            json_schema = adapter.json_schema()
+            resolved, _ = transform_references(json_schema)
+            schema["input"] = {
+                "type": "object",
+                "properties": transform_nullable_types(
+                    resolved.get("properties", {})
+                ),
+                "required": resolved.get("required", []),
+            }
         except Exception:
             pass
 
+    # Output: if agent has typed output, use it as the full output
+    output_type = agent.output_schema  # Framework-specific attribute
+    if output_type is not None and _is_pydantic_model(output_type):
+        try:
+            adapter = TypeAdapter(output_type)
+            json_schema = adapter.json_schema()
+            resolved, _ = transform_references(json_schema)
+            schema["output"] = {
+                "type": "object",
+                "properties": transform_nullable_types(
+                    resolved.get("properties", {})
+                ),
+                "required": resolved.get("required", []),
+            }
+        except Exception:
+            pass
+
+    return schema
+
+
+def _default_input_schema() -> dict[str, Any]:
+    """Fallback input schema for conversational agents without typed input."""
     return {
         "type": "object",
-        "properties": properties,
-        "required": required,
+        "properties": {
+            "messages": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "array", "items": {"type": "object"}}
+                ],
+                "title": "Messages",
+                "description": "User messages to send to the agent",
+            }
+        },
+        "required": ["messages"],
     }
 
 
-def _build_output_schema(agent) -> dict[str, Any]:
-    """Build JSON schema for agent output.
-
-    Strategy (adapt per framework):
-    1. Check if agent has typed output (result_type, output_type, output_cls)
-    2. If Pydantic model: use TypeAdapter to extract schema
-    3. If no typed output: return generic result schema
-    """
-    output_type = _get_agent_output_type(agent)  # Framework-specific
-
-    if output_type is not None:
-        try:
-            from pydantic import TypeAdapter
-            schema = TypeAdapter(output_type).json_schema()
-            schema, _ = transform_references(schema)
-            schema = transform_nullable_types(schema)
-            return schema
-        except Exception:
-            pass
-
-    # Fallback: generic result schema
+def _default_output_schema() -> dict[str, Any]:
+    """Fallback output schema when no typed output is defined."""
     return {
         "type": "object",
         "properties": {
@@ -463,30 +470,13 @@ def _build_output_schema(agent) -> dict[str, Any]:
     }
 
 
-def _get_agent_input_type(agent):
-    """Detect the agent's input type. FRAMEWORK-SPECIFIC.
-
-    Examples by framework:
-    - OpenAI Agents: get_args(agent.__orig_class__)[0] if Agent[MyContext]
-    - LlamaIndex: workflow's StartEvent class
-    - LangGraph: graph.get_input_jsonschema() (already JSON schema)
-    - Pydantic AI: agent._deps_type
-    - Google ADK: agent.input_schema or session state type
-    """
-    raise NotImplementedError("Implement for your framework")
-
-
-def _get_agent_output_type(agent):
-    """Detect the agent's output type. FRAMEWORK-SPECIFIC.
-
-    Examples by framework:
-    - OpenAI Agents: agent.output_type (may be AgentOutputSchema wrapper)
-    - LlamaIndex: StopEvent fields or workflow.output_cls
-    - LangGraph: graph.get_output_jsonschema() (already JSON schema)
-    - Pydantic AI: agent.result_type
-    - Google ADK: agent.output_schema
-    """
-    raise NotImplementedError("Implement for your framework")
+def _is_pydantic_model(type_hint: Any) -> bool:
+    """Check if a type hint is a Pydantic BaseModel class."""
+    import inspect
+    try:
+        return inspect.isclass(type_hint) and issubclass(type_hint, BaseModel)
+    except TypeError:
+        return False
 ```
 
 #### 2.3 Implement Graph Building
@@ -546,26 +536,38 @@ def _add_agent_nodes(agent, nodes, edges, visited):
 # tests/test_schema_inference.py
 import pytest
 
-def test_input_schema_has_messages():
-    agent = create_test_agent()  # Framework-specific fixture
+def test_conversational_agent_uses_messages():
+    """Agent without typed input falls back to messages."""
+    agent = create_basic_agent()  # No input_schema
     schema = get_entrypoints_schema(agent)
     assert "messages" in schema["input"]["properties"]
     assert "messages" in schema["input"]["required"]
 
-def test_input_schema_includes_context_fields():
-    agent = create_agent_with_typed_context()
+def test_typed_input_replaces_messages():
+    """Agent with input_schema uses it as the full input — no messages."""
+    agent = create_agent_with_input_schema()
     schema = get_entrypoints_schema(agent)
-    # Verify context fields are merged into input schema
     assert "my_field" in schema["input"]["properties"]
+    assert "messages" not in schema["input"]["properties"]
 
-def test_output_schema_with_typed_output():
-    agent = create_agent_with_output_type()
+def test_typed_output_replaces_generic_result():
+    """Agent with output_schema uses it as the full output."""
+    agent = create_agent_with_output_schema()
     schema = get_entrypoints_schema(agent)
-    assert "result_field" in schema["output"]["properties"]
+    assert "my_result" in schema["output"]["properties"]
+    assert "result" not in schema["output"]["properties"]
 
 def test_output_schema_fallback():
+    """Agent without typed output falls back to generic result."""
     agent = create_basic_agent()
     schema = get_entrypoints_schema(agent)
+    assert "result" in schema["output"]["properties"]
+
+def test_composite_agent_gets_default_schemas():
+    """Composite/orchestrator agents that don't have typed I/O get defaults."""
+    agent = create_composite_agent()
+    schema = get_entrypoints_schema(agent)
+    assert "messages" in schema["input"]["properties"]
     assert "result" in schema["output"]["properties"]
 
 def test_graph_has_start_end():
@@ -603,8 +605,8 @@ from uipath.runtime import (
 )
 from uipath.runtime.events import UiPathRuntimeMessageEvent, UiPathRuntimeStateEvent
 
+from uipath.core.serialization import serialize_defaults
 from .schema import get_entrypoints_schema, get_agent_graph
-from ._serialize import serialize_output
 from .errors import FrameworkRuntimeError, FrameworkErrorCode
 
 
@@ -642,7 +644,7 @@ class UiPathFrameworkRuntime:
             result = await self._run_agent(agent_input, options)
 
             # 3. Serialize output to dict
-            output = serialize_output(result)
+            output = serialize_defaults(result)
             if not isinstance(output, dict):
                 output = {"result": output}
 
@@ -731,64 +733,20 @@ class UiPathFrameworkRuntime:
         )
 ```
 
-#### 3.2 Implement Output Serialization (`_serialize.py`)
+#### 3.2 Output Serialization
 
-This is mostly framework-agnostic. Recursively converts any Python object to JSON-serializable dicts:
+Use the `serialize_defaults` function from `uipath.core.serialization` — do NOT create a custom `_serialize.py`. This utility handles all common Python types (Pydantic models, dataclasses, dicts, lists, enums, primitives) and is already tested and maintained by the core SDK.
 
 ```python
-"""Output serialization utility."""
-import dataclasses
-from enum import Enum
-from typing import Any
+from uipath.core.serialization import serialize_defaults
 
-def serialize_output(output: Any) -> Any:
-    """Recursively serialize output to JSON-compatible format.
+# In execute():
+output = serialize_defaults(result)
+if not isinstance(output, dict):
+    output = {"result": output}
 
-    Handles: Pydantic models, dataclasses, dicts, lists, enums, primitives.
-    """
-    if output is None:
-        return {}
-
-    # Pydantic v2
-    if hasattr(output, "model_dump") and not isinstance(output, type):
-        return serialize_output(output.model_dump(by_alias=True))
-
-    # Pydantic v1
-    if hasattr(output, "dict") and not isinstance(output, type):
-        return serialize_output(output.dict())
-
-    # Custom to_dict
-    if hasattr(output, "to_dict"):
-        return serialize_output(output.to_dict())
-
-    # Dataclass instances
-    if dataclasses.is_dataclass(output) and not isinstance(output, type):
-        return serialize_output(dataclasses.asdict(output))
-
-    # Dicts
-    if isinstance(output, dict):
-        return {k: serialize_output(v) for k, v in output.items()}
-
-    # Lists
-    if isinstance(output, list):
-        return [serialize_output(item) for item in output]
-
-    # Enums
-    if isinstance(output, Enum):
-        return output.value
-
-    # Primitives
-    if isinstance(output, (str, int, float, bool, bytes)):
-        return output
-
-    # Other iterables
-    if hasattr(output, "__iter__") and not isinstance(output, (str, bytes)):
-        try:
-            return serialize_output(dict(output))
-        except (TypeError, ValueError):
-            return output
-
-    return output
+# In stream() for event payloads:
+payload = serialize_defaults(event_data)
 ```
 
 #### Validation for Step 3
@@ -865,7 +823,7 @@ async def stream(
         # Final result (MUST be last yield)
         result = self._get_final_result()
         yield UiPathRuntimeResult(
-            output=serialize_output(result),
+            output=serialize_defaults(result),
             status=UiPathRuntimeStatus.SUCCESSFUL,
         )
 
@@ -880,13 +838,13 @@ def _convert_event(self, event) -> UiPathRuntimeEvent | None:
 
     For MESSAGE events (AI text, tool calls, reasoning):
         return UiPathRuntimeMessageEvent(
-            payload=serialize_output(event),
+            payload=serialize_defaults(event),
             metadata={"event_name": "message_created"},
         )
 
     For STATE events (node transitions, state updates):
         return UiPathRuntimeStateEvent(
-            payload=serialize_output(state_dict),
+            payload=serialize_defaults(state_dict),
             node_name="node_that_produced_this",
             metadata={"event_name": "state_update"},
         )
@@ -1101,7 +1059,7 @@ async def _handle_suspension(self, suspend_value, runtime_id):
     - LlamaIndex: detect InputRequiredEvent, save context via JsonPickleSerializer
     """
     return UiPathRuntimeResult(
-        output=serialize_output(suspend_value),
+        output=serialize_defaults(suspend_value),
         status=UiPathRuntimeStatus.SUSPENDED,
         # Triggers are managed by UiPathResumableRuntime wrapper
     )
@@ -1429,10 +1387,6 @@ def register_runtime_factory():
         create_factory,
         CONFIG_FILE,         # e.g., "google_adk.json"
     )
-
-
-# Auto-register on import
-register_runtime_factory()
 ```
 
 #### 7.3 Entry Point in `pyproject.toml`
@@ -1556,9 +1510,321 @@ async def test_full_lifecycle():
 
 ---
 
+### STEP 9: LLM Provider Classes (Chat Module)
+
+Most framework integrations need to route LLM calls through UiPath's LLM Gateway (AgentHub). This step shows how to create provider-specific LLM classes that transparently proxy requests through the gateway.
+
+#### 9.1 Architecture
+
+The `chat/` module provides drop-in LLM classes that users pass to their framework's agent constructor. Each class wraps a framework's native LLM class (or implements its base protocol) and redirects HTTP traffic through UiPath's gateway:
+
+```
+Framework Agent
+  └── UiPathOpenAI / UiPathGemini / UiPathAnthropic  (your chat module)
+        └── UiPath LLM Gateway
+              └── Actual LLM provider (OpenAI, Google, Anthropic)
+```
+
+Gateway URL format: `{UIPATH_URL}/agenthub_/llm/raw/vendor/{vendor}/model/{model}/completions`
+
+#### 9.2 Shared Utilities (`_common.py`)
+
+Create a `_common.py` with three shared helpers used by all providers:
+
+```python
+# src/uipath_{framework}/chat/_common.py
+import os
+from uipath.utils import EndpointManager
+
+def get_uipath_config() -> tuple[str, str]:
+    """Read UIPATH_URL and UIPATH_ACCESS_TOKEN from environment."""
+    uipath_url = os.getenv("UIPATH_URL")
+    if not uipath_url:
+        raise ValueError("UIPATH_URL environment variable is required")
+    access_token = os.getenv("UIPATH_ACCESS_TOKEN")
+    if not access_token:
+        raise ValueError("UIPATH_ACCESS_TOKEN environment variable is required")
+    return uipath_url, access_token
+
+def get_uipath_headers(token: str) -> dict[str, str]:
+    """Build auth + tracking headers for gateway requests."""
+    headers = {"Authorization": f"Bearer {token}"}
+    if job_key := os.getenv("UIPATH_JOB_KEY"):
+        headers["X-UiPath-JobKey"] = job_key
+    if process_key := os.getenv("UIPATH_PROCESS_KEY"):
+        headers["X-UiPath-ProcessKey"] = process_key
+    return headers
+
+def build_gateway_url(vendor: str, model: str, uipath_url: str | None = None) -> str:
+    """Build full gateway URL using EndpointManager."""
+    if not uipath_url:
+        uipath_url = os.getenv("UIPATH_URL")
+    if not uipath_url:
+        raise ValueError("UIPATH_URL environment variable is required")
+    vendor_endpoint = EndpointManager.get_vendor_endpoint()
+    formatted = vendor_endpoint.format(vendor=vendor, model=model)
+    return f"{uipath_url.rstrip('/')}/{formatted}"
+```
+
+#### 9.3 Gateway Vendor Routing, API Flavor, and Model Naming
+
+The gateway URL requires a **vendor** and **model** in the path. The correct vendor depends on the model name prefix:
+
+| Model prefix | Vendor | API Flavor Header | Example model |
+|---|---|---|---|
+| `gpt-*`, `o1-*`, `o3-*` | `openai` | `OpenAiChatCompletions` | `gpt-4.1-2025-04-14` |
+| `gemini-*` | `vertexai` | `GeminiGenerateContent` | `gemini-2.5-flash` |
+| `anthropic.*` (Bedrock) | `awsbedrock` | `AnthropicClaude` | `anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `claude-*` (Vertex) | `vertexai` | `AnthropicClaude` | `claude-sonnet-4-20250514` |
+
+**Required header**: Every request MUST include `X-UiPath-LlmGateway-ApiFlavor` so the gateway knows how to parse the request body. Without it, the gateway returns a 500 error.
+
+**URL-rewriting is required**: Many provider SDKs append their own API paths to the `base_url` (e.g., the Anthropic SDK appends `/v1/messages`). This causes 404 errors because the gateway expects requests at `.../completions` exactly. Always use a URL-rewriting httpx transport instead of relying on `base_url`.
+
+Example URL: `{UIPATH_URL}/agenthub_/llm/raw/vendor/awsbedrock/model/anthropic.claude-haiku-4-5-20251001-v1:0/completions`
+
+#### 9.4 Three Integration Strategies
+
+There are three strategies depending on what the framework's LLM class exposes:
+
+**Strategy A: URL-Rewriting Transport with SDK Client** (e.g., Anthropic)
+
+When the provider's SDK creates its own HTTP client, provide a custom `http_client` with a URL-rewriting transport:
+
+```python
+# src/uipath_{framework}/chat/anthropic.py
+import httpx
+from functools import cached_property
+from google.adk.models.anthropic_llm import AnthropicLlm
+from typing_extensions import override
+from uipath._utils._ssl_context import get_httpx_client_kwargs
+from ._common import build_gateway_url, get_uipath_config, get_uipath_headers
+
+class _AsyncUrlRewriteTransport(httpx.AsyncBaseTransport):
+    def __init__(self, gateway_url: str, **kwargs):
+        self.gateway_url = gateway_url
+        self._transport = httpx.AsyncHTTPTransport(**kwargs)
+
+    async def handle_async_request(self, request):
+        if "/v1/messages" in str(request.url):
+            gateway_url_parsed = httpx.URL(self.gateway_url)
+            headers = dict(request.headers)
+            headers["host"] = gateway_url_parsed.host
+            request = httpx.Request(
+                method=request.method, url=self.gateway_url,
+                headers=headers, content=request.content,
+                extensions=request.extensions,
+            )
+        return await self._transport.handle_async_request(request)
+
+class UiPathAnthropic(AnthropicLlm):
+    @cached_property
+    @override
+    def _anthropic_client(self):
+        from anthropic import AsyncAnthropic  # type: ignore[import-not-found]
+        uipath_url, token = get_uipath_config()
+        # anthropic.claude-* → Bedrock, claude-* → Vertex AI
+        vendor = "awsbedrock" if self.model.startswith("anthropic.") else "vertexai"
+        gateway_url = build_gateway_url(vendor, self.model, uipath_url)
+        auth_headers = get_uipath_headers(token)
+        auth_headers["X-UiPath-LlmGateway-ApiFlavor"] = "AnthropicClaude"
+        client_kwargs = get_httpx_client_kwargs()
+        http_client = httpx.AsyncClient(
+            transport=_AsyncUrlRewriteTransport(gateway_url),
+            headers=auth_headers, **client_kwargs,
+        )
+        return AsyncAnthropic(api_key=token, http_client=http_client)
+```
+
+**Key pattern**: The parent class (`AnthropicLlm`) creates its async client in a `cached_property`. Override that property to inject a custom `http_client` with a URL-rewriting transport. Do NOT use `base_url` — the Anthropic SDK appends `/v1/messages` to it, causing 404 errors. The rest of the class (content conversion, streaming, tool calling) works unchanged.
+
+**Strategy B: URL-Rewriting httpx Transport** (for SDK clients that build URLs internally — e.g., Gemini)
+
+When the provider's SDK builds URLs internally, intercept at the HTTP transport layer:
+
+```python
+# src/uipath_{framework}/chat/gemini.py
+import httpx
+from functools import cached_property
+from google.adk.models.google_llm import Gemini
+from google.genai import Client, types
+from typing_extensions import override
+from uipath._utils._ssl_context import get_httpx_client_kwargs
+from ._common import build_gateway_url, get_uipath_config, get_uipath_headers
+
+def _rewrite_request_for_gateway(request: httpx.Request, gateway_url: str) -> httpx.Request:
+    """Rewrite generateContent URLs to the UiPath gateway."""
+    url_str = str(request.url)
+    if "generateContent" in url_str or "streamGenerateContent" in url_str:
+        is_streaming = "streamGenerateContent" in url_str
+        headers = dict(request.headers)
+        if is_streaming:
+            headers["X-UiPath-Streaming-Enabled"] = "true"
+        gateway_url_parsed = httpx.URL(gateway_url)
+        headers["host"] = gateway_url_parsed.host
+        return httpx.Request(
+            method=request.method, url=gateway_url,
+            headers=headers, content=request.content,
+            extensions=request.extensions,
+        )
+    return request
+
+class _AsyncUrlRewriteTransport(httpx.AsyncBaseTransport):
+    def __init__(self, gateway_url: str, **kwargs):
+        self.gateway_url = gateway_url
+        self._transport = httpx.AsyncHTTPTransport(**kwargs)
+
+    async def handle_async_request(self, request):
+        request = _rewrite_request_for_gateway(request, self.gateway_url)
+        return await self._transport.handle_async_request(request)
+
+class UiPathGemini(Gemini):
+    @cached_property
+    @override
+    def api_client(self) -> Client:
+        uipath_url, token = get_uipath_config()
+        gateway_url = build_gateway_url("vertexai", self.model, uipath_url)
+        auth_headers = get_uipath_headers(token)
+        auth_headers["X-UiPath-LlmGateway-ApiFlavor"] = "GeminiGenerateContent"
+        client_kwargs = get_httpx_client_kwargs()
+        http_options = types.HttpOptions(
+            headers=self._tracking_headers(),
+            httpx_async_client=httpx.AsyncClient(
+                transport=_AsyncUrlRewriteTransport(gateway_url),
+                headers=auth_headers, **client_kwargs,
+            ),
+        )
+        return Client(api_key="uipath-gateway", http_options=http_options)
+```
+
+**Key pattern**: The `Gemini` class creates a `google.genai.Client` in a `cached_property` called `api_client`. The `Client` constructor accepts `http_options` with custom httpx clients. Inject a transport that intercepts `generateContent`/`streamGenerateContent` requests and rewrites the URL to the gateway. All native Gemini features (streaming, caching, tool calling) work automatically.
+
+**Strategy C: Raw HTTP + Full Content Conversion** (when no framework LLM class exists — e.g., OpenAI)
+
+When the framework doesn't have a built-in class for the provider, implement `BaseLlm` directly:
+
+```python
+# src/uipath_{framework}/chat/openai.py
+from google.adk.models.base_llm import BaseLlm
+from google.genai import types
+
+class UiPathOpenAI(BaseLlm):
+    model: str = "gpt-4.1-2025-04-14"
+
+    async def generate_content_async(self, llm_request, stream=False):
+        # 1. Convert LlmRequest → OpenAI chat completions format
+        body = self._build_request_body(llm_request, self.model, stream)
+        # 2. POST to gateway via httpx
+        # 3. Parse response (SSE for streaming) → yield LlmResponse
+        ...
+```
+
+This requires implementing content conversion between the framework's types and the provider's API format. Key conversions:
+- `types.Content` (role + parts) → OpenAI messages (role + content/tool_calls)
+- `types.FunctionDeclaration` → OpenAI tools format
+- `response_schema` → OpenAI `response_format` with `json_schema`
+- SSE `data: {...}` lines → `LlmResponse` with partial content
+
+> **Tip**: Look at the framework's existing LiteLLM integration (e.g., `google.adk.models.lite_llm`) for content conversion patterns. It speaks OpenAI format internally and has helpers like `_content_to_message_param()` and `_function_declaration_to_tool_param()` that you can use as reference.
+
+#### 9.5 Lazy Imports for Optional Dependencies
+
+If a provider SDK is an optional dependency (e.g., `anthropic`), use lazy imports at every level:
+
+```python
+# chat/__init__.py — lazy imports avoid loading optional deps at import time
+def __getattr__(name):
+    if name == "UiPathOpenAI":
+        from .openai import UiPathOpenAI
+        return UiPathOpenAI
+    if name == "UiPathGemini":
+        from .gemini import UiPathGemini
+        return UiPathGemini
+    if name == "UiPathAnthropic":
+        from .anthropic import UiPathAnthropic
+        return UiPathAnthropic
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+__all__ = ["UiPathOpenAI", "UiPathGemini", "UiPathAnthropic"]
+```
+
+**Why**: Eager imports cause `ModuleNotFoundError` when optional dependencies aren't installed. The `__getattr__` pattern defers loading until the class is actually used.
+
+In `pyproject.toml`, declare optional deps:
+```toml
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.43.0"]
+```
+
+#### 9.6 SSL Context
+
+Always use `get_httpx_client_kwargs()` from `uipath._utils._ssl_context` when creating httpx clients. This provides the correct SSL context, timeout, and redirect settings:
+
+```python
+from uipath._utils._ssl_context import get_httpx_client_kwargs
+
+client_kwargs = get_httpx_client_kwargs()
+# Returns: {"follow_redirects": True, "timeout": 30.0, "verify": ssl_context}
+
+async with httpx.AsyncClient(**client_kwargs) as client:
+    ...
+```
+
+#### 9.7 Package Layout
+
+```
+src/uipath_{framework}/
+├── __init__.py          # Lazy exports for LLM classes
+├── chat/
+│   ├── __init__.py      # Lazy imports (__getattr__ pattern)
+│   ├── _common.py       # Shared: get_uipath_config, headers, gateway URL
+│   ├── openai.py        # UiPathOpenAI(BaseLlm) — raw HTTP
+│   ├── gemini.py        # UiPathGemini(Gemini) — URL-rewriting transport
+│   └── anthropic.py     # UiPathAnthropic(AnthropicLlm) — URL-rewriting transport
+└── runtime/
+    └── ...              # Runtime integration (STEPs 1-8)
+```
+
+#### 9.8 Usage
+
+```python
+from uipath_google_adk.chat import UiPathOpenAI, UiPathGemini, UiPathAnthropic
+from google.adk.agents import Agent
+
+# OpenAI models via gateway
+agent = Agent(name="assistant", model=UiPathOpenAI(model="gpt-4.1-2025-04-14"), ...)
+
+# Gemini models via gateway
+agent = Agent(name="assistant", model=UiPathGemini(model="gemini-2.5-flash"), ...)
+
+# Anthropic models via gateway
+agent = Agent(name="assistant", model=UiPathAnthropic(model="claude-sonnet-4-20250514"), ...)
+```
+
+#### 9.9 Checklist
+
+- [ ] Shared `_common.py` with `get_uipath_config()`, `get_uipath_headers()`, `build_gateway_url()`
+- [ ] Each provider class routes through UiPath gateway URL
+- [ ] Correct **vendor** selected per model prefix (`openai`, `vertexai`, `awsbedrock` — see table in 9.3)
+- [ ] `X-UiPath-LlmGateway-ApiFlavor` header set on every request (gateway returns 500 without it)
+- [ ] URL-rewriting transport used (do NOT rely on SDK `base_url` — SDKs append paths causing 404s)
+- [ ] Auth headers include `Authorization`, optional `X-UiPath-JobKey`, `X-UiPath-ProcessKey`
+- [ ] Uses `EndpointManager.get_vendor_endpoint()` for URL construction
+- [ ] Uses `get_httpx_client_kwargs()` for SSL/timeout when creating httpx clients
+- [ ] Optional dependencies use lazy imports (`__getattr__`) at all package levels
+- [ ] Optional deps declared in `pyproject.toml` under `[project.optional-dependencies]`
+- [ ] mypy overrides added for optional import modules
+- [ ] Streaming sets `X-UiPath-Streaming-Enabled: true` header
+- [ ] All type annotations pass mypy (use `Dict[str, Any]` not bare `dict` for generic types)
+
+---
+
 ## Quick Reference: Key Imports
 
 ```python
+# Serialization (use this instead of writing your own _serialize.py)
+from uipath.core.serialization import serialize_defaults
+
 # Core protocols and types
 from uipath.runtime import (
     UiPathRuntimeProtocol,           # Main protocol to implement
@@ -1613,19 +1879,22 @@ from uipath.runtime.resumable.protocols import UiPathResumableStorageProtocol
 When implementing for a specific framework, check off these items:
 
 ### Schema Inference
-- [ ] Can detect input type from agent definition (typed params, Pydantic model, context/deps)
-- [ ] Always includes `messages` field in input schema for conversational agents
-- [ ] Can detect output type (result_type, output_type, return annotation)
-- [ ] Falls back to generic `{"result": any}` output schema
-- [ ] Resolves `$ref` references in generated JSON schemas
-- [ ] Handles nullable types properly
+- [ ] Uses `isinstance` checks (not `getattr`) to verify agent type before accessing I/O attributes
+- [ ] Imports framework types from their actual module paths, not `__init__.py` re-exports
+- [ ] Uses `uipath.runtime.schema.transform_references()` for `$ref` resolution (don't reimplement)
+- [ ] Uses `uipath.runtime.schema.transform_nullable_types()` for nullable handling (don't reimplement)
+- [ ] When agent has typed input (Pydantic model), uses it as the FULL input schema (replaces messages)
+- [ ] When agent has typed output, uses it as the FULL output schema (replaces generic result)
+- [ ] Falls back to `messages` input schema only for conversational agents without typed input
+- [ ] Falls back to generic `{"result": any}` output schema only when no typed output exists
+- [ ] Tool type parameters are strongly typed (e.g., `Callable | BaseTool | BaseToolset`)
 - [ ] Builds visualization graph with correct node types
 
 ### Execution
 - [ ] `execute()` runs agent and returns `UiPathRuntimeResult`
 - [ ] Input `messages` field is correctly passed to framework
 - [ ] Additional input fields are parsed into context/deps/config
-- [ ] Output is serialized to dict via `serialize_output()`
+- [ ] Output is serialized to dict via `uipath.core.serialization.serialize_defaults()` (do NOT create a custom `_serialize.py`)
 - [ ] Errors are caught and wrapped in `FrameworkRuntimeError`
 
 ### Streaming
@@ -1654,7 +1923,6 @@ When implementing for a specific framework, check off these items:
 
 ### Testing
 - [ ] Schema inference tests (input, output, graph)
-- [ ] Serialization tests (all Python types)
 - [ ] Config parsing tests (valid, invalid, missing)
 - [ ] Loader tests (security, resolution patterns)
 - [ ] Execute tests (success, error handling)
@@ -1677,3 +1945,8 @@ Source code locations (in this monorepo):
 - **LlamaIndex**: `packages/uipath-llamaindex/src/uipath_llamaindex/runtime/`
 - **LangGraph**: See `uipath-langchain-python` repo: `src/uipath_langchain/runtime/`
 - **Runtime contracts**: `uipath-runtime-python` repo, or installed at `.venv/Lib/site-packages/uipath/runtime/`
+
+LLM Gateway chat module locations:
+- **Google ADK**: `packages/uipath-google-adk/src/uipath_google_adk/chat/` (OpenAI, Gemini, Anthropic)
+- **OpenAI Agents**: `packages/uipath-openai-agents/src/uipath_openai_agents/chat/` (OpenAI)
+- **LlamaIndex**: `packages/uipath-llamaindex/src/uipath_llamaindex/llms/` (Vertex/Gemini)

@@ -11,10 +11,15 @@ Runtime abstractions and contracts for the UiPath Python SDK.
 `uipath-runtime` provides the foundational interfaces and base contracts for building agent runtimes in the UiPath ecosystem. It defines the protocols that all runtime implementations must follow and provides utilities for execution context, event streaming, tracing, structured error handling, durable execution, and human-in-the-loop interactions.
 
 This package is typically used as a dependency by higher-level SDKs such as:
-- [`uipath`](https://github.com/uipath/uipath-python) [![PyPI](https://img.shields.io/pypi/v/uipath?label=pypi)](https://pypi.org/project/uipath/) [![Downloads](https://img.shields.io/pypi/dm/uipath?label=)](https://pypi.org/project/uipath/) [![GitHub](https://img.shields.io/github/stars/uipath/uipath-python?style=social)](https://github.com/uipath/uipath-python)
-- [`uipath-langchain`](https://github.com/uipath/uipath-langchain-python) [![PyPI](https://img.shields.io/pypi/v/uipath-langchain?label=pypi)](https://pypi.org/project/uipath-langchain/) [![Downloads](https://img.shields.io/pypi/dm/uipath-langchain?label=)](https://pypi.org/project/uipath-langchain/) [![GitHub](https://img.shields.io/github/stars/uipath/uipath-langchain-python?style=social)](https://github.com/uipath/uipath-langchain-python)
-- [`uipath-llamaindex`](https://github.com/uipath/uipath-integrations-python/tree/main/packages/uipath-llamaindex) [![PyPI](https://img.shields.io/pypi/v/uipath-llamaindex?label=pypi)](https://pypi.org/project/uipath-llamaindex/) [![Downloads](https://img.shields.io/pypi/dm/uipath-llamaindex?label=)](https://pypi.org/project/uipath-llamaindex/) [![GitHub](https://img.shields.io/github/stars/uipath/uipath-integrations-python?style=social)](https://github.com/uipath/uipath-integrations-python)
-- [`uipath-mcp`](https://github.com/uipath/uipath-mcp-python) [![PyPI](https://img.shields.io/pypi/v/uipath-mcp?label=pypi)](https://pypi.org/project/uipath-mcp/) [![Downloads](https://img.shields.io/pypi/dm/uipath-mcp?label=)](https://pypi.org/project/uipath-mcp/) [![GitHub](https://img.shields.io/github/stars/uipath/uipath-mcp-python?style=social)](https://github.com/uipath/uipath-mcp-python)
+
+| Package | Downloads | Version |
+|---------|-----------|---------|
+| [`uipath`](https://github.com/uipath/uipath-python) | [![Downloads](https://img.shields.io/pypi/dm/uipath?label=)](https://pypi.org/project/uipath/) | [![PyPI](https://img.shields.io/pypi/v/uipath?label=pypi)](https://pypi.org/project/uipath/) |
+| [`uipath-langchain`](https://github.com/uipath/uipath-langchain-python) | [![Downloads](https://img.shields.io/pypi/dm/uipath-langchain?label=)](https://pypi.org/project/uipath-langchain/) | [![PyPI](https://img.shields.io/pypi/v/uipath-langchain?label=pypi)](https://pypi.org/project/uipath-langchain/) |
+| [`uipath-llamaindex`](https://github.com/uipath/uipath-integrations-python/tree/main/packages/uipath-llamaindex) | [![Downloads](https://img.shields.io/pypi/dm/uipath-llamaindex?label=)](https://pypi.org/project/uipath-llamaindex/) | [![PyPI](https://img.shields.io/pypi/v/uipath-llamaindex?label=pypi)](https://pypi.org/project/uipath-llamaindex/) |
+| [`uipath-google-adk`](https://github.com/uipath/uipath-integrations-python/tree/main/packages/uipath-google-adk) | [![Downloads](https://img.shields.io/pypi/dm/uipath-google-adk?label=)](https://pypi.org/project/uipath-google-adk/) | [![PyPI](https://img.shields.io/pypi/v/uipath-google-adk?label=pypi)](https://pypi.org/project/uipath-google-adk/) |
+| [`uipath-openai-agents`](https://github.com/uipath/uipath-integrations-python/tree/main/packages/uipath-openai-agents) | [![Downloads](https://img.shields.io/pypi/dm/uipath-openai-agents?label=)](https://pypi.org/project/uipath-openai-agents/) | [![PyPI](https://img.shields.io/pypi/v/uipath-openai-agents?label=pypi)](https://pypi.org/project/uipath-openai-agents/) |
+| [`uipath-mcp`](https://github.com/uipath/uipath-mcp-python) | [![Downloads](https://img.shields.io/pypi/dm/uipath-mcp?label=)](https://pypi.org/project/uipath-mcp/) | [![PyPI](https://img.shields.io/pypi/v/uipath-mcp?label=pypi)](https://pypi.org/project/uipath-mcp/) |
 
 You would use this directly only if you're building custom runtime implementations.
 
@@ -26,7 +31,7 @@ uv add uipath-runtime
 
 ## Developer Tools
 
-Check out [`uipath-dev`](https://github.com/uipath/uipath-dev-python) - an interactive terminal application for building, testing, and debugging UiPath Python runtimes, agents, and automation scripts.
+Check out [`uipath-dev`](https://github.com/uipath/uipath-dev-python) - an interactive application for building, testing, and debugging UiPath Python runtimes, agents, and automation scripts.
 
 ## Runtime Protocols
 
