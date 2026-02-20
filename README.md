@@ -19,6 +19,7 @@ This package is typically used as a dependency by higher-level SDKs such as:
 | [`uipath-llamaindex`](https://github.com/uipath/uipath-integrations-python/tree/main/packages/uipath-llamaindex) | [![Downloads](https://img.shields.io/pypi/dm/uipath-llamaindex?label=)](https://pypi.org/project/uipath-llamaindex/) | [![PyPI](https://img.shields.io/pypi/v/uipath-llamaindex?label=pypi)](https://pypi.org/project/uipath-llamaindex/) |
 | [`uipath-google-adk`](https://github.com/uipath/uipath-integrations-python/tree/main/packages/uipath-google-adk) | [![Downloads](https://img.shields.io/pypi/dm/uipath-google-adk?label=)](https://pypi.org/project/uipath-google-adk/) | [![PyPI](https://img.shields.io/pypi/v/uipath-google-adk?label=pypi)](https://pypi.org/project/uipath-google-adk/) |
 | [`uipath-openai-agents`](https://github.com/uipath/uipath-integrations-python/tree/main/packages/uipath-openai-agents) | [![Downloads](https://img.shields.io/pypi/dm/uipath-openai-agents?label=)](https://pypi.org/project/uipath-openai-agents/) | [![PyPI](https://img.shields.io/pypi/v/uipath-openai-agents?label=pypi)](https://pypi.org/project/uipath-openai-agents/) |
+| [`uipath-agent-framework`](https://github.com/uipath/uipath-integrations-python/tree/main/packages/uipath-agent-framework) | [![Downloads](https://img.shields.io/pypi/dm/uipath-agent-framework?label=)](https://pypi.org/project/uipath-agent-framework/) | [![PyPI](https://img.shields.io/pypi/v/uipath-agent-framework?label=pypi)](https://pypi.org/project/uipath-agent-framework/) |
 | [`uipath-mcp`](https://github.com/uipath/uipath-mcp-python) | [![Downloads](https://img.shields.io/pypi/dm/uipath-mcp?label=)](https://pypi.org/project/uipath-mcp/) | [![PyPI](https://img.shields.io/pypi/v/uipath-mcp?label=pypi)](https://pypi.org/project/uipath-mcp/) |
 
 You would use this directly only if you're building custom runtime implementations.
@@ -413,3 +414,10 @@ async def main() -> None:
 ```
 
 </details>
+
+## Building a New Integration
+
+This repository includes a complete blueprint for building new framework integrations using Claude Code (or any AI coding assistant):
+
+- **[INTEGRATION_GENOME.md](INTEGRATION_GENOME.md)** — A structured, phase-by-phase specification that guides you through building a full UiPath runtime integration for any Python agentic framework. Covers project scaffolding, config/loader, schema inference, execute/stream, HITL, factory registration, LLM Gateway, and CLI middleware.
+- **[CLAUDE.md](CLAUDE.md)** — Project instructions and structure overview for AI-assisted development.
