@@ -7,11 +7,10 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from uipath.core.errors import ErrorCategory, UiPathPendingTriggerError
+from uipath.core.triggers import UiPathResumeTrigger, UiPathResumeTriggerType
 
 from uipath.runtime import (
     UiPathExecuteOptions,
-    UiPathResumeTrigger,
-    UiPathResumeTriggerType,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
     UiPathStreamOptions,

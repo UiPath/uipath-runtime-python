@@ -4,10 +4,10 @@ from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+from uipath.core.triggers import UiPathResumeTrigger
 
 from uipath.runtime.errors import UiPathErrorContract
 from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeEventType
-from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 
 
 class UiPathRuntimeStatus(str, Enum):

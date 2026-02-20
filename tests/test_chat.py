@@ -10,11 +10,10 @@ from uipath.core.chat import (
     UiPathConversationMessageEvent,
     UiPathConversationMessageStartEvent,
 )
+from uipath.core.triggers import UiPathResumeTrigger, UiPathResumeTriggerType
 
 from uipath.runtime import (
     UiPathExecuteOptions,
-    UiPathResumeTrigger,
-    UiPathResumeTriggerType,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
     UiPathStreamOptions,

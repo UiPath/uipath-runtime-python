@@ -2,7 +2,8 @@
 
 from typing import Any, Protocol
 
-from uipath.runtime.resumable.trigger import UiPathResumeTrigger
+from uipath.core.triggers import UiPathResumeTrigger
+
 from uipath.runtime.storage import UiPathRuntimeStorageProtocol
 
 
