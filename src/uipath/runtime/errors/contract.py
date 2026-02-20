@@ -18,7 +18,7 @@ class UiPathErrorContract(BaseModel):
     """Standard error contract used across the runtime."""
 
     code: str  # Human-readable code uniquely identifying this error type across the platform.
-    # Format: <Component>.<PascalCaseErrorCode> (e.g. LangGraph.InvaliGraphReference)
+    # Format: <Component>.<PascalCaseErrorCode> (e.g. LangGraph.InvalidGraphReference)
     # Only use alphanumeric characters [A-Za-z0-9] and periods. No whitespace allowed.
 
     title: str  # Short, human-readable summary of the problem that should remain consistent
