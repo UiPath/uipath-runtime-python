@@ -1,15 +1,16 @@
 """Module for resumable runtime features."""
 
+from uipath.core.triggers import (
+    UiPathApiTrigger,
+    UiPathResumeTrigger,
+    UiPathResumeTriggerType,
+)
+
 from uipath.runtime.resumable.protocols import (
     UiPathResumableStorageProtocol,
     UiPathResumeTriggerCreatorProtocol,
     UiPathResumeTriggerProtocol,
     UiPathResumeTriggerReaderProtocol,
-)
-from uipath.runtime.resumable.trigger import (
-    UiPathApiTrigger,
-    UiPathResumeTrigger,
-    UiPathResumeTriggerType,
 )
 
 __all__ = [
@@ -17,7 +18,7 @@ __all__ = [
     "UiPathResumeTriggerCreatorProtocol",
     "UiPathResumeTriggerReaderProtocol",
     "UiPathResumeTriggerProtocol",
+    "UiPathApiTrigger",
     "UiPathResumeTrigger",
     "UiPathResumeTriggerType",
-    "UiPathApiTrigger",
 ]

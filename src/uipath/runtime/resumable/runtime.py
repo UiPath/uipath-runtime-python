@@ -4,6 +4,7 @@ import logging
 from typing import Any, AsyncGenerator
 
 from uipath.core.errors import UiPathPendingTriggerError
+from uipath.core.triggers import UiPathResumeTrigger, UiPathResumeTriggerType
 
 from uipath.runtime.base import (
     UiPathExecuteOptions,
@@ -16,12 +17,10 @@ from uipath.runtime.result import (
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
 )
-from uipath.runtime.resumable import UiPathResumeTriggerType
 from uipath.runtime.resumable.protocols import (
     UiPathResumableStorageProtocol,
     UiPathResumeTriggerProtocol,
 )
-from uipath.runtime.resumable.trigger import UiPathResumeTrigger
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)

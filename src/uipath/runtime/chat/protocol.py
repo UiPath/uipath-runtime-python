@@ -5,8 +5,7 @@ from typing import Any, Protocol
 from uipath.core.chat import (
     UiPathConversationMessageEvent,
 )
-
-from uipath.runtime.resumable.trigger import UiPathResumeTrigger
+from uipath.core.triggers import UiPathResumeTrigger
 
 
 class UiPathChatProtocol(Protocol):

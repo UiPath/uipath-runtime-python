@@ -1,5 +1,12 @@
 """UiPath Runtime Package."""
 
+from uipath.core.triggers import (
+    UiPathApiTrigger,
+    UiPathResumeTrigger,
+    UiPathResumeTriggerName,
+    UiPathResumeTriggerType,
+)
+
 from uipath.runtime.base import (
     UiPathExecuteOptions,
     UiPathExecutionRuntime,
@@ -32,12 +39,6 @@ from uipath.runtime.resumable.protocols import (
 )
 from uipath.runtime.resumable.runtime import (
     UiPathResumableRuntime,
-)
-from uipath.runtime.resumable.trigger import (
-    UiPathApiTrigger,
-    UiPathResumeTrigger,
-    UiPathResumeTriggerName,
-    UiPathResumeTriggerType,
 )
 from uipath.runtime.schema import UiPathRuntimeSchema
 from uipath.runtime.storage import UiPathRuntimeStorageProtocol
