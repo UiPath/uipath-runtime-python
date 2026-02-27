@@ -233,11 +233,12 @@ class UiPathRuntimeLogsInterceptor:
                 if handler not in self.root_logger.handlers:
                     self.root_logger.addHandler(handler)
 
+        if hasattr(self, "utf8_stdout"):
+            self.utf8_stdout.detach()
+            del self.utf8_stdout
+
         if self._owns_handler:
             self.log_handler.close()
-
-        if hasattr(self, "utf8_stdout"):
-            self.utf8_stdout.close()
 
         # Only restore streams if we redirected them
         if self.original_stdout and self.original_stderr:
