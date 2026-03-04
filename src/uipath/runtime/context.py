@@ -5,7 +5,7 @@ import logging
 import os
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from uipath.core.errors import UiPathFaultedTriggerError
@@ -37,6 +37,9 @@ class UiPathRuntimeContext(BaseModel):
     )
     exchange_id: str | None = Field(None, description="Exchange identifier for CAS")
     message_id: str | None = Field(None, description="Message identifier for CAS")
+    voice_mode: Literal["config", "toolCall"] | None = Field(
+        None, description="Voice job type for CAS"
+    )
     mcp_server_id: str | None = None
     mcp_server_slug: str | None = None
     tenant_id: str | None = None
@@ -363,6 +366,7 @@ class UiPathRuntimeContext(BaseModel):
             "conversationalService.messageId": "message_id",
             "mcpServer.id": "mcp_server_id",
             "mcpServer.slug": "mcp_server_slug",
+            "voice.mode": "voice_mode",
         }
 
         attributes_set = set()
