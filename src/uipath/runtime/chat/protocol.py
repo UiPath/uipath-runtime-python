@@ -47,6 +47,10 @@ class UiPathChatProtocol(Protocol):
         """Send an exchange end event."""
         ...
 
+    async def emit_exchange_error_event(self, error: Exception) -> None:
+        """Emit an exchange error event."""
+        ...
+
     async def wait_for_resume(self) -> dict[str, Any]:
         """Wait for the interrupt_end event to be received."""
         ...
