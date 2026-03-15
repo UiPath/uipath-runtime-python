@@ -1,9 +1,15 @@
 """Chat runtime implementation."""
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
 
-from uipath.core.triggers import UiPathResumeTriggerType
+from uipath.core.chat import (
+    UiPathConversationMessageEvent,
+    UiPathConversationToolCallEvent,
+    UiPathConversationToolCallStartEvent,
+)
+from uipath.core.triggers import UiPathResumeTrigger, UiPathResumeTriggerType
 
 from uipath.runtime.base import (
     UiPathExecuteOptions,
@@ -41,6 +47,7 @@ class UiPathChatRuntime:
         super().__init__()
         self.delegate = delegate
         self.chat_bridge = chat_bridge
+        self._current_message_id: str | None = None
 
     async def execute(
         self,
@@ -80,6 +87,7 @@ class UiPathChatRuntime:
             ):
                 if isinstance(event, UiPathRuntimeMessageEvent):
                     if event.payload:
+                        self._current_message_id = event.payload.message_id
                         await self.chat_bridge.emit_message_event(event.payload)
 
                 if isinstance(event, UiPathRuntimeResult):
@@ -103,6 +111,12 @@ class UiPathChatRuntime:
 
                                 resume_data = await self.chat_bridge.wait_for_resume()
 
+                                await (
+                                    self._emit_start_tool_call_on_confirmation_approval(
+                                        trigger, resume_data
+                                    )
+                                )
+
                                 assert trigger.interrupt_id is not None, (
                                     "Trigger interrupt_id cannot be None"
                                 )
@@ -121,6 +135,36 @@ class UiPathChatRuntime:
                         await self.chat_bridge.emit_exchange_end_event()
                 else:
                     yield event
+
+    async def _emit_start_tool_call_on_confirmation_approval(
+        self, trigger: UiPathResumeTrigger, resume_data: dict[str, Any]
+    ) -> None:
+        """Emit a startToolCall event when a HITL tool call confirmation is approved."""
+        if self._current_message_id is None or trigger.api_resume is None:
+            return
+
+        request = trigger.api_resume.request or {}
+        value = resume_data.get("value") or {}
+        tool_input = value.get("input")
+
+        tool_call_start_event = UiPathConversationMessageEvent(
+            message_id=self._current_message_id,
+            tool_call=UiPathConversationToolCallEvent(
+                tool_call_id=request.get("toolCallId", ""),
+                start=UiPathConversationToolCallStartEvent(
+                    tool_name=request.get("toolName", ""),
+                    timestamp=datetime.now(timezone.utc)
+                    .isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z"),
+                    input=tool_input,
+                ),
+            ),
+        )
+
+        try:
+            await self.chat_bridge.emit_message_event(tool_call_start_event)
+        except Exception as e:
+            logger.warning(f"Error emitting startToolCall on approval: {e}")
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Get schema from the delegate runtime."""
