@@ -53,6 +53,50 @@ jobs:
           uv sync --all-extras
           uv run pytest
 
+  typecheck-uipath-langchain:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    # Only run if PR has the test:uipath-langchain label
+    if: contains(github.event.pull_request.labels.*.name, 'test:uipath-langchain')
+
+    steps:
+      - name: Checkout uipath-runtime-python
+        uses: actions/checkout@v4
+        with:
+          path: 'uipath-runtime-python'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build uipath-runtime package
+        working-directory: uipath-runtime-python
+        run: uv build
+
+      - name: Checkout uipath-langchain-python
+        uses: actions/checkout@v4
+        with:
+          repository: 'UiPath/uipath-langchain-python'
+          path: 'uipath-langchain-python'
+
+      - name: Update uipath-runtime version
+        shell: bash
+        working-directory: uipath-langchain-python
+        run: uv add ../uipath-runtime-python/dist/*.whl --dev
+
+      - name: Run typecheck
+        working-directory: uipath-langchain-python
+        run: |
+          uv sync --all-extras
+          uv run mypy --config-file pyproject.toml .
+
   discover-testcases:
     runs-on: ubuntu-latest
     permissions:
