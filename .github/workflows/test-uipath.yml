@@ -44,11 +44,11 @@ jobs:
 
       - name: Update uipath-runtime version
         shell: bash
-        working-directory: uipath-python
-        run: uv add ../uipath-runtime-python/dist/*.whl --dev
+        working-directory: uipath-python/packages/uipath
+        run: uv add ../../../uipath-runtime-python/dist/*.whl --dev
 
       - name: Run uipath tests
-        working-directory: uipath-python
+        working-directory: uipath-python/packages/uipath
         run: |
           uv sync --all-extras
           uv run pytest
@@ -88,11 +88,11 @@ jobs:
 
       - name: Update uipath-runtime version
         shell: bash
-        working-directory: uipath-python
-        run: uv add ../uipath-runtime-python/dist/*.whl --dev
+        working-directory: uipath-python/packages/uipath
+        run: uv add ../../../uipath-runtime-python/dist/*.whl --dev
 
       - name: Run typecheck
-        working-directory: uipath-python
+        working-directory: uipath-python/packages/uipath
         run: |
           uv sync --all-extras
           uv run mypy --config-file pyproject.toml .
@@ -161,11 +161,11 @@ jobs:
 
       - name: Update uipath-runtime version
         shell: bash
-        working-directory: uipath-python
-        run: uv add ../uipath-runtime-python/dist/*.whl --dev
+        working-directory: uipath-python/packages/uipath
+        run: uv add ../../../uipath-runtime-python/dist/*.whl --dev
 
       - name: Install dependencies
-        working-directory: uipath-python
+        working-directory: uipath-python/packages/uipath
         run: uv sync
 
       - name: Run testcase
