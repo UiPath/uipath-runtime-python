@@ -24,6 +24,9 @@ class LoggerWriter:
         self.logger = logger
         self.level = level
         self.min_level = min_level
+        # Keyed by current_execution_id (None for master context).
+        # A single shared buffer would interleave partial lines from
+        # concurrent async tasks writing to the same sys.stdout.
         self._buffers: dict[str | None, str] = {}
         self.sys_file = sys_file
         self._in_logging = False  # Recursion guard
@@ -75,7 +78,11 @@ class LoggerWriter:
             self._in_logging = False
 
     def flush_all(self) -> None:
-        """Flush all execution contexts' buffered messages. Called by master teardown."""
+        """Flush all execution contexts' buffered messages. Called by master teardown.
+
+        Intentionally ignores current_execution_id — iterates all keys
+        directly so that no context's partial lines are lost.
+        """
         if self._in_logging:
             return
 

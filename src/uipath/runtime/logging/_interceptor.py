@@ -209,7 +209,14 @@ class UiPathRuntimeLogsInterceptor:
         )
 
     def teardown(self) -> None:
-        """Restore original logging configuration."""
+        """Restore original logging configuration.
+
+        IMPORTANT: The ordering below is critical. Flushing must happen before
+        clearing the context variable and before removing handlers. Otherwise:
+        - If context is cleared first, the execution filter won't match the
+          flushed records and they'll be dropped.
+        - If handlers are removed first, the flushed records have no destination.
+        """
         # Step 1: Flush LoggerWriter buffers while context and handlers are still active.
         # Child mode: flush only this context's buffer from the shared LoggerWriter.
         # Master mode: flush ALL remaining buffers before restoring streams.
@@ -266,7 +273,9 @@ class UiPathRuntimeLogsInterceptor:
         if self._owns_handler:
             self.log_handler.close()
 
-        # Step 5: Only master restores streams (children never replaced them)
+        # Step 5: Only master restores streams. Children never replaced
+        # sys.stdout/sys.stderr (they only registered handlers on the loggers),
+        # so there is nothing for them to restore here.
         if not self.execution_id and self.original_stdout and self.original_stderr:
             sys.stdout = self.original_stdout
             sys.stderr = self.original_stderr
