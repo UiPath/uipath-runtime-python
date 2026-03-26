@@ -148,9 +148,16 @@ class UiPathRuntimeLogsInterceptor:
                 # logger.propagate remains True (default)
                 self.patched_loggers.add(logger_name)
 
-            # Child executions should redirect stdout/stderr to their own handler
-            # This ensures print statements are captured per execution
-            self._redirect_stdout_stderr()
+            # Register our handler on stdout/stderr loggers so that
+            # print() output routed through the master's LoggerWriter
+            # is captured per-execution via filters.
+            # We do NOT replace sys.stdout/sys.stderr — the master owns those.
+            if not isinstance(sys.stdout, LoggerWriter):
+                self.logger.warning(
+                    "Child interceptor set up without a master LoggerWriter on sys.stdout. "
+                    "print() output will not be captured for this execution context."
+                )
+            self._register_stdout_stderr_handlers()
         else:
             # Master execution mode: remove all handlers and add only ours
             self._clean_all_handlers(self.root_logger)
@@ -165,28 +172,33 @@ class UiPathRuntimeLogsInterceptor:
             # Master redirects stdout/stderr
             self._redirect_stdout_stderr()
 
-    def _redirect_stdout_stderr(self) -> None:
-        """Redirect stdout and stderr to the logging system."""
-        # Set up stdout and stderr loggers
+    def _register_stdout_stderr_handlers(self) -> None:
+        """Register our handler on stdout/stderr loggers without replacing the streams."""
         stdout_logger = logging.getLogger("stdout")
         stderr_logger = logging.getLogger("stderr")
 
-        if self.execution_id:
-            # Child execution: add our handler to stdout/stderr loggers
-            stdout_logger.propagate = False
-            stderr_logger.propagate = False
+        stdout_logger.propagate = False
+        stderr_logger.propagate = False
 
-            if self.log_handler not in stdout_logger.handlers:
-                stdout_logger.addHandler(self.log_handler)
-            if self.log_handler not in stderr_logger.handlers:
-                stderr_logger.addHandler(self.log_handler)
-        else:
-            # Master execution: clean and set up handlers
-            stdout_logger.propagate = False
-            stderr_logger.propagate = False
+        if self.log_handler not in stdout_logger.handlers:
+            stdout_logger.addHandler(self.log_handler)
+        if self.log_handler not in stderr_logger.handlers:
+            stderr_logger.addHandler(self.log_handler)
 
-            self._clean_all_handlers(stdout_logger)
-            self._clean_all_handlers(stderr_logger)
+    def _redirect_stdout_stderr(self) -> None:
+        """Redirect stdout and stderr to the logging system.
+
+        Only called by master execution mode. Replaces sys.stdout/sys.stderr
+        with LoggerWriter instances that route output through the logging system.
+        """
+        stdout_logger = logging.getLogger("stdout")
+        stderr_logger = logging.getLogger("stderr")
+
+        stdout_logger.propagate = False
+        stderr_logger.propagate = False
+
+        self._clean_all_handlers(stdout_logger)
+        self._clean_all_handlers(stderr_logger)
 
         # Use the min_level in the LoggerWriter to filter messages
         sys.stdout = LoggerWriter(
@@ -197,16 +209,37 @@ class UiPathRuntimeLogsInterceptor:
         )
 
     def teardown(self) -> None:
-        """Restore original logging configuration."""
-        # Clear the context variable
+        """Restore original logging configuration.
+
+        IMPORTANT: The ordering below is critical. Flushing must happen before
+        clearing the context variable and before removing handlers. Otherwise:
+        - If context is cleared first, the execution filter won't match the
+          flushed records and they'll be dropped.
+        - If handlers are removed first, the flushed records have no destination.
+        """
+        # Step 1: Flush LoggerWriter buffers while context and handlers are still active.
+        # Child mode: flush only this context's buffer from the shared LoggerWriter.
+        # Master mode: flush ALL remaining buffers before restoring streams.
+        if self.execution_id:
+            if isinstance(sys.stdout, LoggerWriter):
+                sys.stdout.flush()
+            if isinstance(sys.stderr, LoggerWriter):
+                sys.stderr.flush()
+        else:
+            if isinstance(sys.stdout, LoggerWriter):
+                sys.stdout.flush_all()
+            if isinstance(sys.stderr, LoggerWriter):
+                sys.stderr.flush_all()
+
+        # Step 2: Clear the context variable (after flush used it)
         if self.execution_id:
             current_execution_id.set(None)
 
-        # Restore the original disable level
+        # Step 3: Restore the original disable level
         if not self.execution_id:
             logging.disable(self.original_disable_level)
 
-        # Remove our handler and filter
+        # Step 4: Remove our handler and filter
         if self.execution_filter:
             self.log_handler.removeFilter(self.execution_filter)
 
@@ -240,8 +273,10 @@ class UiPathRuntimeLogsInterceptor:
         if self._owns_handler:
             self.log_handler.close()
 
-        # Only restore streams if we redirected them
-        if self.original_stdout and self.original_stderr:
+        # Step 5: Only master restores streams. Children never replaced
+        # sys.stdout/sys.stderr (they only registered handlers on the loggers),
+        # so there is nothing for them to restore here.
+        if not self.execution_id and self.original_stdout and self.original_stderr:
             sys.stdout = self.original_stdout
             sys.stderr = self.original_stderr
 
