@@ -32,6 +32,7 @@ class UiPathRuntimeContext(BaseModel):
     resume: bool = False
     command: str | None = None
     job_id: str | None = None
+    log_to_file: bool = False
     conversation_id: str | None = Field(
         None, description="Conversation identifier for CAS"
     )
@@ -188,6 +189,7 @@ class UiPathRuntimeContext(BaseModel):
             dir=self.runtime_dir,
             file=self.logs_file,
             job_id=self.job_id,
+            log_to_file=self.log_to_file,
         )
         self.logs_interceptor.setup()
 
@@ -327,6 +329,9 @@ class UiPathRuntimeContext(BaseModel):
 
         # Apply defaults from env
         base.job_id = os.environ.get("UIPATH_JOB_KEY")
+        base.log_to_file = (
+            os.environ.get("UIPATH_LOG_TO_FILE", "").lower() == "true"
+        )
         base.logs_min_level = os.environ.get("LOG_LEVEL", "INFO")
         base.org_id = os.environ.get("UIPATH_ORGANIZATION_ID")
         base.tenant_id = os.environ.get("UIPATH_TENANT_ID")
