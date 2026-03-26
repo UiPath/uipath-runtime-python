@@ -3,9 +3,15 @@
 import logging
 from typing import TextIO
 
+from uipath.runtime.logging._context import current_execution_id
+
 
 class LoggerWriter:
-    """Redirect stdout/stderr to logging system."""
+    """Redirect stdout/stderr to logging system.
+
+    Maintains per-execution-context buffers so that concurrent async tasks
+    (e.g. parallel eval runs) do not interleave partial lines.
+    """
 
     def __init__(
         self,
@@ -18,7 +24,7 @@ class LoggerWriter:
         self.logger = logger
         self.level = level
         self.min_level = min_level
-        self.buffer = ""
+        self._buffers: dict[str | None, str] = {}
         self.sys_file = sys_file
         self._in_logging = False  # Recursion guard
 
@@ -35,17 +41,22 @@ class LoggerWriter:
 
         try:
             self._in_logging = True
-            self.buffer += message
-            while "\n" in self.buffer:
-                line, self.buffer = self.buffer.split("\n", 1)
+            ctx = current_execution_id.get()
+            buf = self._buffers.get(ctx, "") + message
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
                 # Only log if the message is not empty and the level is sufficient
                 if line and self.level >= self.min_level:
                     self.logger._log(self.level, line, ())
+            if buf:
+                self._buffers[ctx] = buf
+            else:
+                self._buffers.pop(ctx, None)
         finally:
             self._in_logging = False
 
     def flush(self) -> None:
-        """Flush any remaining buffered messages to the logger."""
+        """Flush the current execution context's buffered messages to the logger."""
         if self._in_logging:
             if self.sys_file:
                 try:
@@ -56,10 +67,24 @@ class LoggerWriter:
 
         try:
             self._in_logging = True
-            # Log any remaining content in the buffer on flush
-            if self.buffer and self.level >= self.min_level:
-                self.logger._log(self.level, self.buffer, ())
-            self.buffer = ""
+            ctx = current_execution_id.get()
+            buf = self._buffers.pop(ctx, "")
+            if buf and self.level >= self.min_level:
+                self.logger._log(self.level, buf, ())
+        finally:
+            self._in_logging = False
+
+    def flush_all(self) -> None:
+        """Flush all execution contexts' buffered messages. Called by master teardown."""
+        if self._in_logging:
+            return
+
+        try:
+            self._in_logging = True
+            for buf in self._buffers.values():
+                if buf and self.level >= self.min_level:
+                    self.logger._log(self.level, buf, ())
+            self._buffers.clear()
         finally:
             self._in_logging = False
 

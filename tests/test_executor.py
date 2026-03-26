@@ -1,5 +1,7 @@
 """Simple test for runtime factory and executor span capture."""
 
+import logging
+import sys
 from typing import Any, AsyncGenerator, TypeVar
 
 import pytest
@@ -13,6 +15,7 @@ from uipath.runtime import (
     UiPathRuntimeProtocol,
 )
 from uipath.runtime.base import UiPathStreamOptions
+from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 from uipath.runtime.schema import UiPathRuntimeSchema
 
@@ -119,9 +122,32 @@ class UiPathTestRuntimeFactory:
         return self.runtime_class()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_logging():
+    """Save and restore logging state so tests don't leak into each other."""
+    root = logging.getLogger()
+    original_level = root.level
+    original_handlers = list(root.handlers)
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    yield
+    root.setLevel(original_level)
+    root.handlers = original_handlers
+    sys.stdout = original_stdout
+    sys.stderr = original_stderr
+    logging.disable(logging.NOTSET)
+
+
 @pytest.mark.asyncio
-async def test_multiple_factories_same_executor():
+async def test_multiple_factories_same_executor(tmp_path):
     """Test factories using same trace manager, verify spans are captured correctly."""
+    # Set up a master interceptor so that sys.stdout is a LoggerWriter,
+    # matching real production usage where UiPathRuntimeContext provides one.
+    master = UiPathRuntimeLogsInterceptor(
+        job_id="test-job", dir=str(tmp_path), file="test.log"
+    )
+    master.setup()
+
     trace_manager = UiPathTraceManager()
 
     # Create factories for different runtimes
@@ -228,3 +254,5 @@ async def test_multiple_factories_same_executor():
     assert execution_runtime_c.log_handler
     assert len(execution_runtime_c.log_handler.buffer) > 0
     assert execution_runtime_c.log_handler.buffer[0].msg == "executing {'input': 'c'}"
+
+    master.teardown()
