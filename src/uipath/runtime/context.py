@@ -329,9 +329,7 @@ class UiPathRuntimeContext(BaseModel):
 
         # Apply defaults from env
         base.job_id = os.environ.get("UIPATH_JOB_KEY")
-        base.log_to_file = (
-            os.environ.get("UIPATH_LOG_TO_FILE", "").lower() == "true"
-        )
+        base.log_to_file = os.environ.get("UIPATH_LOG_TO_FILE", "").lower() == "true"
         base.logs_min_level = os.environ.get("LOG_LEVEL", "INFO")
         base.org_id = os.environ.get("UIPATH_ORGANIZATION_ID")
         base.tenant_id = os.environ.get("UIPATH_TENANT_ID")
