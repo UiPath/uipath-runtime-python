@@ -33,7 +33,6 @@ def make_chat_bridge_mock() -> UiPathChatProtocol:
     bridge_mock.connect = AsyncMock()
     bridge_mock.disconnect = AsyncMock()
     bridge_mock.emit_message_event = AsyncMock()
-    bridge_mock.emit_interrupt_event = AsyncMock()
     bridge_mock.wait_for_resume = AsyncMock()
 
     return cast(UiPathChatProtocol, bridge_mock)
@@ -331,7 +330,6 @@ async def test_chat_runtime_handles_api_trigger_suspension():
     cast(AsyncMock, bridge.connect).assert_awaited_once()
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
 
-    cast(AsyncMock, bridge.emit_interrupt_event).assert_awaited_once()
     cast(AsyncMock, bridge.wait_for_resume).assert_awaited_once()
 
     # Message events emitted (one before suspend, one after resume)
@@ -563,14 +561,7 @@ async def test_chat_runtime_handles_multiple_api_triggers():
     assert resume_input["api-call"] == {"approved": True}
 
     # Bridge should have been called 3 times (once per trigger)
-    assert cast(AsyncMock, bridge.emit_interrupt_event).await_count == 3
     assert cast(AsyncMock, bridge.wait_for_resume).await_count == 3
-
-    # Verify each emit_interrupt_event received a trigger
-    emit_calls = cast(AsyncMock, bridge.emit_interrupt_event).await_args_list
-    assert emit_calls[0][0][0].interrupt_id == "email-confirm"
-    assert emit_calls[1][0][0].interrupt_id == "file-delete"
-    assert emit_calls[2][0][0].interrupt_id == "api-call"
 
 
 @pytest.mark.asyncio
@@ -603,12 +594,4 @@ async def test_chat_runtime_filters_non_api_triggers():
     assert result.triggers[0].trigger_type == UiPathResumeTriggerType.QUEUE_ITEM
 
     # Bridge should have been called only 2 times (for 2 API triggers)
-    assert cast(AsyncMock, bridge.emit_interrupt_event).await_count == 2
     assert cast(AsyncMock, bridge.wait_for_resume).await_count == 2
-
-    # Verify only API triggers were emitted
-    emit_calls = cast(AsyncMock, bridge.emit_interrupt_event).await_args_list
-    assert emit_calls[0][0][0].interrupt_id == "email-confirm"
-    assert emit_calls[0][0][0].trigger_type == UiPathResumeTriggerType.API
-    assert emit_calls[1][0][0].interrupt_id == "file-delete"
-    assert emit_calls[1][0][0].trigger_type == UiPathResumeTriggerType.API

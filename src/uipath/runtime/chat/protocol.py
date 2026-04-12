@@ -5,7 +5,6 @@ from typing import Any, Protocol
 from uipath.core.chat import (
     UiPathConversationMessageEvent,
 )
-from uipath.core.triggers import UiPathResumeTrigger
 
 
 class UiPathChatProtocol(Protocol):
@@ -32,17 +31,6 @@ class UiPathChatProtocol(Protocol):
         """
         ...
 
-    async def emit_interrupt_event(
-        self,
-        resume_trigger: UiPathResumeTrigger,
-    ) -> None:
-        """Wrap and send an interrupt event.
-
-        Args:
-            resume_trigger: UiPathResumeTrigger to wrap and send
-        """
-        ...
-
     async def emit_exchange_end_event(self) -> None:
         """Send an exchange end event."""
         ...
@@ -52,5 +40,5 @@ class UiPathChatProtocol(Protocol):
         ...
 
     async def wait_for_resume(self) -> dict[str, Any]:
-        """Wait for the interrupt_end event to be received."""
+        """Wait for a confirmToolCall event to be received."""
         ...

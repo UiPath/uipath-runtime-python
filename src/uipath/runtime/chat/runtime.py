@@ -102,8 +102,6 @@ class UiPathChatRuntime:
                                 resume_map: dict[str, Any] = {}
 
                                 for trigger in api_triggers:
-                                    await self.chat_bridge.emit_interrupt_event(trigger)
-
                                     resume_data = (
                                         await self.chat_bridge.wait_for_resume()
                                     )
