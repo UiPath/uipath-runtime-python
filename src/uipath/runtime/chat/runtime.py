@@ -102,9 +102,7 @@ class UiPathChatRuntime:
                                 resume_map: dict[str, Any] = {}
 
                                 for trigger in api_triggers:
-                                    resume_data = (
-                                        await self.chat_bridge.wait_for_resume()
-                                    )
+                                    resume_data = await self.chat_bridge.wait_for_tool_confirmation()
 
                                     assert trigger.interrupt_id is not None, (
                                         "Trigger interrupt_id cannot be None"

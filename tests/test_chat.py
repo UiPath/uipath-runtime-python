@@ -33,7 +33,7 @@ def make_chat_bridge_mock() -> UiPathChatProtocol:
     bridge_mock.connect = AsyncMock()
     bridge_mock.disconnect = AsyncMock()
     bridge_mock.emit_message_event = AsyncMock()
-    bridge_mock.wait_for_resume = AsyncMock()
+    bridge_mock.wait_for_tool_confirmation = AsyncMock()
 
     return cast(UiPathChatProtocol, bridge_mock)
 
@@ -308,7 +308,7 @@ async def test_chat_runtime_handles_api_trigger_suspension():
     runtime_impl = SuspendingMockRuntime(suspend_at_message=0)
     bridge = make_chat_bridge_mock()
 
-    cast(AsyncMock, bridge.wait_for_resume).return_value = {"approved": True}
+    cast(AsyncMock, bridge.wait_for_tool_confirmation).return_value = {"approved": True}
 
     chat_runtime = UiPathChatRuntime(
         delegate=runtime_impl,
@@ -330,7 +330,7 @@ async def test_chat_runtime_handles_api_trigger_suspension():
     cast(AsyncMock, bridge.connect).assert_awaited_once()
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
 
-    cast(AsyncMock, bridge.wait_for_resume).assert_awaited_once()
+    cast(AsyncMock, bridge.wait_for_tool_confirmation).assert_awaited_once()
 
     # Message events emitted (one before suspend, one after resume)
     assert cast(AsyncMock, bridge.emit_message_event).await_count == 2
@@ -343,8 +343,8 @@ async def test_chat_runtime_yields_events_during_suspension_flow():
     runtime_impl = SuspendingMockRuntime(suspend_at_message=0)
     bridge = make_chat_bridge_mock()
 
-    # wait_for_resume returns approval data
-    cast(AsyncMock, bridge.wait_for_resume).return_value = {"approved": True}
+    # wait_for_tool_confirmation returns approval data
+    cast(AsyncMock, bridge.wait_for_tool_confirmation).return_value = {"approved": True}
 
     chat_runtime = UiPathChatRuntime(
         delegate=runtime_impl,
@@ -531,7 +531,7 @@ async def test_chat_runtime_handles_multiple_api_triggers():
     bridge = make_chat_bridge_mock()
 
     # Bridge returns approval for each trigger
-    cast(AsyncMock, bridge.wait_for_resume).side_effect = [
+    cast(AsyncMock, bridge.wait_for_tool_confirmation).side_effect = [
         {"approved": True},  # email-confirm
         {"approved": True},  # file-delete
         {"approved": True},  # api-call
@@ -561,7 +561,7 @@ async def test_chat_runtime_handles_multiple_api_triggers():
     assert resume_input["api-call"] == {"approved": True}
 
     # Bridge should have been called 3 times (once per trigger)
-    assert cast(AsyncMock, bridge.wait_for_resume).await_count == 3
+    assert cast(AsyncMock, bridge.wait_for_tool_confirmation).await_count == 3
 
 
 @pytest.mark.asyncio
@@ -572,7 +572,7 @@ async def test_chat_runtime_filters_non_api_triggers():
     bridge = make_chat_bridge_mock()
 
     # Bridge returns approval for API triggers only
-    cast(AsyncMock, bridge.wait_for_resume).side_effect = [
+    cast(AsyncMock, bridge.wait_for_tool_confirmation).side_effect = [
         {"approved": True},  # email-confirm
         {"approved": True},  # file-delete
     ]
@@ -594,4 +594,4 @@ async def test_chat_runtime_filters_non_api_triggers():
     assert result.triggers[0].trigger_type == UiPathResumeTriggerType.QUEUE_ITEM
 
     # Bridge should have been called only 2 times (for 2 API triggers)
-    assert cast(AsyncMock, bridge.wait_for_resume).await_count == 2
+    assert cast(AsyncMock, bridge.wait_for_tool_confirmation).await_count == 2

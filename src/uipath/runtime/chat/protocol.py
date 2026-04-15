@@ -39,6 +39,6 @@ class UiPathChatProtocol(Protocol):
         """Emit an exchange error event."""
         ...
 
-    async def wait_for_resume(self) -> dict[str, Any]:
+    async def wait_for_tool_confirmation(self) -> dict[str, Any]:
         """Wait for a confirmToolCall event to be received."""
         ...
