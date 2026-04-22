@@ -500,6 +500,54 @@ class TestResumableRuntime:
         assert runtime_impl.execution_count == 1
 
     @pytest.mark.asyncio
+    async def test_resumable_skips_inbox_triggers_on_auto_resume_check(self) -> None:
+        """Inbox triggers should be skipped when checking for auto-resume after suspension.
+
+        Inbox triggers are async-external (payload delivered via Integration
+        Services), so calling read_trigger on them at suspend time would hit a
+        404 and fault the run. They should behave like API triggers here.
+        """
+
+        runtime_impl = MultiTriggerMockRuntime()
+        storage = StatefulStorageMock()
+        trigger_manager = make_trigger_manager_mock()
+
+        def create_inbox_trigger(data: dict[str, Any]) -> UiPathResumeTrigger:
+            return UiPathResumeTrigger(
+                interrupt_id="",  # Will be set by resumable runtime
+                trigger_type=UiPathResumeTriggerType.INBOX,
+                payload=data,
+            )
+
+        trigger_manager.create_trigger = AsyncMock(side_effect=create_inbox_trigger)  # type: ignore
+
+        # Track whether read_trigger is ever called — it must NOT be, otherwise
+        # the filter is broken and we'd hit the payload endpoint prematurely.
+        trigger_manager.read_trigger = AsyncMock(
+            side_effect=AssertionError(
+                "read_trigger must not be called for Inbox triggers pre-resume"
+            )
+        )  # type: ignore
+
+        resumable = UiPathResumableRuntime(
+            delegate=runtime_impl,
+            storage=storage,
+            trigger_manager=trigger_manager,
+            runtime_id="runtime-1",
+        )
+
+        result = await resumable.execute({})
+
+        assert result.status == UiPathRuntimeStatus.SUSPENDED
+        assert result.triggers is not None
+        assert len(result.triggers) == 2
+        assert all(
+            t.trigger_type == UiPathResumeTriggerType.INBOX for t in result.triggers
+        )
+        trigger_manager.read_trigger.assert_not_called()
+        assert runtime_impl.execution_count == 1
+
+    @pytest.mark.asyncio
     async def test_resumable_auto_resumes_task_triggers_but_not_api_triggers(
         self,
     ) -> None:
