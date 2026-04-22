@@ -2,6 +2,7 @@
 
 from uipath.core.triggers import (
     UiPathApiTrigger,
+    UiPathIntegrationTrigger,
     UiPathResumeTrigger,
     UiPathResumeTriggerName,
     UiPathResumeTriggerType,
@@ -9,6 +10,7 @@ from uipath.core.triggers import (
 
 __all__ = [
     "UiPathApiTrigger",
+    "UiPathIntegrationTrigger",
     "UiPathResumeTrigger",
     "UiPathResumeTriggerName",
     "UiPathResumeTriggerType",
