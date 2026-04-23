@@ -113,7 +113,7 @@ jobs:
 
       - name: Discover testcases
         id: discover
-        working-directory: uipath-python
+        working-directory: uipath-python/packages/uipath
         run: |
           # Find all testcase folders (excluding common folders like README, etc.)
           testcase_dirs=$(find testcases -maxdepth 1 -type d -name "*-*" | sed 's|testcases/||' | sort)
@@ -175,7 +175,7 @@ jobs:
           BASE_URL:       ${{ matrix.environment == 'alpha' && secrets.ALPHA_BASE_URL || matrix.environment == 'staging' && secrets.STAGING_BASE_URL || matrix.environment == 'cloud' && secrets.CLOUD_BASE_URL }}
           USE_AZURE_CHAT: ${{ matrix.use_azure_chat }}
           UV_PYTHON: "3.12"
-        working-directory: uipath-python/testcases/${{ matrix.testcase }}
+        working-directory: uipath-python/packages/uipath/testcases/${{ matrix.testcase }}
         run: |
           echo "Running testcase: ${{ matrix.testcase }}"
           echo "Environment: ${{ matrix.environment }}"
