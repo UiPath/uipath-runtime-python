@@ -341,6 +341,7 @@ class UiPathRuntimeContext(BaseModel):
         # This is used for conversational fields which can be passed in through either inputs or config fpsProperties.
         input_override_mappings = {
             "uipath__conversation_id": "conversation_id",
+            "uipath__exchange_id": "exchange_id",
         }
         try:
             input_dict = base.get_input()
