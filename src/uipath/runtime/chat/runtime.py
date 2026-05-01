@@ -103,6 +103,11 @@ class UiPathChatRuntime:
 
                                 for trigger in api_triggers:
                                     await self.chat_bridge.emit_interrupt_event(trigger)
+                                    await (
+                                        self.chat_bridge.emit_executing_tool_call_event(
+                                            trigger
+                                        )
+                                    )
 
                                     resume_data = (
                                         await self.chat_bridge.wait_for_resume()

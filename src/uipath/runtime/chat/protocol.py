@@ -43,6 +43,20 @@ class UiPathChatProtocol(Protocol):
         """
         ...
 
+    async def emit_executing_tool_call_event(
+        self, resume_trigger: UiPathResumeTrigger
+    ) -> None:
+        """Emit an executingToolCall event signaling tool execution is about to begin.
+
+        Called for every durable interrupt (Paths 2/3/4) right before
+        wait_for_resume(). The bridge extracts tool info from the trigger
+        and emits the event to the client.
+
+        Args:
+            resume_trigger: The trigger containing tool call info
+        """
+        ...
+
     async def emit_exchange_end_event(self) -> None:
         """Send an exchange end event."""
         ...
