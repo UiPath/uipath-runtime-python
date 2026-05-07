@@ -37,7 +37,7 @@ class UiPathRuntimeContext(BaseModel):
     )
     exchange_id: str | None = Field(None, description="Exchange identifier for CAS")
     message_id: str | None = Field(None, description="Message identifier for CAS")
-    voice_mode: Literal["config", "toolCall"] | None = Field(
+    voice_mode: Literal["session"] | None = Field(
         None, description="Voice job type for CAS"
     )
     mcp_server_id: str | None = None
