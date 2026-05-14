@@ -158,6 +158,109 @@ def test_parse_input_string_returns_none_for_empty_string() -> None:
     assert result is None
 
 
+def test_with_defaults_overlays_ids_from_input(tmp_path: Path) -> None:
+    ctx = UiPathRuntimeContext.with_defaults(
+        config_path=str(tmp_path / "missing.json"),
+        input=json.dumps(
+            {
+                "uipath__conversation_id": "conv-from-input",
+                "uipath__exchange_id": "exch-from-input",
+            }
+        ),
+    )
+
+    assert ctx.conversation_id == "conv-from-input"
+    assert ctx.exchange_id == "exch-from-input"
+
+
+def test_with_defaults_input_wins_over_fps(tmp_path: Path) -> None:
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "fpsProperties": {
+                    "conversationalService.conversationId": "conv-from-fps",
+                    "conversationalService.exchangeId": "exch-from-fps",
+                }
+            }
+        )
+    )
+
+    ctx = UiPathRuntimeContext.with_defaults(
+        config_path=str(config_path),
+        input=json.dumps(
+            {
+                "uipath__conversation_id": "conv-from-input",
+                "uipath__exchange_id": "exch-from-input",
+            }
+        ),
+    )
+
+    assert ctx.conversation_id == "conv-from-input"
+    assert ctx.exchange_id == "exch-from-input"
+
+
+def test_with_defaults_preserves_fps_when_input_missing_keys(tmp_path: Path) -> None:
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "fpsProperties": {
+                    "conversationalService.conversationId": "conv-from-fps",
+                    "conversationalService.exchangeId": "exch-from-fps",
+                }
+            }
+        )
+    )
+
+    ctx = UiPathRuntimeContext.with_defaults(
+        config_path=str(config_path),
+        input=json.dumps({"messages": []}),
+    )
+
+    assert ctx.conversation_id == "conv-from-fps"
+    assert ctx.exchange_id == "exch-from-fps"
+
+
+def test_with_defaults_noop_when_no_input(tmp_path: Path) -> None:
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "fpsProperties": {
+                    "conversationalService.conversationId": "conv-from-fps",
+                }
+            }
+        )
+    )
+
+    ctx = UiPathRuntimeContext.with_defaults(config_path=str(config_path))
+
+    assert ctx.conversation_id == "conv-from-fps"
+
+
+def test_with_defaults_swallows_invalid_json_input(tmp_path: Path) -> None:
+    """Invalid input must not crash construction — the real get_input() call
+    during execute surfaces the JSON error at the right layer."""
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "fpsProperties": {
+                    "conversationalService.conversationId": "conv-from-fps",
+                }
+            }
+        )
+    )
+
+    ctx = UiPathRuntimeContext.with_defaults(
+        config_path=str(config_path),
+        input="{not: valid json",
+    )
+
+    assert ctx.conversation_id == "conv-from-fps"
+
+
 def test_parse_input_string_returns_none_for_whitespace_only() -> None:
     """Test that whitespace-only input string returns None, not empty dict."""
     ctx = UiPathRuntimeContext(input="   ")
