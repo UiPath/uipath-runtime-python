@@ -5,7 +5,8 @@ description = "Runtime abstractions and interfaces for building agents and autom
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 dependencies = [
-  "uipath-core>=0.5.14, <0.6.0"
+  "uipath-core>=0.5.14, <0.6.0",
+  "uipath-governance>=0.0.1"
 ]
 classifiers = [
   "Intended Audience :: Developers",
@@ -41,6 +42,9 @@ dev = [
   "pytest-mock>=3.11.1",
   "pre-commit>=4.1.0",
 ]
+
+[tool.uv.sources]
+uipath-governance = { path = "C:/Dev/uipath-governance-python", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/uipath"]
