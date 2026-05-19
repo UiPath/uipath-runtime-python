@@ -43,6 +43,12 @@ from uipath.runtime.resumable.runtime import (
 )
 from uipath.runtime.schema import UiPathRuntimeSchema
 from uipath.runtime.storage import UiPathRuntimeStorageProtocol
+from uipath.runtime.wrapper import (
+    WRAPPER_ENTRY_POINT_GROUP,
+    UiPathRuntimeWrapperProtocol,
+    UiPathRuntimeWrapperRegistry,
+    runtime_wrapper_registry,
+)
 
 __all__ = [
     "UiPathExecuteOptions",
@@ -73,4 +79,9 @@ __all__ = [
     "UiPathResumeTriggerName",
     "UiPathChatProtocol",
     "UiPathChatRuntime",
+    # Runtime wrapper extension point
+    "UiPathRuntimeWrapperProtocol",
+    "UiPathRuntimeWrapperRegistry",
+    "WRAPPER_ENTRY_POINT_GROUP",
+    "runtime_wrapper_registry",
 ]
