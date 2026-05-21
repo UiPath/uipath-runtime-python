@@ -236,7 +236,7 @@ def test_get_factory_by_name(clean_registry):
 
     UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
 
-    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph")
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph", apply_wrappers=False)
     assert isinstance(factory, MockLangGraphFactory)
     assert factory.name == "langgraph"
 
@@ -252,7 +252,9 @@ def test_get_factory_by_name_with_context(clean_registry):
     UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
 
     context = UiPathRuntimeContext.with_defaults(entrypoint="test")
-    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph", context=context)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        name="langgraph", context=context, apply_wrappers=False
+    )
     assert isinstance(factory, MockLangGraphFactory)
     assert factory.context == context
 
@@ -284,7 +286,9 @@ def test_auto_detect_langgraph_json(clean_registry, temp_dir):
 
     Path(temp_dir, "langgraph.json").touch()
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockLangGraphFactory)
 
 
@@ -309,7 +313,9 @@ def test_auto_detect_llamaindex_json(clean_registry, temp_dir):
 
     Path(temp_dir, "llamaindex.json").touch()
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockLlamaIndexFactory)
 
 
@@ -334,7 +340,9 @@ def test_auto_detect_uipath_json(clean_registry, temp_dir):
 
     Path(temp_dir, "uipath.json").touch()
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockFunctionsFactory)
 
 
@@ -357,7 +365,9 @@ def test_fallback_to_default(clean_registry, temp_dir):
     )
     UiPathRuntimeFactoryRegistry.set_default("functions")
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockFunctionsFactory)
 
 
@@ -399,7 +409,9 @@ def test_priority_langgraph_over_uipath(clean_registry, temp_dir):
     Path(temp_dir, "uipath.json").touch()
     Path(temp_dir, "langgraph.json").touch()
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockLangGraphFactory)
 
 

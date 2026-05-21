@@ -1004,11 +1004,43 @@ wheels = [
 ]
 
 [[package]]
+name = "uipath-governance"
+version = "0.0.1"
+source = { editable = "C:/Dev/uipath-governance-python" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=0.3.0" },
+    { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
+provides-extras = ["langchain", "otel"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.8.2" },
+    { name = "mypy", specifier = ">=1.14.1" },
+    { name = "pre-commit", specifier = ">=4.1.0" },
+    { name = "pytest", specifier = ">=7.4.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
+    { name = "pytest-cov", specifier = ">=4.1.0" },
+    { name = "pytest-mock", specifier = ">=3.11.1" },
+    { name = "pytest-xdist", specifier = ">=3.5.0" },
+    { name = "ruff", specifier = ">=0.9.4" },
+    { name = "rust-just", specifier = ">=1.39.0" },
+]
+
+[[package]]
 name = "uipath-runtime"
 version = "0.10.3"
 source = { editable = "." }
 dependencies = [
     { name = "uipath-core" },
+    { name = "uipath-governance" },
 ]
 
 [package.dev-dependencies]
@@ -1027,7 +1059,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "uipath-core", specifier = ">=0.5.14,<0.6.0" }]
+requires-dist = [
+    { name = "uipath-core", specifier = ">=0.5.14,<0.6.0" },
+    { name = "uipath-governance", editable = "C:/Dev/uipath-governance-python" },
+]
 
 [package.metadata.requires-dev]
 dev = [
