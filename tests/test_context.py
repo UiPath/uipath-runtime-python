@@ -241,6 +241,26 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
     assert ctx.mcp_server_slug == "test-server-slug"
 
 
+def test_with_defaults_exports_conversation_id_to_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolved conversation_id should be exported to UIPATH_CONVERSATION_ID."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.conversationId": "conv-from-config",
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+    monkeypatch.delenv("UIPATH_CONVERSATION_ID", raising=False)
+
+    UiPathRuntimeContext.with_defaults(config_path=str(config_path))
+
+    import os
+
+    assert os.environ.get("UIPATH_CONVERSATION_ID") == "conv-from-config"
+
+
 def test_result_file_written_on_faulted_trigger_error(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     ctx = UiPathRuntimeContext(

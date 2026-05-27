@@ -337,6 +337,11 @@ class UiPathRuntimeContext(BaseModel):
         for k, v in kwargs.items():
             setattr(base, k, v)
 
+        # Export resolved conversation ID (from fpsProperties). Used for specific tools run by 
+        # conversational-agents to have the conversation ID passed in.
+        if base.conversation_id:
+            os.environ["UIPATH_CONVERSATION_ID"] = base.conversation_id
+
         return base
 
     @classmethod
