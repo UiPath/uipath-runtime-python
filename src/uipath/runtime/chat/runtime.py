@@ -108,6 +108,37 @@ class UiPathChatRuntime:
                                         await self.chat_bridge.wait_for_resume()
                                     )
 
+                                    # If this was a tool-call confirmation (has "approved"),
+                                    # emit executingToolCall with the final input.
+                                    # This allows client side tools to run after any tool confirmation.
+                                    if (
+                                        isinstance(resume_data, dict)
+                                        and "approved" in resume_data
+                                        and resume_data.get("approved")
+                                    ):
+                                        request = (
+                                            trigger.api_resume.request
+                                            if trigger.api_resume
+                                            else None
+                                        )
+                                        tool_call_id = (
+                                            request.get("tool_call_id")
+                                            if isinstance(request, dict)
+                                            else None
+                                        )
+                                        if tool_call_id:
+                                            confirmed_input = resume_data.get(
+                                                "input"
+                                            ) or (
+                                                request.get("input")
+                                                if isinstance(request, dict)
+                                                else None
+                                            )
+                                            await self.chat_bridge.emit_executing_tool_call(
+                                                tool_call_id=tool_call_id,
+                                                tool_input=confirmed_input,
+                                            )
+
                                     assert trigger.interrupt_id is not None, (
                                         "Trigger interrupt_id cannot be None"
                                     )
