@@ -43,7 +43,7 @@ class UiPathChatProtocol(Protocol):
         """
         ...
 
-    async def emit_executing_tool_call(
+    async def emit_executing_tool_call_event(
         self,
         tool_call_id: str,
         tool_input: dict[str, Any] | None = None,
