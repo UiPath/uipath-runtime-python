@@ -14,6 +14,8 @@ jobs:
 
   test:
     uses: ./.github/workflows/test.yml
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   build:
     name: Build
