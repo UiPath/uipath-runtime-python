@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.11"
 
 [options]
-exclude-newer = "2026-05-27T01:59:29.217327Z"
+exclude-newer = "2026-05-27T14:28:49.412753Z"
 exclude-newer-span = "P2D"
 
 [options.exclude-newer-package]
@@ -1012,7 +1012,7 @@ wheels = [
 
 [[package]]
 name = "uipath-runtime"
-version = "0.10.5"
+version = "0.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "uipath-core" },
@@ -1034,7 +1034,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "uipath-core", specifier = ">=0.5.14,<0.6.0" }]
+requires-dist = [{ name = "uipath-core", specifier = ">=0.5.17,<0.6.0" }]
 
 [package.metadata.requires-dev]
 dev = [
