@@ -337,6 +337,21 @@ class UiPathRuntimeContext(BaseModel):
         for k, v in kwargs.items():
             setattr(base, k, v)
 
+        # Attempt to parse inputs for reserved keys and overlay onto context.
+        # This is used for conversational fields which can be passed in through either inputs or config fpsProperties.
+        input_override_mappings = {
+            "uipath__conversation_id": "conversation_id",
+            "uipath__exchange_id": "exchange_id",
+        }
+        try:
+            input_dict = base.get_input()
+        except UiPathRuntimeError:
+            input_dict = None
+        if isinstance(input_dict, dict):
+            for input_key, attr_name in input_override_mappings.items():
+                if input_key in input_dict and hasattr(base, attr_name):
+                    setattr(base, attr_name, input_dict[input_key])
+
         return base
 
     @classmethod
