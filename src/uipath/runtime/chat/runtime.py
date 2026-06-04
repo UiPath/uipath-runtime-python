@@ -3,6 +3,8 @@
 import logging
 from typing import Any, AsyncGenerator, cast
 
+from pydantic import ValidationError
+from uipath.core.chat import UiPathConversationToolCallConfirmationEvent
 from uipath.core.triggers import UiPathResumeTriggerType
 
 from uipath.runtime.base import (
@@ -108,6 +110,34 @@ class UiPathChatRuntime:
                                         await self.chat_bridge.wait_for_resume()
                                     )
 
+                                    # If this was a tool-call confirmation,
+                                    # emit executingToolCall with the final input.
+                                    # This allows client side tools to run after any tool confirmation.
+                                    confirmation = _parse_confirmation(resume_data)
+                                    if confirmation and confirmation.approved:
+                                        assert trigger.api_resume is not None, (
+                                            "Confirmed trigger must have api_resume"
+                                        )
+                                        request = trigger.api_resume.request
+                                        assert isinstance(request, dict), (
+                                            "Confirmed trigger api_resume.request must be a dict"
+                                        )
+
+                                        tool_call_id = request.get("tool_call_id")
+                                        assert tool_call_id is not None, (
+                                            "Confirmed trigger request must contain tool_call_id"
+                                        )
+
+                                        confirmed_input = (
+                                            confirmation.input
+                                            if confirmation.input is not None
+                                            else request.get("input")
+                                        )
+                                        await self.chat_bridge.emit_executing_tool_call_event(
+                                            tool_call_id=tool_call_id,
+                                            tool_input=confirmed_input,
+                                        )
+
                                     assert trigger.interrupt_id is not None, (
                                         "Trigger interrupt_id cannot be None"
                                     )
@@ -162,3 +192,16 @@ class UiPathChatRuntime:
             await self.chat_bridge.disconnect()
         except Exception as e:
             logger.warning(f"Error disconnecting chat bridge: {e}")
+
+
+def _parse_confirmation(
+    data: dict[str, Any],
+) -> UiPathConversationToolCallConfirmationEvent | None:
+    """Try to parse resume data as a tool-call confirmation event.
+
+    Returns the parsed confirmation if valid, None otherwise (e.g. endToolCall).
+    """
+    try:
+        return UiPathConversationToolCallConfirmationEvent.model_validate(data)
+    except (ValidationError, TypeError):
+        return None

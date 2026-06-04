@@ -43,6 +43,22 @@ class UiPathChatProtocol(Protocol):
         """
         ...
 
+    async def emit_executing_tool_call_event(
+        self,
+        tool_call_id: str,
+        tool_input: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit an executingToolCall event.
+
+        Called after a tool-call confirmation resumes to signal that the tool
+        is about to execute with the final (possibly modified) input.
+
+        Args:
+            tool_call_id: The tool call ID from the interrupt request.
+            tool_input: The final tool input after confirmation.
+        """
+        ...
+
     async def emit_exchange_end_event(self) -> None:
         """Send an exchange end event."""
         ...

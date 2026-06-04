@@ -10,7 +10,11 @@ from uipath.core.chat import (
     UiPathConversationMessageEvent,
     UiPathConversationMessageStartEvent,
 )
-from uipath.core.triggers import UiPathResumeTrigger, UiPathResumeTriggerType
+from uipath.core.triggers import (
+    UiPathApiTrigger,
+    UiPathResumeTrigger,
+    UiPathResumeTriggerType,
+)
 
 from uipath.runtime import (
     UiPathExecuteOptions,
@@ -22,6 +26,7 @@ from uipath.runtime.chat import (
     UiPathChatProtocol,
     UiPathChatRuntime,
 )
+from uipath.runtime.chat.runtime import _parse_confirmation
 from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeMessageEvent
 from uipath.runtime.schema import UiPathRuntimeSchema
 
@@ -34,6 +39,7 @@ def make_chat_bridge_mock() -> UiPathChatProtocol:
     bridge_mock.disconnect = AsyncMock()
     bridge_mock.emit_message_event = AsyncMock()
     bridge_mock.emit_interrupt_event = AsyncMock()
+    bridge_mock.emit_executing_tool_call_event = AsyncMock()
     bridge_mock.wait_for_resume = AsyncMock()
 
     return cast(UiPathChatProtocol, bridge_mock)
@@ -144,6 +150,13 @@ class SuspendingMockRuntime:
                 trigger = UiPathResumeTrigger(
                     interrupt_id="interrupt-1",
                     trigger_type=UiPathResumeTriggerType.API,
+                    api_resume=UiPathApiTrigger(
+                        request={
+                            "tool_call_id": "tc-1",
+                            "tool_name": "test_tool",
+                            "input": {"key": "value"},
+                        }
+                    ),
                     payload={"action": "confirm_tool_call"},
                 )
                 yield UiPathRuntimeResult(
@@ -414,16 +427,37 @@ class MultiTriggerMockRuntime:
             trigger_a = UiPathResumeTrigger(
                 interrupt_id="email-confirm",
                 trigger_type=UiPathResumeTriggerType.API,
+                api_resume=UiPathApiTrigger(
+                    request={
+                        "tool_call_id": "tc-email",
+                        "tool_name": "send_email",
+                        "input": {"to": "user@example.com"},
+                    }
+                ),
                 payload={"action": "send_email", "to": "user@example.com"},
             )
             trigger_b = UiPathResumeTrigger(
                 interrupt_id="file-delete",
                 trigger_type=UiPathResumeTriggerType.API,
+                api_resume=UiPathApiTrigger(
+                    request={
+                        "tool_call_id": "tc-file",
+                        "tool_name": "delete_file",
+                        "input": {"path": "/logs/old.txt"},
+                    }
+                ),
                 payload={"action": "delete_file", "path": "/logs/old.txt"},
             )
             trigger_c = UiPathResumeTrigger(
                 interrupt_id="api-call",
                 trigger_type=UiPathResumeTriggerType.API,
+                api_resume=UiPathApiTrigger(
+                    request={
+                        "tool_call_id": "tc-api",
+                        "tool_name": "call_api",
+                        "input": {"endpoint": "/users"},
+                    }
+                ),
                 payload={"action": "call_api", "endpoint": "/users"},
             )
 
@@ -483,11 +517,25 @@ class MixedTriggerMockRuntime:
             trigger_a = UiPathResumeTrigger(
                 interrupt_id="email-confirm",
                 trigger_type=UiPathResumeTriggerType.API,
+                api_resume=UiPathApiTrigger(
+                    request={
+                        "tool_call_id": "tc-email",
+                        "tool_name": "send_email",
+                        "input": {"to": "user@example.com"},
+                    }
+                ),
                 payload={"action": "send_email"},
             )
             trigger_b = UiPathResumeTrigger(
                 interrupt_id="file-delete",
                 trigger_type=UiPathResumeTriggerType.API,
+                api_resume=UiPathApiTrigger(
+                    request={
+                        "tool_call_id": "tc-file",
+                        "tool_name": "delete_file",
+                        "input": {"path": "/logs/old.txt"},
+                    }
+                ),
                 payload={"action": "delete_file"},
             )
             trigger_c = UiPathResumeTrigger(
@@ -612,3 +660,101 @@ async def test_chat_runtime_filters_non_api_triggers():
     assert emit_calls[0][0][0].trigger_type == UiPathResumeTriggerType.API
     assert emit_calls[1][0][0].interrupt_id == "file-delete"
     assert emit_calls[1][0][0].trigger_type == UiPathResumeTriggerType.API
+
+
+class TestParseConfirmation:
+    def test_approved_confirmation(self):
+        result = _parse_confirmation({"approved": True})
+        assert result is not None
+        assert result.approved is True
+        assert result.input is None
+
+    def test_rejected_confirmation(self):
+        result = _parse_confirmation({"approved": False})
+        assert result is not None
+        assert result.approved is False
+
+    def test_confirmation_with_modified_input(self):
+        result = _parse_confirmation({"approved": True, "input": {"key": "new_val"}})
+        assert result is not None
+        assert result.approved is True
+        assert result.input == {"key": "new_val"}
+
+    def test_end_tool_call_returns_none(self):
+        result = _parse_confirmation({"output": {"result": 42}, "isError": False})
+        assert result is None
+
+    def test_empty_dict_returns_none(self):
+        result = _parse_confirmation({})
+        assert result is None
+
+    def test_unrelated_data_returns_none(self):
+        result = _parse_confirmation({"foo": "bar", "baz": 123})
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_confirmation_approved_emits_executing_tool_call_event():
+    """Approved confirmation should emit executingToolCall with original input."""
+    runtime_impl = SuspendingMockRuntime(suspend_at_message=0)
+    bridge = make_chat_bridge_mock()
+    cast(AsyncMock, bridge.wait_for_resume).return_value = {"approved": True}
+
+    chat_runtime = UiPathChatRuntime(delegate=runtime_impl, chat_bridge=bridge)
+    await chat_runtime.execute({})
+    await chat_runtime.dispose()
+
+    cast(AsyncMock, bridge.emit_executing_tool_call_event).assert_awaited_once_with(
+        tool_call_id="tc-1",
+        tool_input={"key": "value"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirmation_approved_with_modified_input():
+    """Approved confirmation with modified input should use confirmation input."""
+    runtime_impl = SuspendingMockRuntime(suspend_at_message=0)
+    bridge = make_chat_bridge_mock()
+    cast(AsyncMock, bridge.wait_for_resume).return_value = {
+        "approved": True,
+        "input": {"key": "modified"},
+    }
+
+    chat_runtime = UiPathChatRuntime(delegate=runtime_impl, chat_bridge=bridge)
+    await chat_runtime.execute({})
+    await chat_runtime.dispose()
+
+    cast(AsyncMock, bridge.emit_executing_tool_call_event).assert_awaited_once_with(
+        tool_call_id="tc-1",
+        tool_input={"key": "modified"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirmation_rejected_does_not_emit_executing():
+    """Rejected confirmation should not emit executingToolCall."""
+    runtime_impl = SuspendingMockRuntime(suspend_at_message=0)
+    bridge = make_chat_bridge_mock()
+    cast(AsyncMock, bridge.wait_for_resume).return_value = {"approved": False}
+
+    chat_runtime = UiPathChatRuntime(delegate=runtime_impl, chat_bridge=bridge)
+    await chat_runtime.execute({})
+    await chat_runtime.dispose()
+
+    cast(AsyncMock, bridge.emit_executing_tool_call_event).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_end_tool_call_does_not_emit_executing():
+    """endToolCall resume data should not emit executingToolCall."""
+    runtime_impl = SuspendingMockRuntime(suspend_at_message=0)
+    bridge = make_chat_bridge_mock()
+    cast(AsyncMock, bridge.wait_for_resume).return_value = {
+        "output": {"result": 42},
+    }
+
+    chat_runtime = UiPathChatRuntime(delegate=runtime_impl, chat_bridge=bridge)
+    await chat_runtime.execute({})
+    await chat_runtime.dispose()
+
+    cast(AsyncMock, bridge.emit_executing_tool_call_event).assert_not_awaited()
