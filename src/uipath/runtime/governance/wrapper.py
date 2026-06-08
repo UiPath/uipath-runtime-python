@@ -296,13 +296,34 @@ class GovernanceRuntime:
         if context is not None and hasattr(context, "entrypoint"):
             self._agent_name = context.entrypoint or "agent"
 
-        # Governance feature flag gate. When OFF: no extraction, no
-        # ContextVar binding, no agent-type selector mutation, no
-        # prefetch. All hook checks see _init_failed=True and no-op.
-        # Everything below this point is governance-side state — running
-        # it under FF-off would (a) violate the lazy/no-op contract and
-        # (b) expose the wrapper to extraction exceptions on hosts where
-        # governance is intentionally disabled.
+        # Extract model name and bind into the ContextVar so adapters
+        # running in this runtime's context see the right value under
+        # concurrent agents. We keep the token so dispose() can reset
+        # the var — without that, the value leaks into sibling tasks
+        # that inherit this context and outlives the runtime.
+        model_name = self._extract_model_name(delegate, context)
+        self._model_name_token: Token[str] | None = _current_model_name.set(model_name)
+        self._model_name = model_name
+
+        # Determine whether this is a conversational or autonomous agent and
+        # record it before the policy prefetch fires, so the fetch can ask the
+        # server for the matching container key (conversational vs autonomous).
+        self._is_conversational = self._extract_is_conversational(delegate, context)
+        set_agent_conversational(self._is_conversational)
+
+        # Fire the network-bound policy fetch in the background so it
+        # overlaps with the rest of the agent setup. The evaluator and
+        # adapter wrap are materialised lazily on the first hook fire
+        # (see _ensure_evaluator), which is where we wait for the
+        # prefetch to land.
+        self._evaluator: GovernanceEvaluator | None = None
+        self._evaluator_ready: bool = False
+        self._evaluator_lock = threading.Lock()
+
+        # Governance feature flag gate (mirrors the runtime-side gate).
+        # When OFF, we short-circuit init: no prefetch, no adapter
+        # setup, no agent-start notification. All hook checks see
+        # _init_failed=True and no-op.
         if not is_governance_enabled():
             self._init_failed = True
             self._evaluator_ready = True  # don't try to materialise later

@@ -124,6 +124,16 @@ def disabled_guardrails(audit: Any, policy_index: Any) -> list[FiredRule]:
     single fallback condition each, so the returned list has one entry
     per fired rule in practice; multi-condition rules would emit more
     than one entry sharing the same ``ruleId``.
+
+    Each entry carries the metadata the server needs to write one
+    per-rule LLMOps trace record::
+
+        {
+          "ruleId": "...",
+          "ruleName": "...",
+          "packName": "...",
+          "validator": "pii_detection",
+        }
     """
     out: list[FiredRule] = []
     for ev in audit.evaluations:
