@@ -1,10 +1,15 @@
+import sys
 import tempfile
+import types
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional, cast
+from unittest.mock import MagicMock
 
 import pytest
+from uipath.core.feature_flags import FeatureFlags
 
 from uipath.runtime import (
+    GOVERNANCE_FEATURE_FLAG,
     UiPathExecuteOptions,
     UiPathRuntimeContext,
     UiPathRuntimeEvent,
@@ -18,6 +23,7 @@ from uipath.runtime import (
     UiPathRuntimeStorageProtocol,
     UiPathStreamOptions,
 )
+from uipath.runtime.registry import UiPathWrappedRuntimeFactory
 
 
 class MockStorage(UiPathRuntimeStorageProtocol):
@@ -236,7 +242,7 @@ def test_get_factory_by_name(clean_registry):
 
     UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
 
-    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph")
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph", apply_wrappers=False)
     assert isinstance(factory, MockLangGraphFactory)
     assert factory.name == "langgraph"
 
@@ -252,7 +258,9 @@ def test_get_factory_by_name_with_context(clean_registry):
     UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
 
     context = UiPathRuntimeContext.with_defaults(entrypoint="test")
-    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph", context=context)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        name="langgraph", context=context, apply_wrappers=False
+    )
     assert isinstance(factory, MockLangGraphFactory)
     assert factory.context == context
 
@@ -284,7 +292,9 @@ def test_auto_detect_langgraph_json(clean_registry, temp_dir):
 
     Path(temp_dir, "langgraph.json").touch()
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockLangGraphFactory)
 
 
@@ -309,7 +319,9 @@ def test_auto_detect_llamaindex_json(clean_registry, temp_dir):
 
     Path(temp_dir, "llamaindex.json").touch()
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockLlamaIndexFactory)
 
 
@@ -334,7 +346,9 @@ def test_auto_detect_uipath_json(clean_registry, temp_dir):
 
     Path(temp_dir, "uipath.json").touch()
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockFunctionsFactory)
 
 
@@ -357,7 +371,9 @@ def test_fallback_to_default(clean_registry, temp_dir):
     )
     UiPathRuntimeFactoryRegistry.set_default("functions")
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockFunctionsFactory)
 
 
@@ -399,7 +415,9 @@ def test_priority_langgraph_over_uipath(clean_registry, temp_dir):
     Path(temp_dir, "uipath.json").touch()
     Path(temp_dir, "langgraph.json").touch()
 
-    factory = UiPathRuntimeFactoryRegistry.get(search_path=temp_dir)
+    factory = UiPathRuntimeFactoryRegistry.get(
+        search_path=temp_dir, apply_wrappers=False
+    )
     assert isinstance(factory, MockLangGraphFactory)
 
 
@@ -430,7 +448,7 @@ async def test_factory_create_runtime(clean_registry):
 
     UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
 
-    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph")
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph", apply_wrappers=False)
     runtime = await factory.new_runtime("agent", "runtime-1")
     assert isinstance(runtime, MockRuntime)
     assert runtime.name == "langgraph-agent"
@@ -450,3 +468,155 @@ def test_get_all_returns_copy(clean_registry):
     all_factories["malicious"] = "hack.json"
 
     assert "malicious" not in UiPathRuntimeFactoryRegistry.get_all()
+
+
+# ---------------------------------------------------------------------------
+# Wrapping behaviour (apply_wrappers=True)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _reset_feature_flags():
+    FeatureFlags.reset_flags()
+    yield
+    FeatureFlags.reset_flags()
+
+
+@pytest.fixture
+def fake_governance_module(monkeypatch):
+    """Install a stub ``uipath.runtime.governance.wrapper`` for the lazy import.
+
+    ``apply_governance_wrapper`` imports ``governance_wrapper`` only when
+    the FF is on; this fixture lets us assert it was called without
+    triggering the real governance runtime (which would try to talk to
+    the policy backend).
+    """
+    mock_wrapper = MagicMock(name="governance_wrapper")
+    module = types.ModuleType("uipath.runtime.governance.wrapper")
+    module.governance_wrapper = mock_wrapper
+    monkeypatch.setitem(sys.modules, "uipath.runtime.governance.wrapper", module)
+    return mock_wrapper
+
+
+def test_get_returns_wrapped_factory_by_default(clean_registry):
+    """``get`` with default args wraps the registered factory."""
+
+    def create_factory(
+        context: UiPathRuntimeContext | None = None,
+    ) -> UiPathRuntimeFactoryProtocol:
+        return MockLangGraphFactory(context)
+
+    UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
+
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph")
+
+    assert isinstance(factory, UiPathWrappedRuntimeFactory)
+    assert isinstance(factory.inner, MockLangGraphFactory)
+
+
+def test_wrapped_factory_attribute_fallthrough(clean_registry):
+    """Non-protocol attributes on the delegate are reachable via ``__getattr__``."""
+
+    def create_factory(
+        context: UiPathRuntimeContext | None = None,
+    ) -> UiPathRuntimeFactoryProtocol:
+        return MockLangGraphFactory(context)
+
+    UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
+
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph")
+
+    # `name` is not part of the protocol but is defined on the concrete factory.
+    assert factory.name == "langgraph"  # type: ignore[attr-defined]
+
+
+def test_wrapped_factory_delegates_protocol_methods(clean_registry):
+    """Protocol methods reach the underlying factory unchanged."""
+
+    def create_factory(
+        context: UiPathRuntimeContext | None = None,
+    ) -> UiPathRuntimeFactoryProtocol:
+        return MockLangGraphFactory(context)
+
+    UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
+
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph")
+
+    assert factory.discover_entrypoints() == ["agent", "workflow"]
+
+
+@pytest.mark.asyncio
+async def test_wrapped_factory_returns_inner_runtime_when_flag_off(
+    clean_registry, _reset_feature_flags, monkeypatch
+):
+    """With the governance FF off, ``new_runtime`` returns the bare runtime."""
+    FeatureFlags.configure_flags({GOVERNANCE_FEATURE_FLAG: False})
+    monkeypatch.delenv("UIPATH_FEATURE_" + GOVERNANCE_FEATURE_FLAG, raising=False)
+
+    def create_factory(
+        context: UiPathRuntimeContext | None = None,
+    ) -> UiPathRuntimeFactoryProtocol:
+        return MockLangGraphFactory(context)
+
+    UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
+
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph")
+    runtime = await factory.new_runtime("agent", "runtime-1")
+
+    assert isinstance(runtime, MockRuntime)
+    assert runtime.name == "langgraph-agent"
+
+
+@pytest.mark.asyncio
+async def test_wrapped_factory_invokes_governance_when_flag_on(
+    clean_registry, _reset_feature_flags, fake_governance_module
+):
+    """With the governance FF on, ``new_runtime`` routes through ``governance_wrapper``."""
+    FeatureFlags.configure_flags({GOVERNANCE_FEATURE_FLAG: True})
+
+    governed_sentinel = MagicMock(name="GovernedRuntime")
+    fake_governance_module.return_value = governed_sentinel
+
+    captured: dict[str, Any] = {}
+
+    def create_factory(
+        context: UiPathRuntimeContext | None = None,
+    ) -> UiPathRuntimeFactoryProtocol:
+        captured["context"] = context
+        return MockLangGraphFactory(context)
+
+    UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
+
+    context = UiPathRuntimeContext.with_defaults(entrypoint="agent")
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph", context=context)
+
+    result = await factory.new_runtime("agent", "runtime-42")
+
+    assert result is governed_sentinel
+    fake_governance_module.assert_called_once()
+    call_args = fake_governance_module.call_args
+    # signature: governance_wrapper(runtime, context, runtime_id)
+    assert isinstance(call_args.args[0], MockRuntime)
+    assert call_args.args[1] is context
+    assert call_args.args[2] == "runtime-42"
+
+
+@pytest.mark.asyncio
+async def test_wrapped_factory_swallows_governance_exception(
+    clean_registry, _reset_feature_flags, fake_governance_module
+):
+    """Governance failures must never break runtime creation."""
+    FeatureFlags.configure_flags({GOVERNANCE_FEATURE_FLAG: True})
+    fake_governance_module.side_effect = RuntimeError("policy load failed")
+
+    def create_factory(
+        context: UiPathRuntimeContext | None = None,
+    ) -> UiPathRuntimeFactoryProtocol:
+        return MockLangGraphFactory(context)
+
+    UiPathRuntimeFactoryRegistry.register("langgraph", create_factory, "langgraph.json")
+
+    factory = UiPathRuntimeFactoryRegistry.get(name="langgraph")
+    runtime = await factory.new_runtime("agent", "runtime-1")
+
+    assert isinstance(runtime, MockRuntime)

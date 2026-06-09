@@ -1,11 +1,17 @@
 [project]
 name = "uipath-runtime"
-version = "0.11.0"
+version = "0.11.1"
 description = "Runtime abstractions and interfaces for building agents and automation scripts in the UiPath ecosystem"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 dependencies = [
-  "uipath-core>=0.5.17, <0.6.0"
+  "uipath-core>=0.5.18, <0.6.0",
+  # Governance native-evaluator deps. Live here because the native
+  # evaluator implementation lives in uipath.runtime.governance.native;
+  # uipath-core only carries the small governance contracts.
+  "pyyaml>=6.0",
+  "vaderSentiment>=3.3.2",   # sentiment_concern (A.3.3)
+  "chardet>=5.2.0",          # encoding_concern (A.7.4)
 ]
 classifiers = [
   "Intended Audience :: Developers",
@@ -40,6 +46,7 @@ dev = [
   "pytest-cov>=4.1.0",
   "pytest-mock>=3.11.1",
   "pre-commit>=4.1.0",
+  "types-PyYAML>=6.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -82,6 +89,25 @@ check_untyped_defs = true
 no_implicit_reexport = true
 
 disallow_untyped_defs = false
+
+# Third-party governance-evaluator libs have no type stubs / py.typed marker
+[[tool.mypy.overrides]]
+module = [
+  "yaml",
+  "vaderSentiment.*",
+  "chardet",
+  "price_parser",
+  # uipath.platform.common is imported lazily from traces.py / audit
+  # sinks to read UiPathConfig context attributes. It's first-party but
+  # not a uipath-runtime dep, so its stubs aren't installable here.
+  "uipath.platform.*",
+  # Optional framework adapters; the absence of the framework simply
+  # means the adapter no-ops at import time.
+  "agents",
+  "langchain_core.*",
+  "langgraph.*",
+]
+ignore_missing_imports = true
 
 [tool.pydantic-mypy]
 init_forbid_extra = true
