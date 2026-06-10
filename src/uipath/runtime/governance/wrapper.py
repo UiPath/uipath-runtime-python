@@ -138,7 +138,10 @@ def _extract_governable_text(
         return ""
 
     # Pydantic / dataclass-like shapes are easier to walk via their
-    # dict form than via attribute introspection.
+    # dict form than via attribute introspection. If the first dumper
+    # raises (e.g. ``model_dump`` blows up on a partial pydantic v1
+    # model), fall through to the next one rather than abandoning the
+    # whole pydantic/dataclass path.
     for dumper in ("model_dump", "dict"):
         fn = getattr(value, dumper, None)
         if callable(fn):
@@ -150,8 +153,8 @@ def _extract_governable_text(
                     depth=depth + 1,
                     latest_only=latest_only,
                 )
-            except Exception:  # noqa: BLE001 - fall through to other extractors
-                break
+            except Exception:  # noqa: BLE001 - try the next dumper
+                continue
 
     obj_id = id(value)
     if seen is None:

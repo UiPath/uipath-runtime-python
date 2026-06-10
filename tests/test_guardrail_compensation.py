@@ -89,15 +89,17 @@ def _reset_enforcement_mode():
 
 @pytest.fixture
 def _govern_env(monkeypatch):
-    """Provide the org/tenant env vars that request_governance requires.
+    """Provide the env vars that request_governance requires.
 
-    The compensating call now mirrors the policy fetch — it skips when
-    ``UIPATH_ORGANIZATION_ID`` / ``UIPATH_TENANT_ID`` are missing.
-    Tests that need the network path to actually fire must opt into
-    this fixture.
+    The compensating call mirrors the policy fetch — it skips when
+    ``UIPATH_ORGANIZATION_ID`` / ``UIPATH_TENANT_ID`` /
+    ``UIPATH_ACCESS_TOKEN`` are missing (sending without a bearer
+    token would generate a guaranteed 401 per call). Tests that need
+    the network path to actually fire must opt into this fixture.
     """
     monkeypatch.setenv("UIPATH_ORGANIZATION_ID", "appsdev")
     monkeypatch.setenv("UIPATH_TENANT_ID", "tenant-xyz")
+    monkeypatch.setenv("UIPATH_ACCESS_TOKEN", "test-token")
     yield
 
 
@@ -215,9 +217,8 @@ def test_request_governance_posts_expected_payload_and_returns_none(
     }
 
 
-def test_request_governance_sends_shared_headers(monkeypatch, _govern_env):
-    """Headers must come from the shared helper — UA + Accept + Content-Type."""
-    monkeypatch.delenv("UIPATH_ACCESS_TOKEN", raising=False)
+def test_request_governance_sends_shared_headers(_govern_env):
+    """Headers must come from the shared helper — UA + Accept + Content-Type + Auth."""
     with patch.object(
         guardrail_compensation.urllib.request,
         "urlopen",
@@ -232,8 +233,8 @@ def test_request_governance_sends_shared_headers(monkeypatch, _govern_env):
     assert request_arg.get_header("Accept") == "application/json"
     assert request_arg.get_header("Content-type") == "application/json"
     assert request_arg.get_header("User-agent") == USER_AGENT
-    # No token in env → no Authorization header.
-    assert request_arg.get_header("Authorization") is None
+    # Bearer is required (see ``test_request_governance_skipped_when_token_missing``).
+    assert request_arg.get_header("Authorization") == "Bearer test-token"
     # Tenant header must travel on the compensating POST (same as the
     # policy GET) — the agenticgovernance ingress validates it.
     assert request_arg.get_header("X-uipath-internal-tenantid") == "tenant-xyz"
@@ -250,6 +251,24 @@ def test_request_governance_includes_bearer_token_when_set(monkeypatch, _govern_
 
     request_arg = mock_urlopen.call_args.args[0]
     assert request_arg.get_header("Authorization") == "Bearer the-token"
+
+
+def test_request_governance_skipped_when_token_missing(monkeypatch):
+    """Missing bearer → skip cleanly instead of sending a guaranteed-401 request.
+
+    Sending without a token would produce a 401 per compensation event
+    and pollute logs. Mirrors the org-id / tenant-id skip paths above.
+    """
+    monkeypatch.setenv("UIPATH_ORGANIZATION_ID", "appsdev")
+    monkeypatch.setenv("UIPATH_TENANT_ID", "tenant-xyz")
+    monkeypatch.delenv("UIPATH_ACCESS_TOKEN", raising=False)
+    with patch.object(
+        guardrail_compensation.urllib.request, "urlopen"
+    ) as mock_urlopen:
+        request_governance(_rules("x"), {}, "before_model", "t", "ts", "a", "r")
+    assert not mock_urlopen.called, (
+        "request_governance must NOT POST when bearer token is missing"
+    )
 
 
 def test_request_governance_skipped_when_org_id_missing(monkeypatch):

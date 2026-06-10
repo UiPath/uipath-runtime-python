@@ -37,19 +37,24 @@ def get_enforcement_mode() -> EnforcementMode:
     The mode is cached after first read. Resolution order:
 
     1. A value previously set via :func:`set_enforcement_mode` (the
-       policy loader calls this with the backend-supplied mode).
+       policy loader calls this with the backend-supplied mode on every
+       successful policy fetch — that's the canonical source).
     2. ``UIPATH_GOVERNANCE_MODE`` env var (developer override).
-    3. Default :attr:`EnforcementMode.AUDIT` — log but never block.
+    3. Default :attr:`EnforcementMode.DISABLED` — skip evaluation
+       entirely until the server explicitly opts the tenant in. This
+       keeps empty-policy / failed-fetch / pre-fetch scenarios free of
+       per-call audit overhead; a tenant with policies wins the cache
+       on the first ``set_enforcement_mode`` call from the loader.
     """
     global _enforcement_mode
     if _enforcement_mode is not None:
         return _enforcement_mode
 
-    mode_str = os.getenv(ENV_ENFORCEMENT_MODE, "audit").lower()
+    mode_str = os.getenv(ENV_ENFORCEMENT_MODE, "disabled").lower()
     try:
         _enforcement_mode = EnforcementMode(mode_str)
     except ValueError:
-        _enforcement_mode = EnforcementMode.AUDIT
+        _enforcement_mode = EnforcementMode.DISABLED
 
     return _enforcement_mode
 

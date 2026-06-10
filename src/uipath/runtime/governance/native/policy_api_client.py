@@ -18,9 +18,12 @@ the loader applies it via
 is the YAML the evaluator compiles into a :class:`PolicyIndex`.
 
 Failure mode is fail-open: when the organization id is unknown, the
-access token is missing, the backend errors (one retry on transient
-failures), or the body can't be parsed, the caller falls back to an
-empty PolicyIndex. Nothing in this module ever raises to the caller.
+access token is missing, the backend errors, or the body can't be
+parsed, the caller falls back to an empty PolicyIndex. The fetch is
+single-shot (no retry by design — see :func:`_get_once`) so a slow
+backend can't extend agent startup beyond
+:data:`BACKEND_REQUEST_TIMEOUT_SECONDS`. Nothing in this module ever
+raises to the caller.
 """
 
 from __future__ import annotations
@@ -147,7 +150,10 @@ def _fetch_policy_response_inner() -> PolicyResponse | None:
         )
         return None
 
-    headers = governance_request_headers(json_body=True)
+    # Policy fetch is a GET; ``json_body=False`` so ``Content-Type`` is
+    # omitted. Strict origin servers may 415 on unexpected Content-Type
+    # for GETs (see :func:`governance_request_headers` docstring).
+    headers = governance_request_headers(json_body=False)
     headers[TENANT_HEADER] = tenant_id
     logger.info("Policy fetch starting (org=%s, tenant=%s)", org_id, tenant_id)
 

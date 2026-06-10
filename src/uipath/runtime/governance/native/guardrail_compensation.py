@@ -28,6 +28,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -37,6 +38,7 @@ from typing import Any, TypedDict
 from uipath.runtime.governance.native.backend_client import (
     BACKEND_REQUEST_TIMEOUT_SECONDS,
     COMPENSATION_MAX_WORKERS,
+    ENV_ACCESS_TOKEN,
     ENV_ORGANIZATION_ID,
     ENV_TENANT_ID,
     GOVERN_API_PATH,
@@ -132,19 +134,31 @@ def disabled_guardrails(audit: Any, policy_index: Any) -> list[FiredRule]:
             continue
         for check in rule.checks:
             for cond in check.conditions:
-                if cond.operator == "guardrail_fallback" and isinstance(
-                    cond.value, dict
-                ):
-                    validator = str(cond.value.get("validator", ""))
-                    if validator:
-                        out.append(
-                            {
-                                "ruleId": ev.rule_id,
-                                "ruleName": ev.rule_name,
-                                "packName": getattr(rule, "pack_name", "") or "",
-                                "validator": validator,
-                            }
-                        )
+                if cond.operator != "guardrail_fallback":
+                    continue
+                if not isinstance(cond.value, dict):
+                    continue
+                # The ``guardrail_fallback`` operator at evaluation time
+                # only matches when ``mapped_to_uipath=True`` AND
+                # ``policy_enabled=False``. We re-check here defensively
+                # so a future code path that bypasses the evaluator (or
+                # a multi-condition rule that fired on a sibling check)
+                # can't trigger a compensation call for a guardrail
+                # that isn't actually disabled.
+                if not bool(cond.value.get("mapped_to_uipath", False)):
+                    continue
+                if bool(cond.value.get("policy_enabled", True)):
+                    continue
+                validator = str(cond.value.get("validator", ""))
+                if validator:
+                    out.append(
+                        {
+                            "ruleId": ev.rule_id,
+                            "ruleName": ev.rule_name,
+                            "packName": getattr(rule, "pack_name", "") or "",
+                            "validator": validator,
+                        }
+                    )
     return out
 
 
@@ -299,6 +313,19 @@ def request_governance(
             "available (set %s or ensure uipath-platform is installed). "
             "validators=[%s]",
             ENV_TENANT_ID,
+            ", ".join(validators),
+        )
+        return
+
+    # Bearer token is required by the backend; sending without one
+    # produces a 401 per call and pollutes logs. Skip cleanly when the
+    # token isn't present (e.g. local dev, missing host bootstrap)
+    # rather than burning quota on guaranteed auth failures.
+    if not os.environ.get(ENV_ACCESS_TOKEN):
+        logger.warning(
+            "Govern call skipped: %s is not set in the environment; "
+            "compensation requires a bearer token. validators=[%s]",
+            ENV_ACCESS_TOKEN,
             ", ".join(validators),
         )
         return

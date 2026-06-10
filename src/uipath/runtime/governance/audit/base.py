@@ -532,18 +532,40 @@ class AuditManager:
     def flush(self, timeout: float = 5.0) -> None:
         """Flush all pending events and sinks.
 
-        In async mode, waits for the event queue to drain before
-        flushing individual sinks.
+        In async mode, polls the queue until it drains or ``timeout``
+        seconds elapse, whichever comes first. ``queue.Queue.join`` has
+        no timeout argument — using it would block indefinitely on a
+        wedged sink, which defeats the bounded-shutdown contract that
+        :func:`_cleanup_audit_manager` relies on at process exit.
 
         Args:
             timeout: Maximum seconds to wait for queue to drain (default 5.0)
         """
         if self._async_mode:
-            # Wait for queue to drain
-            try:
-                self._queue.join()
-            except Exception:
-                pass
+            import time
+
+            deadline = time.monotonic() + max(0.0, timeout)
+            poll_interval = min(0.05, timeout) if timeout > 0 else 0.0
+            while time.monotonic() < deadline:
+                try:
+                    if self._queue.unfinished_tasks == 0:
+                        break
+                except Exception:  # noqa: BLE001 - queue introspection is best-effort
+                    break
+                time.sleep(poll_interval)
+            else:
+                # Loop didn't break — drain timed out. Log so a wedged
+                # sink is surfaced rather than swallowed.
+                try:
+                    pending = self._queue.unfinished_tasks
+                except Exception:  # noqa: BLE001
+                    pending = -1
+                if pending:
+                    logger.warning(
+                        "Audit queue did not drain within %.2fs "
+                        "(unfinished tasks=%s); sink may be wedged",
+                        timeout, pending,
+                    )
 
         with self._sinks_lock:
             sinks = list(self._sinks)

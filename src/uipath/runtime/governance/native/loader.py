@@ -142,11 +142,21 @@ def get_policy_index() -> PolicyIndex:
         completed = event.wait(timeout=_PREFETCH_WAIT_SECONDS)
         if completed and _policy_index is not None:
             return _policy_index
-        logger.warning(
-            "Policy prefetch did not complete in %.1fs; "
-            "agent will run without any policies",
-            _PREFETCH_WAIT_SECONDS,
-        )
+        if not completed:
+            logger.warning(
+                "Policy prefetch did not complete in %.1fs; "
+                "agent will run without any policies",
+                _PREFETCH_WAIT_SECONDS,
+            )
+        else:
+            # Distinguish from the timeout path so production triage
+            # can tell "prefetch hung" from "prefetch returned empty"
+            # (auth failure, server error, parse failure).
+            logger.warning(
+                "Policy prefetch completed but produced no PolicyIndex "
+                "(see prior WARN for the root cause); agent will run "
+                "without any policies"
+            )
         _policy_index = PolicyIndex()
         return _policy_index
 
