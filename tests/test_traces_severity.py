@@ -1,22 +1,24 @@
 """Tests for trace-span severity / status semantics.
 
 ``TracesAuditSink`` emits an OpenTelemetry span for every governance
-hook end and every rule evaluation. The span's ``Status`` drives whether
-backends (Orchestrator Traces UI, generic OTel viewers) render the
-trace as an error.
+hook end and every rule evaluation. The contract:
 
-Contract:
-- A matched rule with a non-``allow`` action sets the **rule span** to
-  ``StatusCode.ERROR`` — including ``audit`` and ``escalate`` actions,
-  not just ``deny``. Audit-mode violations (which the runtime doesn't
-  block) still surface as errors at the rule level.
-- **Hook spans are never marked ERROR**, regardless of ``final_action``.
-  They're summary containers; severity belongs on the individual rule
-  span that actually fired. Marking a hook span as ERROR would falsely
-  paint the entire ``before_model`` / ``after_model`` phase as failed
-  when only one rule underneath it violated.
-- ``allow`` actions (or unmatched rules) leave ``Status`` at the default
-  ``UNSET``.
+- Matched non-allow rules carry a free-form ``severity`` span attribute
+  (``"ERROR"`` or ``"WARNING"``). OTel ``StatusCode`` only has OK / ERROR
+  / UNSET, so a separate attribute is the only way to distinguish
+  "audit-mode advisory violation" from "actually blocked the agent".
+- ``severity = "ERROR"`` and ``StatusCode.ERROR`` fire **only** when the
+  runtime actually blocked the agent — enforce mode AND the rule's
+  action is ``deny`` or ``escalate``.
+- ``severity = "WARNING"`` and ``Status.UNSET`` for advisory violations
+  — audit mode (any non-allow action), or audit-action rules even in
+  enforce mode. The agent didn't fail; surfacing Status.ERROR would
+  falsely paint a successful run as a failure.
+- Hook spans never set Status, regardless of enforcement mode or
+  final_action. They're summary containers; severity belongs on the
+  individual rule span that fired.
+- ``allow`` actions and unmatched evaluations leave Status at UNSET and
+  do not emit a severity attribute.
 """
 
 from __future__ import annotations
@@ -27,23 +29,30 @@ import pytest
 
 from uipath.runtime.governance.audit.base import AuditEvent, EventType
 from uipath.runtime.governance.audit.traces import TracesAuditSink
+from uipath.runtime.governance.config import (
+    EnforcementMode,
+    reset_enforcement_mode,
+    set_enforcement_mode,
+)
 
 
 @pytest.fixture
 def captured_span(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Wire ``TracesAuditSink`` to a mock tracer and return the span mock.
-
-    The sink lazily resolves the tracer via ``_get_tracer``. We patch that
-    to return a tracer whose ``start_as_current_span`` context manager
-    yields a MagicMock — the test then asserts against ``set_status`` /
-    ``set_attribute`` on that mock.
-    """
+    """Wire ``TracesAuditSink`` to a mock tracer and return the span mock."""
     span = MagicMock(name="span")
     tracer = MagicMock(name="tracer")
     tracer.start_as_current_span.return_value.__enter__.return_value = span
     tracer.start_as_current_span.return_value.__exit__.return_value = False
     monkeypatch.setattr(TracesAuditSink, "_get_tracer", lambda self: tracer)
     return span
+
+
+@pytest.fixture(autouse=True)
+def _reset_mode() -> None:
+    """Each test selects its own enforcement mode explicitly."""
+    reset_enforcement_mode()
+    yield
+    reset_enforcement_mode()
 
 
 def _hook_event(final_action: str, mode: str = "audit") -> AuditEvent:
@@ -77,9 +86,18 @@ def _rule_event(matched: bool, action: str) -> AuditEvent:
     )
 
 
-# ----------------------------------------------------------------------------
-# Hook span — never marked ERROR; severity belongs on the rule span
-# ----------------------------------------------------------------------------
+def _severity_attr_calls(span: MagicMock) -> dict[str, str]:
+    """Return a mapping of attribute name → value for set_attribute calls."""
+    attrs: dict[str, str] = {}
+    for call in span.set_attribute.call_args_list:
+        key, value = call.args
+        attrs[key] = value
+    return attrs
+
+
+# ---------------------------------------------------------------------------
+# Hook span — never marked ERROR
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -95,13 +113,7 @@ def _rule_event(matched: bool, action: str) -> AuditEvent:
 def test_hook_span_never_sets_error(
     captured_span: MagicMock, final_action: str, mode: str
 ) -> None:
-    """Hook spans are summary containers — they never carry an ERROR Status.
-
-    A hook span aggregates many rule evaluations; marking it ERROR would
-    paint the whole lifecycle phase (e.g. ``before_model``) as failed
-    when only one rule underneath fired. Severity lives on the per-rule
-    spans.
-    """
+    """Hook spans are summary containers — they never carry an ERROR Status."""
     sink = TracesAuditSink()
     sink.emit(_hook_event(final_action=final_action, mode=mode))
     assert not captured_span.set_status.called, (
@@ -110,21 +122,26 @@ def test_hook_span_never_sets_error(
     )
 
 
-# ----------------------------------------------------------------------------
-# Rule span — matched + non-allow action drives Status
-# ----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Rule span — enforce-mode actually-blocking violations
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("action", ["deny", "audit", "escalate"])
-def test_rule_span_sets_error_when_matched_non_allow(
+@pytest.mark.parametrize("action", ["deny", "escalate"])
+def test_enforce_mode_blocking_violation_is_error(
     captured_span: MagicMock, action: str
 ) -> None:
-    """Matched rule with any non-allow action surfaces as ERROR."""
+    """Enforce mode + deny/escalate = real failure → severity=ERROR + Status.ERROR."""
+    set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
     sink.emit(_rule_event(matched=True, action=action))
 
+    attrs = _severity_attr_calls(captured_span)
+    assert attrs.get("severity") == "ERROR"
+    assert attrs.get("governance.severity") == "ERROR"
+
     assert captured_span.set_status.called, (
-        f"set_status should fire for matched rule with action={action!r}"
+        f"Status.ERROR must fire for enforce-mode {action} violation"
     )
     status_code, message = captured_span.set_status.call_args.args
     from opentelemetry.trace import StatusCode
@@ -134,19 +151,73 @@ def test_rule_span_sets_error_when_matched_non_allow(
     assert action in message
 
 
-def test_rule_span_does_not_set_error_when_not_matched(
-    captured_span: MagicMock,
+# ---------------------------------------------------------------------------
+# Rule span — advisory violations (audit mode, or audit-action rules)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("action", ["deny", "audit", "escalate"])
+def test_audit_mode_violation_is_warning(
+    captured_span: MagicMock, action: str
 ) -> None:
-    """An unmatched evaluation never marks the span as error."""
+    """Audit mode never blocks → severity=WARNING, Status.UNSET.
+
+    Surfacing Status.ERROR for an audit-mode violation would falsely
+    mark the agent's run as failed when the runtime intentionally
+    let it through.
+    """
+    set_enforcement_mode(EnforcementMode.AUDIT)
     sink = TracesAuditSink()
-    sink.emit(_rule_event(matched=False, action="deny"))
+    sink.emit(_rule_event(matched=True, action=action))
+
+    attrs = _severity_attr_calls(captured_span)
+    assert attrs.get("severity") == "WARNING"
+    assert attrs.get("governance.severity") == "WARNING"
+
+    assert not captured_span.set_status.called, (
+        f"Audit-mode {action} violation must NOT set Status.ERROR"
+    )
+
+
+def test_enforce_mode_audit_action_is_warning(captured_span: MagicMock) -> None:
+    """Enforce mode + action=audit is still advisory → severity=WARNING.
+
+    An ``audit`` action means "log this match but don't block" even
+    when the policy is in enforce mode. The runtime doesn't block;
+    severity stays WARNING.
+    """
+    set_enforcement_mode(EnforcementMode.ENFORCE)
+    sink = TracesAuditSink()
+    sink.emit(_rule_event(matched=True, action="audit"))
+
+    attrs = _severity_attr_calls(captured_span)
+    assert attrs.get("severity") == "WARNING"
     assert not captured_span.set_status.called
 
 
-def test_rule_span_does_not_set_error_when_matched_action_allow(
-    captured_span: MagicMock,
-) -> None:
-    """A rule whose action is 'allow' is explicit non-violation; no ERROR."""
+# ---------------------------------------------------------------------------
+# Rule span — no violation, no severity attribute
+# ---------------------------------------------------------------------------
+
+
+def test_unmatched_rule_no_severity_no_error(captured_span: MagicMock) -> None:
+    """Unmatched evaluations are quiet: no severity attr, no Status."""
+    set_enforcement_mode(EnforcementMode.ENFORCE)
+    sink = TracesAuditSink()
+    sink.emit(_rule_event(matched=False, action="deny"))
+
+    attrs = _severity_attr_calls(captured_span)
+    assert "severity" not in attrs
+    assert "governance.severity" not in attrs
+    assert not captured_span.set_status.called
+
+
+def test_matched_allow_action_no_severity(captured_span: MagicMock) -> None:
+    """A rule whose action is 'allow' is an explicit non-violation."""
+    set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
     sink.emit(_rule_event(matched=True, action="allow"))
+
+    attrs = _severity_attr_calls(captured_span)
+    assert "severity" not in attrs
     assert not captured_span.set_status.called

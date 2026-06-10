@@ -1162,7 +1162,7 @@ wheels = [
 
 [[package]]
 name = "uipath-runtime"
-version = "0.11.1"
+version = "0.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "chardet" },

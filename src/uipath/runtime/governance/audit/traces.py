@@ -212,23 +212,47 @@ class TracesAuditSink(AuditSink):
                 if detail:
                     span.set_attribute("governance.detail", detail[:500])
 
-                # Set error status for any matched rule with a non-allow
-                # action — audit / escalate / deny all count as
-                # violations. Audit-mode matches (which the runtime
-                # didn't block) still surface as errors in the trace
-                # backend so they're visible alongside enforced denials.
+                # Severity classification for matched non-allow rules.
+                # OTel ``StatusCode`` only has OK / ERROR / UNSET — no
+                # WARNING — so we use a free-form ``severity`` attribute
+                # to differentiate violations that actually blocked the
+                # agent from those that were merely audited.
+                #
+                # - Audit mode (and any audit-action rule even in
+                #   enforce mode): runtime did NOT block the agent →
+                #   severity=WARNING, Status stays UNSET. The agent's
+                #   span shouldn't be marked failed just because an
+                #   advisory rule fired.
+                # - Enforce mode + deny / escalate: runtime actually
+                #   blocked → severity=ERROR + Status.ERROR. The agent
+                #   span genuinely failed.
                 action_str = data.get("action", "allow").lower()
                 if data.get("matched") and action_str != "allow":
-                    try:
-                        from opentelemetry.trace import StatusCode
+                    from uipath.runtime.governance.config import (
+                        EnforcementMode,
+                        get_enforcement_mode,
+                    )
 
-                        span.set_status(
-                            StatusCode.ERROR,
-                            f"Policy violation: {data.get('rule_name', rule_id)} "
-                            f"(action={action_str})",
-                        )
-                    except ImportError:
-                        pass
+                    mode = get_enforcement_mode()
+                    will_block = (
+                        mode == EnforcementMode.ENFORCE
+                        and action_str in {"deny", "escalate"}
+                    )
+                    severity = "ERROR" if will_block else "WARNING"
+                    span.set_attribute("severity", severity)
+                    span.set_attribute("governance.severity", severity)
+                    if will_block:
+                        try:
+                            from opentelemetry.trace import StatusCode
+
+                            span.set_status(
+                                StatusCode.ERROR,
+                                f"Policy violation: "
+                                f"{data.get('rule_name', rule_id)} "
+                                f"(action={action_str})",
+                            )
+                        except ImportError:
+                            pass
 
                 self._spans_created += 1
 

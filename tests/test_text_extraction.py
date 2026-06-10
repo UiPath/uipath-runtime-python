@@ -149,3 +149,153 @@ def test_unknown_block_type_with_no_text_returns_empty() -> None:
     # Could be empty or contain just the base64 data — but should NOT
     # contain Python dict syntax characters that the old path emitted.
     assert "{'type'" not in out
+
+
+# ---------------------------------------------------------------------------
+# Budget — 64K is the current cap (raised from 8K to fit multi-turn chat).
+# ---------------------------------------------------------------------------
+
+
+def test_budget_cap_is_64k() -> None:
+    """Documents the cap so a future drop won't go unnoticed."""
+    assert _GOVERNANCE_TEXT_CAP == 64000
+
+
+# ---------------------------------------------------------------------------
+# Reverse list iteration — latest entry gets the budget first.
+# ---------------------------------------------------------------------------
+
+
+def test_lists_are_walked_in_reverse() -> None:
+    """Latest list entry leads the extracted blob.
+
+    Critical for chat history: the new user message lives at the end of
+    the messages list and must be visible even when prior turns would
+    otherwise fill the budget first.
+    """
+    out = _extract_governable_text(
+        [{"text": "earliest"}, {"text": "middle"}, {"text": "latest"}]
+    )
+    assert out.index("latest") < out.index("middle") < out.index("earliest")
+
+
+def test_long_chat_history_keeps_latest_user_message() -> None:
+    """A long history must not push the latest message out of the budget.
+
+    Regression for the prior 8K-cap + forward-walk combination, which
+    silently dropped the latest user message once the conversation
+    grew past ~7,800 chars of prior content.
+    """
+    bulky_prior = "x" * 2000
+    messages = [{"role": "user", "content": bulky_prior}] * 40  # ~80K chars
+    messages.append({"role": "user", "content": "Cost: $1,200 — latest"})
+
+    out = _extract_governable_text({"messages": messages})
+    assert "Cost: $1,200 — latest" in out
+
+
+# ---------------------------------------------------------------------------
+# latest_only — BEFORE_AGENT in a conversational agent
+# ---------------------------------------------------------------------------
+
+
+def test_latest_only_extracts_just_the_last_list_item() -> None:
+    """``latest_only=True`` drops every list entry but the last one."""
+    out = _extract_governable_text(
+        {
+            "messages": [
+                {"role": "user", "content": "old message"},
+                {"role": "assistant", "content": "old response"},
+                {"role": "user", "content": "Cost: $1,200"},
+            ]
+        },
+        latest_only=True,
+    )
+    assert "Cost: $1,200" in out
+    assert "old message" not in out
+    assert "old response" not in out
+
+
+def test_latest_only_resets_inside_chosen_item() -> None:
+    """Multi-block content inside the latest message is still walked fully.
+
+    ``latest_only`` reduces the OUTER list (chat history) to its last
+    entry, but multi-block content (text + tool_call + thinking)
+    inside that latest message must still be extracted in full —
+    otherwise we'd lose answer text that arrives in a non-final block.
+    """
+    out = _extract_governable_text(
+        {
+            "messages": [
+                {"role": "user", "content": "old"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "part A"},
+                        {
+                            "type": "function_call",
+                            "arguments": '{"answer":"part B"}',
+                        },
+                    ],
+                },
+            ]
+        },
+        latest_only=True,
+    )
+    assert "part A" in out
+    assert "part B" in out
+    assert "old" not in out
+
+
+def test_latest_only_top_level_list() -> None:
+    """``latest_only`` applies when the input itself is a list."""
+    out = _extract_governable_text(
+        [
+            {"content": "history item 1"},
+            {"content": "history item 2"},
+            {"content": "latest input"},
+        ],
+        latest_only=True,
+    )
+    assert "latest input" in out
+    assert "history item 1" not in out
+    assert "history item 2" not in out
+
+
+def test_latest_only_default_false_still_walks_all() -> None:
+    """Default behavior unchanged — AFTER_AGENT etc. still see everything."""
+    out = _extract_governable_text(
+        {
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "user", "content": "second"},
+            ]
+        }
+    )
+    assert "first" in out
+    assert "second" in out
+
+
+def test_latest_only_empty_list_is_empty() -> None:
+    """Empty history → empty extraction."""
+    assert _extract_governable_text({"messages": []}, latest_only=True) == ""
+
+
+def test_messages_is_a_priority_content_key() -> None:
+    """``messages`` (plural) leads ahead of non-priority keys.
+
+    Without ``messages`` in the priority list, an input that also
+    carries siblings like ``thread_id`` / ``metadata`` could siphon
+    budget before the actual chat history is walked.
+    """
+    out = _extract_governable_text(
+        {
+            "thread_id": "abc-xyz",
+            "metadata": {"foo": "bar"},
+            "messages": [{"role": "user", "content": "primary content"}],
+        }
+    )
+    assert "primary content" in out
+    assert out.index("primary content") < (
+        out.find("abc-xyz") if "abc-xyz" in out else len(out)
+    )

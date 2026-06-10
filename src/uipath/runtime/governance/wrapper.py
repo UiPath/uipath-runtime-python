@@ -69,29 +69,29 @@ def get_current_model_name() -> str:
     return _current_model_name.get()
 
 
-# Content keys we prioritize when walking dict-shaped agent outputs.
-# These cover the common "submit final answer" / chat-message shapes that
-# coded agents produce (``{"content": "..."}``, ``{"text": "..."}``, etc.)
-# and the OpenAI function-call shape (``{"arguments": "<json>"}``). Any
-# remaining keys are walked after these — they still contribute, just
-# with lower priority so the actual answer text leads the extracted blob.
+# Content keys we prioritize when walking dict-shaped agent payloads.
+# Covers chat-message shapes (``{"content": "..."}``, ``{"text": "..."}``),
+# the plural ``messages`` list (LangGraph state), and the OpenAI
+# function-call shape (``{"arguments": "<json>"}``). Any remaining keys
+# are walked after these so the actual reply / latest user message leads
+# the extracted blob.
 _GOVERNANCE_CONTENT_KEYS: tuple[str, ...] = (
     "content",
     "text",
     "output",
     "answer",
+    "messages",  # plural — chat history list in LangGraph-style state
     "message",
     "result",
     "arguments",
     "thinking",
 )
 
-# Total cap on the extracted governance-text blob. Larger than the prior
-# raw ``str(...)[:2000]`` because we're now producing clean content (no
-# dict-syntax noise), so more of the budget goes toward real signal.
-# Still bounded so a runaway nested payload can't blow memory or
-# dominate the regex scan time.
-_GOVERNANCE_TEXT_CAP = 8000
+# Total cap on the extracted governance-text blob. Sized for multi-turn
+# chat where each turn can produce a couple KB and the latest content
+# must fit even when the conversation history is long. Bounded so a
+# runaway nested payload can't blow memory or dominate regex scan time.
+_GOVERNANCE_TEXT_CAP = 64000
 
 # Depth cap for the recursive walk. Anything beyond this is almost
 # certainly framework plumbing, not user-facing content.
@@ -104,6 +104,7 @@ def _extract_governable_text(
     budget: int = _GOVERNANCE_TEXT_CAP,
     seen: set[int] | None = None,
     depth: int = 0,
+    latest_only: bool = False,
 ) -> str:
     """Pull governance-relevant text out of an arbitrary runtime payload.
 
@@ -115,6 +116,17 @@ def _extract_governable_text(
     joining text fragments with newlines. Non-text scalars and unknown
     block types contribute nothing. Cycles and over-deep nesting are
     skipped silently.
+
+    **List ordering:** lists are walked in reverse, so the most recent
+    entry (latest chat-history message, latest assistant content block)
+    gets first claim on the budget. Long conversation histories no
+    longer crowd the latest user message out of the scanned blob.
+
+    **latest_only:** when True (used by BEFORE_AGENT in conversational
+    agents), only the last item of any list is extracted — chat history
+    is reduced to the most recent message. The flag resets to False
+    when recursing into the chosen item so multi-block content within
+    that message is still fully extracted.
     """
     if value is None or budget <= 0 or depth > _GOVERNANCE_TEXT_MAX_DEPTH:
         return ""
@@ -132,7 +144,11 @@ def _extract_governable_text(
         if callable(fn):
             try:
                 return _extract_governable_text(
-                    fn(), budget=budget, seen=seen, depth=depth + 1,
+                    fn(),
+                    budget=budget,
+                    seen=seen,
+                    depth=depth + 1,
+                    latest_only=latest_only,
                 )
             except Exception:  # noqa: BLE001 - fall through to other extractors
                 break
@@ -154,7 +170,11 @@ def _extract_governable_text(
             if remaining <= 0:
                 break
             piece = _extract_governable_text(
-                value[key], budget=remaining, seen=seen, depth=depth + 1,
+                value[key],
+                budget=remaining,
+                seen=seen,
+                depth=depth + 1,
+                latest_only=latest_only,
             )
             if piece:
                 parts.append(piece)
@@ -162,13 +182,28 @@ def _extract_governable_text(
         return "\n".join(parts)
     if isinstance(value, (list, tuple)):
         seen.add(obj_id)
+        # Reverse so the latest entry (new user message in conversation
+        # history, latest assistant content block) gets the budget first.
+        # When the caller asked for ``latest_only`` (BEFORE_AGENT in a
+        # conversational agent), stop after the first reversed item —
+        # i.e., evaluate only the latest input, not the whole history.
+        items = list(reversed(value))
+        if latest_only:
+            items = items[:1]
         parts = []
         remaining = budget
-        for item in value:
+        for item in items:
             if remaining <= 0:
                 break
+            # Reset latest_only when recursing into the chosen item so
+            # multi-block content inside the latest message is walked
+            # in full (text + tool_use + thinking blocks all extracted).
             piece = _extract_governable_text(
-                item, budget=remaining, seen=seen, depth=depth + 1,
+                item,
+                budget=remaining,
+                seen=seen,
+                depth=depth + 1,
+                latest_only=False,
             )
             if piece:
                 parts.append(piece)
@@ -184,7 +219,11 @@ def _extract_governable_text(
     }
     if public:
         return _extract_governable_text(
-            public, budget=budget, seen=seen, depth=depth + 1,
+            public,
+            budget=budget,
+            seen=seen,
+            depth=depth + 1,
+            latest_only=latest_only,
         )
     return ""
 
@@ -674,7 +713,11 @@ class GovernanceRuntime:
             if self._init_failed or self._evaluator is None:
                 return
 
-            agent_input = _extract_governable_text(input)
+            # In conversational agents the runtime ``input`` carries the
+            # full chat history (e.g. ``{"messages": [...]}``). Pass
+            # ``latest_only=True`` so governance evaluates the most
+            # recent user message and not the entire transcript.
+            agent_input = _extract_governable_text(input, latest_only=True)
 
             self._evaluator.evaluate_before_agent(
                 agent_input=agent_input,
