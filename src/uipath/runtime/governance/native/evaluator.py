@@ -877,7 +877,7 @@ class GovernanceEvaluator:
             return False
 
         if isinstance(params, dict):
-            threshold = float(params.get("threshold", -0.3))
+            threshold = float(params.get("threshold", -0.2))
         else:
             try:
                 threshold = float(params)
