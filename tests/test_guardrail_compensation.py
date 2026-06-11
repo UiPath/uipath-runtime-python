@@ -35,6 +35,7 @@ from uipath.runtime.governance.native.backend_client import (
 )
 from uipath.runtime.governance.native.evaluator import GovernanceEvaluator
 from uipath.runtime.governance.native.guardrail_compensation import (
+    _resolve_trace_id,
     disabled_guardrails,
     request_governance,
 )
@@ -769,3 +770,86 @@ def test_evaluator_does_not_emit_audit_trace_for_guardrail_fallback_rule():
         assert summaries[0].data["matched_rules"] == 0
     finally:
         reset_audit_manager()
+
+
+# ---------------------------------------------------------------------------
+# _resolve_trace_id — must capture the live trace on the caller thread
+# (the /govern call later runs on a worker thread with no OTel context).
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_trace_id_prefers_active_otel_span():
+    """Inside an active span, it returns that span's trace id (32-char hex).
+
+    This is the binding fix: the server-written compensation records must
+    land on the agent's real trace — the same one the native audit spans
+    use — not a detached id.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+
+    tracer = TracerProvider().get_tracer("test")
+    with tracer.start_as_current_span("root") as span:
+        expected = format(span.get_span_context().trace_id, "032x")
+        result = _resolve_trace_id("fallback-id")
+        assert result == expected
+        assert len(result) == 32  # dashless OTel hex, not a dashed uuid
+
+
+def test_resolve_trace_id_uses_fallback_without_context():
+    """With no active span and no resolvable platform trace id, fallback wins."""
+    import sys
+
+    # Force the optional `uipath.platform` lookup to miss (it may or may not
+    # be installed in this repo's env), and we're outside any active span —
+    # so neither source can supply an id and the fallback must be returned.
+    with patch.dict(sys.modules, {"uipath.platform.common": None}):
+        assert _resolve_trace_id("fallback-id") == "fallback-id"
+
+
+def test_submit_compensation_captures_live_trace_before_thread_hop():
+    """End-to-end thread-boundary proof for the binding fix.
+
+    ``submit_compensation`` runs on the caller (hook) thread, then hands the
+    ``/govern`` call to a background worker pool. This test asserts BOTH
+    halves of why the resolve must happen at the entry:
+
+    1. On the **worker thread**, the OTel context is gone — resolving there
+       would miss the live span (so the early capture is mandatory).
+    2. Despite that, ``request_governance`` (on the worker) receives the
+       **live span's** trace id, not the stale fallback we passed in —
+       proving it was captured on the caller thread before the hop.
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+
+    tracer = TracerProvider().get_tracer("test")
+
+    done = threading.Event()
+    captured: dict[str, Any] = {}
+
+    def _spy(**kwargs: Any) -> None:
+        # This runs on the background worker thread.
+        captured["trace_id"] = kwargs["trace_id"]
+        # Prove the worker has NO live context: if we resolved *here*, the
+        # sentinel would survive untouched.
+        captured["worker_resolves_to"] = _resolve_trace_id("WORKER-MISS")
+        done.set()
+
+    with patch.object(guardrail_compensation, "request_governance", _spy):
+        with tracer.start_as_current_span("agent-run") as span:
+            expected = format(span.get_span_context().trace_id, "032x")
+            guardrail_compensation.submit_compensation(
+                rules=_rules("pii_detection"),
+                data={"content": "contact jane@acme.com"},
+                hook="before_model",
+                trace_id="stale-fallback",  # must be overridden by the live trace
+                src_timestamp="2026-06-06T00:00:00Z",
+                agent_name="agent",
+                runtime_id="rt",
+            )
+        assert done.wait(timeout=2.0), "compensation worker never ran"
+
+    # (1) worker thread could not see the span — fell back to the sentinel
+    assert captured["worker_resolves_to"] == "WORKER-MISS"
+    # (2) but the value it received is the live span trace, captured pre-hop
+    assert captured["trace_id"] == expected
+    assert captured["trace_id"] != "stale-fallback"

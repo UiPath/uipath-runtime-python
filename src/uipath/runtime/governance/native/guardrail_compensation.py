@@ -177,6 +177,39 @@ def _validators(rules: list[FiredRule]) -> list[str]:
     return list(dict.fromkeys(r["validator"] for r in rules if r.get("validator")))
 
 
+def _resolve_trace_id(fallback: str) -> str:
+    """Resolve the agent's trace id while still on the caller thread.
+
+    MUST be called before the background-pool hop in
+    :func:`submit_compensation`: the worker thread that issues the
+    ``/govern`` call has no OpenTelemetry context, so resolving there would
+    miss the live span and fall back to a detached id — orphaning the
+    server-written compensation records from the agent's real trace (which
+    is exactly what the native audit spans bind to).
+
+    Order: live OTel span trace id (32-char hex) -> ``UiPathConfig.trace_id``
+    -> the caller-supplied ``fallback``.
+    """
+    try:
+        from opentelemetry import trace
+
+        ctx = trace.get_current_span().get_span_context()
+        if ctx.is_valid:
+            return format(ctx.trace_id, "032x")
+    except Exception:  # noqa: BLE001 - tracing is best-effort; fall through
+        pass
+
+    try:
+        from uipath.platform.common import UiPathConfig
+
+        if UiPathConfig.trace_id:
+            return UiPathConfig.trace_id
+    except (ImportError, AttributeError):
+        pass
+
+    return fallback
+
+
 def submit_compensation(
     rules: list[FiredRule],
     data: dict[str, Any],
@@ -205,6 +238,14 @@ def submit_compensation(
     validators = _validators(rules)
     if not validators:
         return
+
+    # Resolve the trace id HERE, on the caller (hook) thread where the
+    # agent's OTel span is still live. The /govern call below runs on a
+    # background worker (_pool.submit -> _run -> request_governance) where
+    # that context is gone, so the resolved value is captured now and
+    # carried into the worker — ensuring the server writes compensation
+    # records under the agent's real trace, not a detached id.
+    trace_id = _resolve_trace_id(trace_id)
 
     if not _inflight.acquire(blocking=False):
         logger.warning(
