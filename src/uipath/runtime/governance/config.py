@@ -40,21 +40,24 @@ def get_enforcement_mode() -> EnforcementMode:
        policy loader calls this with the backend-supplied mode on every
        successful policy fetch — that's the canonical source).
     2. ``UIPATH_GOVERNANCE_MODE`` env var (developer override).
-    3. Default :attr:`EnforcementMode.DISABLED` — skip evaluation
-       entirely until the server explicitly opts the tenant in. This
-       keeps empty-policy / failed-fetch / pre-fetch scenarios free of
-       per-call audit overhead; a tenant with policies wins the cache
-       on the first ``set_enforcement_mode`` call from the loader.
+    3. Default :attr:`EnforcementMode.AUDIT` — evaluate and log without
+       blocking. The wrapper attaches at runtime construction so the
+       background policy fetch can run; if the backend returns
+       ``disabled``, ``set_enforcement_mode`` flips the cache and
+       subsequent ``evaluate()`` calls short-circuit at evaluator.py:332.
+       Defaulting to AUDIT avoids the chicken-and-egg where a DISABLED
+       default would short-circuit before the policy fetch could ever
+       opt the tenant in.
     """
     global _enforcement_mode
     if _enforcement_mode is not None:
         return _enforcement_mode
 
-    mode_str = os.getenv(ENV_ENFORCEMENT_MODE, "disabled").lower()
+    mode_str = os.getenv(ENV_ENFORCEMENT_MODE, "audit").lower()
     try:
         _enforcement_mode = EnforcementMode(mode_str)
     except ValueError:
-        _enforcement_mode = EnforcementMode.DISABLED
+        _enforcement_mode = EnforcementMode.AUDIT
 
     return _enforcement_mode
 
