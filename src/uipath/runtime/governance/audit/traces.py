@@ -212,20 +212,20 @@ class TracesAuditSink(AuditSink):
                 if detail:
                     span.set_attribute("governance.detail", detail[:500])
 
-                # Severity classification for matched non-allow rules.
-                # OTel ``StatusCode`` only has OK / ERROR / UNSET — no
-                # WARNING — so we use a free-form ``severity`` attribute
-                # to differentiate violations that actually blocked the
-                # agent from those that were merely audited.
+                # Severity for matched non-allow rules is carried by the
+                # platform-standard ``verbosityLevel`` span field (UiPath
+                # Orchestrator log levels: 3=Warning, 4=Error). Default
+                # platform verbosity is 2 (Information), so we only set
+                # this attribute when there's a violation worth flagging.
                 #
                 # - Audit mode (and any audit-action rule even in
                 #   enforce mode): runtime did NOT block the agent →
-                #   severity=WARNING, Status stays UNSET. The agent's
-                #   span shouldn't be marked failed just because an
-                #   advisory rule fired.
+                #   verbosityLevel=3 (Warning), Status stays UNSET. The
+                #   agent's span shouldn't be marked failed just because
+                #   an advisory rule fired.
                 # - Enforce mode + deny / escalate: runtime actually
-                #   blocked → severity=ERROR + Status.ERROR. The agent
-                #   span genuinely failed.
+                #   blocked → verbosityLevel=4 (Error) + Status.ERROR.
+                #   The agent span genuinely failed.
                 action_str = data.get("action", "allow").lower()
                 if data.get("matched") and action_str != "allow":
                     from uipath.runtime.governance.config import (
@@ -238,9 +238,7 @@ class TracesAuditSink(AuditSink):
                         mode == EnforcementMode.ENFORCE
                         and action_str in {"deny", "escalate"}
                     )
-                    severity = "ERROR" if will_block else "WARNING"
-                    span.set_attribute("severity", severity)
-                    span.set_attribute("governance.severity", severity)
+                    span.set_attribute("verbosityLevel", 4 if will_block else 3)
                     if will_block:
                         try:
                             from opentelemetry.trace import StatusCode
