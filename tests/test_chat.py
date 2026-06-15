@@ -258,6 +258,70 @@ async def test_chat_runtime_stream_yields_all_events():
 
 
 @pytest.mark.asyncio
+async def test_chat_runtime_emits_exchange_end_by_default():
+    """Without end_exchange specified, exchange end is emitted."""
+
+    runtime_impl = StreamingMockRuntime(messages=["Hello"])
+    bridge = make_chat_bridge_mock()
+
+    chat_runtime = UiPathChatRuntime(
+        delegate=runtime_impl,
+        chat_bridge=bridge,
+    )
+
+    result = await chat_runtime.execute({})
+
+    await chat_runtime.dispose()
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    cast(AsyncMock, bridge.emit_exchange_end_event).assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_emits_exchange_end_when_end_exchange_true():
+    """end_exchange=True emits the exchange end event."""
+
+    runtime_impl = StreamingMockRuntime(messages=["Hello"])
+    bridge = make_chat_bridge_mock()
+
+    chat_runtime = UiPathChatRuntime(
+        delegate=runtime_impl,
+        chat_bridge=bridge,
+        end_exchange=True,
+    )
+
+    result = await chat_runtime.execute({})
+
+    await chat_runtime.dispose()
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    cast(AsyncMock, bridge.emit_exchange_end_event).assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_skips_exchange_end_when_end_exchange_false():
+    """end_exchange=False suppresses the exchange end event but completes normally."""
+
+    runtime_impl = StreamingMockRuntime(messages=["Hello", "World"])
+    bridge = make_chat_bridge_mock()
+
+    chat_runtime = UiPathChatRuntime(
+        delegate=runtime_impl,
+        chat_bridge=bridge,
+        end_exchange=False,
+    )
+
+    result = await chat_runtime.execute({})
+
+    await chat_runtime.dispose()
+
+    # Execution completes normally; only the exchange end emission is skipped
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert cast(AsyncMock, bridge.emit_message_event).await_count == 2
+    cast(AsyncMock, bridge.emit_exchange_end_event).assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_chat_runtime_handles_errors():
     """On unexpected errors, UiPathChatRuntime should propagate them."""
 
