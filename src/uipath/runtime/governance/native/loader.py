@@ -143,22 +143,28 @@ def get_policy_index() -> PolicyIndex:
         if completed and _policy_index is not None:
             return _policy_index
         if not completed:
+            # Timeout: deliberately cache an empty index so we don't
+            # re-wait the full timeout on every subsequent hook.
             logger.warning(
                 "Policy prefetch did not complete in %.1fs; "
                 "agent will run without any policies",
                 _PREFETCH_WAIT_SECONDS,
             )
-        else:
-            # Distinguish from the timeout path so production triage
-            # can tell "prefetch hung" from "prefetch returned empty"
-            # (auth failure, server error, parse failure).
-            logger.warning(
-                "Policy prefetch completed but produced no PolicyIndex "
-                "(see prior WARN for the root cause); agent will run "
-                "without any policies"
-            )
-        _policy_index = PolicyIndex()
-        return _policy_index
+            _policy_index = PolicyIndex()
+            return _policy_index
+
+        # Completed but produced no PolicyIndex — the worker hit an
+        # unexpected error (auth failure, server error, parse failure).
+        # Do NOT cache the empty result: caching would permanently
+        # disable governance for the process even though a later
+        # prefetch / clear_policy_cache could still recover. Return an
+        # empty index for this call only and leave the cache unset.
+        logger.warning(
+            "Policy prefetch completed but produced no PolicyIndex "
+            "(see prior WARN for the root cause); agent will run "
+            "without any policies for this call"
+        )
+        return PolicyIndex()
 
     # No prefetch was started (direct callers / tests). Sync load — bounded
     # by the HTTP timeout in the API client.

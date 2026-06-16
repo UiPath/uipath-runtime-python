@@ -418,9 +418,16 @@ def _build_check(
 
     message = str(data.get("message", message))
 
-    # Multi-pattern regex/parameter_validation defaults to OR semantics
-    # (any pattern indicates a hit); explicit `logic` in YAML wins.
-    if check_type in ("parameter_validation", "regex") and len(conditions) > 1:
+    # Multi-PATTERN shorthand (regex/parameter_validation expanded from
+    # several patterns for one concept) defaults to OR — any pattern
+    # hitting is a match. An explicit `conditions:` list defaults to AND
+    # (all must hold) and must NOT inherit the pattern-shorthand OR even
+    # though `check_type` falls back to "regex". Explicit `logic` wins.
+    if (
+        not has_explicit_conditions
+        and check_type in ("parameter_validation", "regex")
+        and len(conditions) > 1
+    ):
         default_logic = "any"
     else:
         default_logic = "all"
