@@ -1,7 +1,7 @@
 """Native policy model.
 
-Rules, checks, conditions and pack indexes consumed by
-:class:`uipath.runtime.governance.native.evaluator.GovernanceEvaluator`.
+Rules, checks, conditions and pack indexes consumed by the native
+governance evaluator.
 
 These are the inputs of the native evaluator. The evaluator-agnostic
 *output* types (``Action``, ``AuditRecord``, …) live in
