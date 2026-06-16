@@ -222,6 +222,6 @@ def _parse_policy_body(body: bytes) -> PolicyResponse | None:
         return None
 
     logger.info(
-        "Policy fetch ok: mode=%s, policy_bytes=%d", mode, len(raw_policy)
+        "Policy fetch ok: mode=%s, policy_chars=%d", mode, len(raw_policy)
     )
     return PolicyResponse(mode=mode, policy=raw_policy)
