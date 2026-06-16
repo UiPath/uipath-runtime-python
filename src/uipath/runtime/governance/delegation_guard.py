@@ -85,7 +85,12 @@ def _exit_depth(token: Token[dict[int, int]]) -> None:
 
 
 def _resolve_max_depth() -> int:
-    """Read max-depth from env at call time, falling back to default on parse error."""
+    """Read max-depth from env at install time, falling back to default on parse error.
+
+    Called once from :func:`install_delegation_guard`; the resolved value is
+    captured per agent (``resolved_max``), so changing the env var after the
+    guard is installed has no effect on already-wrapped agents.
+    """
     raw = os.getenv(_ENV_MAX_DELEGATION_DEPTH)
     if raw is None:
         return _DEFAULT_MAX_DELEGATION_DEPTH
@@ -194,20 +199,30 @@ def install_delegation_guard(agent: Any, max_depth: int | None = None) -> None:
     agent_key = id(agent)
     resolved_max = max_depth
 
+    patched: list[str] = []
     for name, original in originals.items():
         try:
             setattr(agent, name, _wrap_invoke(original, agent_key, resolved_max))
             setattr(agent, f"_uipath_original_{name}", original)
+            patched.append(name)
         except (AttributeError, TypeError) as exc:
             # Some agent objects expose `invoke` via __getattr__ or via a
             # slot/descriptor that can't be re-assigned. Skip those —
             # better to guard partial coverage than to crash the runtime.
             logger.debug("Could not patch %s on agent: %s", name, exc)
+
+    if not patched:
+        # Nothing was actually wrapped — don't mark the agent as guarded,
+        # or a later retry / uninstall would wrongly assume methods were
+        # patched.
+        logger.debug("Delegation guard patched no methods; leaving agent unguarded")
+        return
+
     agent._delegation_wrapped = True
     logger.debug(
         "Delegation guard installed (max=%d, methods=%s)",
         resolved_max,
-        list(originals),
+        patched,
     )
 
 
