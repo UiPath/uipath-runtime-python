@@ -355,13 +355,16 @@ class GovernanceEvaluator:
             evaluations.append(evaluation)
 
             if evaluation.matched:
-                # Take the most restrictive action
-                if rule.action == Action.DENY:
+                # Take the most restrictive action. Use evaluation.action
+                # (which already folds in per-check overrides), not
+                # rule.action, so check-level overrides are honored here too.
+                eval_action = evaluation.action
+                if eval_action == Action.DENY:
                     raw_action = Action.DENY
                     deny_would_fire = True
-                elif rule.action == Action.ESCALATE and raw_action != Action.DENY:
+                elif eval_action == Action.ESCALATE and raw_action != Action.DENY:
                     raw_action = Action.ESCALATE
-                elif rule.action == Action.AUDIT and raw_action == Action.ALLOW:
+                elif eval_action == Action.AUDIT and raw_action == Action.ALLOW:
                     raw_action = Action.AUDIT
 
         # Apply enforcement mode
@@ -671,6 +674,13 @@ class GovernanceEvaluator:
 
         check_results: list[dict[str, Any]] = []
         any_check_matched = False
+        # Resolve the rule's action from the MATCHED checks so per-check
+        # `action` overrides take effect. ``Check.action`` defaults to the
+        # rule's action (see _yaml_to_index), so for rules without an
+        # override this equals ``rule.action`` exactly. Take the most
+        # restrictive matched action (DENY > ESCALATE > AUDIT > ALLOW),
+        # mirroring evaluate()'s cross-rule aggregation.
+        matched_action = Action.ALLOW
 
         for check in rule.checks:
             matched, detail = self._evaluate_check(check, context)
@@ -683,6 +693,18 @@ class GovernanceEvaluator:
             )
             if matched:
                 any_check_matched = True
+                if check.action == Action.DENY:
+                    matched_action = Action.DENY
+                elif (
+                    check.action == Action.ESCALATE
+                    and matched_action != Action.DENY
+                ):
+                    matched_action = Action.ESCALATE
+                elif (
+                    check.action == Action.AUDIT
+                    and matched_action == Action.ALLOW
+                ):
+                    matched_action = Action.AUDIT
 
         # Surface the FIRST matched check's message; falls back to the
         # first check's detail (empty string when none matched) for
@@ -698,7 +720,7 @@ class GovernanceEvaluator:
             matched=any_check_matched,
             detail=first_matched_detail,
             pack_name=rule.pack_name,
-            action=rule.action if any_check_matched else Action.ALLOW,
+            action=matched_action if any_check_matched else Action.ALLOW,
             description=rule.description,
             check_results=check_results,
         )
@@ -877,7 +899,7 @@ class GovernanceEvaluator:
             return False
 
         if isinstance(params, dict):
-            threshold = float(params.get("threshold", -0.2))
+            threshold = float(params.get("threshold", -0.3))
         else:
             try:
                 threshold = float(params)

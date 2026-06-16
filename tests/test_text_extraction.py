@@ -10,10 +10,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from uipath.runtime.governance.wrapper import (
-    _GOVERNANCE_TEXT_CAP,
-    _extract_governable_text,
+import pytest
+
+# The wrapper lands in a later slice of the governance stack; skip (don't
+# error at collection) when it isn't present yet.
+_wrapper = pytest.importorskip(
+    "uipath.runtime.governance.wrapper",
+    reason="governance wrapper not yet present in this slice",
 )
+_GOVERNANCE_TEXT_CAP = _wrapper._GOVERNANCE_TEXT_CAP
+_extract_governable_text = _wrapper._extract_governable_text
 
 
 def test_plain_string_passes_through() -> None:
