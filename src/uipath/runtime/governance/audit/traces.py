@@ -241,13 +241,15 @@ class TracesAuditSink(AuditSink):
                     span.set_attribute("verbosityLevel", 4 if will_block else 3)
                     if will_block:
                         try:
-                            from opentelemetry.trace import StatusCode
+                            from opentelemetry.trace import Status, StatusCode
 
                             span.set_status(
-                                StatusCode.ERROR,
-                                f"Policy violation: "
-                                f"{data.get('rule_name', rule_id)} "
-                                f"(action={action_str})",
+                                Status(
+                                    StatusCode.ERROR,
+                                    f"Policy violation: "
+                                    f"{data.get('rule_name', rule_id)} "
+                                    f"(action={action_str})",
+                                )
                             )
                         except ImportError:
                             pass

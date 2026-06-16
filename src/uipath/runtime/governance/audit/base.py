@@ -234,18 +234,24 @@ class AuditManager:
     def _worker_loop(self) -> None:
         """Background worker loop that processes queued events."""
         while not self._shutdown.is_set():
+            # Wait for an event with a timeout so we can re-check shutdown.
             try:
-                # Wait for event with timeout to allow checking shutdown
                 event = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            # Every successful get() must be paired with exactly one
+            # task_done() — including the shutdown sentinel and the case
+            # where _emit_sync raises — otherwise unfinished_tasks never
+            # drains and flush()/join() hangs.
+            try:
                 if event is None:
                     # Shutdown signal
                     break
                 self._emit_sync(event)
-                self._queue.task_done()
-            except queue.Empty:
-                continue
             except Exception as e:
                 logger.warning("Audit worker error: %s", e)
+            finally:
+                self._queue.task_done()
 
         # Drain remaining events on shutdown
         self._drain_queue()
@@ -255,13 +261,17 @@ class AuditManager:
         while True:
             try:
                 event = self._queue.get_nowait()
-                if event is not None:
-                    self._emit_sync(event)
-                self._queue.task_done()
             except queue.Empty:
                 break
+            # As in _worker_loop: pair every get() with one task_done(),
+            # even when _emit_sync raises, so shutdown accounting is sound.
+            try:
+                if event is not None:
+                    self._emit_sync(event)
             except Exception as e:
                 logger.warning("Audit drain error: %s", e)
+            finally:
+                self._queue.task_done()
 
     def _emit_sync(self, event: AuditEvent) -> None:
         """Emit event synchronously to all sinks (called from worker thread)."""

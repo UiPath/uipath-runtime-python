@@ -146,12 +146,13 @@ def test_enforce_mode_blocking_violation_is_error(
     assert captured_span.set_status.called, (
         f"Status.ERROR must fire for enforce-mode {action} violation"
     )
-    status_code, message = captured_span.set_status.call_args.args
-    from opentelemetry.trace import StatusCode
+    (status_arg,) = captured_span.set_status.call_args.args
+    from opentelemetry.trace import Status, StatusCode
 
-    assert status_code is StatusCode.ERROR
-    assert "commitment-language" in message
-    assert action in message
+    assert isinstance(status_arg, Status)
+    assert status_arg.status_code is StatusCode.ERROR
+    assert "commitment-language" in status_arg.description
+    assert action in status_arg.description
 
 
 # ---------------------------------------------------------------------------
