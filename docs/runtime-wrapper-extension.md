@@ -21,7 +21,7 @@ UiPathWrappedRuntimeFactory.new_runtime(...)
     ↓ calls
 apply_governance_wrapper(runtime, context, runtime_id)
     ↓
-    if _is_governance_enabled():
+    if is_governance_enabled():
         from uipath.runtime.governance.wrapper import governance_wrapper  # lazy
         return governance_wrapper(runtime, context, runtime_id)
     else:

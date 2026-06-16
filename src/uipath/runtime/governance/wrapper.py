@@ -215,11 +215,19 @@ def _extract_governable_text(
 
     # Last-resort: walk public attributes on opaque objects (e.g. a
     # framework-specific result class without model_dump/dict).
-    public = {
-        name: getattr(value, name)
-        for name in dir(value)
-        if not name.startswith("_") and not callable(getattr(value, name, None))
-    }
+    public: dict[str, Any] = {}
+    for name in dir(value):
+        if name.startswith("_"):
+            continue
+        # Accessing a public attribute can itself raise (properties,
+        # framework descriptors). Skip those rather than let the
+        # extractor bubble — its contract is to never throw.
+        try:
+            attr = getattr(value, name)
+        except Exception:  # noqa: BLE001 - opaque objects may raise on access
+            continue
+        if not callable(attr):
+            public[name] = attr
     if public:
         return _extract_governable_text(
             public,
@@ -285,6 +293,7 @@ class GovernanceRuntime:
         self._init_failed = False  # Track if initialization failed
         self._model_name = ""
         self._model_name_token: Token[str] | None = None
+        self._is_conversational: bool = False
         self._evaluator: GovernanceEvaluator | None = None
         self._evaluator_ready: bool = False
         self._evaluator_lock = threading.Lock()
@@ -296,29 +305,12 @@ class GovernanceRuntime:
         if context is not None and hasattr(context, "entrypoint"):
             self._agent_name = context.entrypoint or "agent"
 
-        # Extract model name and bind into the ContextVar so adapters
-        # running in this runtime's context see the right value under
-        # concurrent agents. We keep the token so dispose() can reset
-        # the var — without that, the value leaks into sibling tasks
-        # that inherit this context and outlives the runtime.
-        model_name = self._extract_model_name(delegate, context)
-        self._model_name_token: Token[str] | None = _current_model_name.set(model_name)
-        self._model_name = model_name
-
-        # Determine whether this is a conversational or autonomous agent and
-        # record it before the policy prefetch fires, so the fetch can ask the
-        # server for the matching container key (conversational vs autonomous).
-        self._is_conversational = self._extract_is_conversational(delegate, context)
-        set_agent_conversational(self._is_conversational)
-
-        # Fire the network-bound policy fetch in the background so it
-        # overlaps with the rest of the agent setup. The evaluator and
-        # adapter wrap are materialised lazily on the first hook fire
-        # (see _ensure_evaluator), which is where we wait for the
-        # prefetch to land.
-        self._evaluator: GovernanceEvaluator | None = None
-        self._evaluator_ready: bool = False
-        self._evaluator_lock = threading.Lock()
+        # NOTE: model-name extraction + ContextVar binding and the
+        # agent-type selector are intentionally done ONCE, after the
+        # feature-flag gate below (not here). That keeps an OFF flag a
+        # true no-op (nothing global/context mutated) and ensures
+        # dispose() owns exactly one ContextVar token. The attributes
+        # they populate are already defaulted above (lines ~286-290).
 
         # Governance feature flag gate (mirrors the runtime-side gate).
         # When OFF, we short-circuit init: no prefetch, no adapter
@@ -348,9 +340,10 @@ class GovernanceRuntime:
             # Record agent-type before the policy prefetch fires so the
             # fetch can ask the server for the matching container key
             # (conversational vs autonomous).
-            set_agent_conversational(
-                self._extract_is_conversational(delegate, context)
+            self._is_conversational = self._extract_is_conversational(
+                delegate, context
             )
+            set_agent_conversational(self._is_conversational)
 
             # Fire the network-bound policy fetch in the background so
             # it overlaps with the rest of the agent setup. The
@@ -407,7 +400,11 @@ class GovernanceRuntime:
             inner = getattr(delegate, "_delegate", None) or getattr(
                 delegate, "delegate", None
             )
-            while inner and not model_name:
+            # Depth-capped to avoid spinning forever on a cyclic wrapper
+            # chain (mirrors _extract_agent / _extract_is_conversational).
+            for _ in range(10):
+                if not inner or model_name:
+                    break
                 agent_def = getattr(inner, "_agent_definition", None)
                 if agent_def:
                     settings = getattr(agent_def, "settings", None)
@@ -738,10 +735,14 @@ class GovernanceRuntime:
                 return
 
             # In conversational agents the runtime ``input`` carries the
-            # full chat history (e.g. ``{"messages": [...]}``). Pass
-            # ``latest_only=True`` so governance evaluates the most
-            # recent user message and not the entire transcript.
-            agent_input = _extract_governable_text(input, latest_only=True)
+            # full chat history (e.g. ``{"messages": [...]}``), so pass
+            # ``latest_only=True`` to evaluate just the most recent user
+            # message. For autonomous agents we must scan the WHOLE input
+            # (list-shaped payloads included), so gate it on agent type —
+            # otherwise governance would only see the last list element.
+            agent_input = _extract_governable_text(
+                input, latest_only=self._is_conversational
+            )
 
             self._evaluator.evaluate_before_agent(
                 agent_input=agent_input,
