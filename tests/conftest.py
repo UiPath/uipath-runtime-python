@@ -28,11 +28,19 @@ def _reset_governance_process_state() -> Generator[None, None, None]:
     and the memoized job-context. Both are stable per process in
     production but leak across tests when not reset, masking ordering
     bugs and producing flakes.
+
+    ``backend_client`` is imported lazily and guarded: this shared
+    conftest ships alongside the foundation slice, where that module may
+    not exist yet, and the reset is simply a no-op until it does.
     """
-    from uipath.runtime.governance.native.backend_client import (
-        resolve_job_context,
-        set_agent_conversational,
-    )
+    try:
+        from uipath.runtime.governance.native.backend_client import (
+            resolve_job_context,
+            set_agent_conversational,
+        )
+    except ImportError:
+        yield
+        return
 
     set_agent_conversational(None)
     resolve_job_context.cache_clear()

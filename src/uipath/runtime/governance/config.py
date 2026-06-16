@@ -44,8 +44,9 @@ def get_enforcement_mode() -> EnforcementMode:
        blocking. The wrapper attaches at runtime construction so the
        background policy fetch can run; if the backend returns
        ``disabled``, ``set_enforcement_mode`` flips the cache and
-       subsequent ``evaluate()`` calls short-circuit at evaluator.py:332.
-       Defaulting to AUDIT avoids the chicken-and-egg where a DISABLED
+       subsequent ``evaluate()`` calls short-circuit (the evaluator
+       skips evaluation in disabled mode). Defaulting to AUDIT avoids
+       the chicken-and-egg where a DISABLED
        default would short-circuit before the policy fetch could ever
        opt the tenant in.
     """
@@ -57,6 +58,12 @@ def get_enforcement_mode() -> EnforcementMode:
     try:
         _enforcement_mode = EnforcementMode(mode_str)
     except ValueError:
+        logger.warning(
+            "Invalid %s=%r; defaulting to %s",
+            ENV_ENFORCEMENT_MODE,
+            mode_str,
+            EnforcementMode.AUDIT.value,
+        )
         _enforcement_mode = EnforcementMode.AUDIT
 
     return _enforcement_mode
