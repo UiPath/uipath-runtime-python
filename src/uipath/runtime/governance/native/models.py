@@ -26,6 +26,13 @@ class Severity(Enum):
     CRITICAL = "critical"
 
 
+class Logic(str, Enum):
+    """How a check combines its conditions."""
+
+    ALL = "all"  # AND — every condition must hold.
+    ANY = "any"  # OR — any matching condition is a hit.
+
+
 @dataclass
 class Condition:
     """A single condition within a rule check."""
@@ -43,7 +50,7 @@ class Check:
     conditions: list[Condition]
     action: Action = Action.DENY
     message: str = ""
-    logic: str = "all"  # "all" (AND) or "any" (OR)
+    logic: Logic = Logic.ALL
 
 
 @dataclass
@@ -79,9 +86,7 @@ class CheckContext:
     agent_output: str = ""
     model_input: str = ""
     model_output: str = ""
-    model_name: str = (
-        ""  # LLM model name (e.g., "gpt-4", "claude-3-opus") - available at agent start
-    )
+    model_name: str = ""
     tool_name: str = ""
     tool_args: dict[str, Any] = field(default_factory=dict)
     tool_result: str = ""
