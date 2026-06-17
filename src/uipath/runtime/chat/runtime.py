@@ -35,20 +35,16 @@ class UiPathChatRuntime:
         self,
         delegate: UiPathRuntimeProtocol,
         chat_bridge: UiPathChatProtocol,
-        end_exchange: bool = True,
     ):
         """Initialize the UiPathChatRuntime.
 
         Args:
             delegate: The underlying runtime to wrap
             chat_bridge: Bridge for chat event communication
-            end_exchange: Whether to emit the exchange end event. When False, the exchange is left open so a
-                downstream consumer can continue it and end it later.
         """
         super().__init__()
         self.delegate = delegate
         self.chat_bridge = chat_bridge
-        self.end_exchange = end_exchange
 
     async def execute(
         self,
@@ -171,8 +167,7 @@ class UiPathChatRuntime:
                         else:
                             yield event
                             execution_completed = True
-                            if self.end_exchange:
-                                await self.chat_bridge.emit_exchange_end_event()
+                            await self.chat_bridge.emit_exchange_end_event()
                     else:
                         yield event
 
