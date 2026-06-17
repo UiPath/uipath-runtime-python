@@ -1191,7 +1191,7 @@ dev = [
 requires-dist = [
     { name = "chardet", specifier = ">=5.2.0,<8.0" },
     { name = "pyyaml", specifier = ">=6.0,<7.0" },
-    { name = "uipath-core", specifier = ">=0.5.18,<0.6.0" },
+    { name = "uipath-core", specifier = ">=0.5.19,<0.6.0" },
     { name = "vadersentiment", specifier = ">=3.3.2,<4.0" },
 ]
 

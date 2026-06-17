@@ -11,15 +11,11 @@ policy loader that applies it.
 
 from __future__ import annotations
 
-from enum import Enum
-
-
-class EnforcementMode(str, Enum):
-    """Governance enforcement modes."""
-
-    AUDIT = "audit"  # Evaluate and log; never block.
-    ENFORCE = "enforce"  # Block on DENY rules.
-    DISABLED = "disabled"  # Skip evaluation entirely.
+# ``EnforcementMode`` is the shared governance value type; it's defined in
+# uipath.core.governance (a lower abstraction level) and re-exported here so
+# runtime callers keep a single import site. The per-process mode *state*
+# below is runtime-owned and applied by the policy loader.
+from uipath.core.governance import EnforcementMode as EnforcementMode
 
 
 class _EnforcementModeState:
