@@ -16,10 +16,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from uipath.core.feature_flags import FeatureFlags
 
+from tests._helpers import reset_enforcement_mode
 from uipath.runtime.governance import wrapper as wrapper_mod
 from uipath.runtime.governance.config import (
     EnforcementMode,
-    reset_enforcement_mode,
     set_enforcement_mode,
 )
 from uipath.runtime.governance.wrapper import (
