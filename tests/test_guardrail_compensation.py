@@ -22,10 +22,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from uipath.core.governance.models import Action, LifecycleHook
+from uipath.runtime.governance.native.evaluator import GovernanceEvaluator
 
+from tests._helpers import reset_enforcement_mode
 from uipath.runtime.governance.config import (
     EnforcementMode,
-    reset_enforcement_mode,
     set_enforcement_mode,
 )
 from uipath.runtime.governance.native import guardrail_compensation
@@ -33,7 +34,6 @@ from uipath.runtime.governance.native.backend_client import (
     USER_AGENT,
     governance_request_headers,
 )
-from uipath.runtime.governance.native.evaluator import GovernanceEvaluator
 from uipath.runtime.governance.native.guardrail_compensation import (
     _resolve_trace_id,
     disabled_guardrails,
@@ -174,7 +174,7 @@ def test_request_governance_posts_expected_payload_and_returns_none(
             "validator": "harmful_content",
         },
     ]
-    # Job context is resolved from UiPathConfig/env at call time; pin it so
+    # Job context is resolved from the environment at call time; pin it so
     # the assertion is deterministic and exercises the new payload keys.
     monkeypatch.setattr(
         guardrail_compensation,
@@ -355,8 +355,8 @@ def test_request_governance_url_is_org_scoped(monkeypatch, _govern_env):
     ) as mock_urlopen:
         request_governance(_rules("x"), {}, "before_model", "t", "ts", "a", "r")
 
-    # org_id="appsdev" comes from the _govern_env fixture, not from UIPATH_URL
-    # (UiPathConfig.organization_id is honoured first — same as policy).
+    # org_id="appsdev" comes from the _govern_env fixture (UIPATH_ORGANIZATION_ID),
+    # not from UIPATH_URL — same env source as the policy fetch.
     assert (
         mock_urlopen.call_args.args[0].full_url
         == "https://cloud.uipath.com/appsdev/agenticgovernance_/api/v1/runtime/govern"
@@ -795,15 +795,14 @@ def test_resolve_trace_id_prefers_active_otel_span():
         assert len(result) == 32  # dashless OTel hex, not a dashed uuid
 
 
-def test_resolve_trace_id_uses_fallback_without_context():
-    """With no active span and no resolvable platform trace id, fallback wins."""
-    import sys
-
-    # Force the optional `uipath.platform` lookup to miss (it may or may not
-    # be installed in this repo's env), and we're outside any active span —
-    # so neither source can supply an id and the fallback must be returned.
-    with patch.dict(sys.modules, {"uipath.platform.common": None}):
-        assert _resolve_trace_id("fallback-id") == "fallback-id"
+def test_resolve_trace_id_uses_fallback_without_context(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """With no active span and no UIPATH_TRACE_ID env, fallback wins."""
+    # Outside any active span and with the env trace id unset, neither
+    # source can supply an id, so the fallback must be returned.
+    monkeypatch.delenv("UIPATH_TRACE_ID", raising=False)
+    assert _resolve_trace_id("fallback-id") == "fallback-id"
 
 
 def test_submit_compensation_captures_live_trace_before_thread_hop():

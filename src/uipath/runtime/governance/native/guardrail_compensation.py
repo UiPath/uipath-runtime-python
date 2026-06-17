@@ -41,6 +41,7 @@ from uipath.runtime.governance.native.backend_client import (
     ENV_ACCESS_TOKEN,
     ENV_ORGANIZATION_ID,
     ENV_TENANT_ID,
+    ENV_TRACE_ID,
     GOVERN_API_PATH,
     TENANT_HEADER,
     build_governance_url,
@@ -187,8 +188,8 @@ def _resolve_trace_id(fallback: str) -> str:
     server-written compensation records from the agent's real trace (which
     is exactly what the native audit spans bind to).
 
-    Order: live OTel span trace id (32-char hex) -> ``UiPathConfig.trace_id``
-    -> the caller-supplied ``fallback``.
+    Order: live OTel span trace id (32-char hex) -> ``UIPATH_TRACE_ID``
+    env var -> the caller-supplied ``fallback``.
     """
     try:
         from opentelemetry import trace
@@ -199,13 +200,9 @@ def _resolve_trace_id(fallback: str) -> str:
     except Exception:  # noqa: BLE001 - tracing is best-effort; fall through
         pass
 
-    try:
-        from uipath.platform.common import UiPathConfig
-
-        if UiPathConfig.trace_id:
-            return UiPathConfig.trace_id
-    except (ImportError, AttributeError):
-        pass
+    env_trace_id = os.environ.get(ENV_TRACE_ID)
+    if env_trace_id:
+        return env_trace_id
 
     return fallback
 
@@ -326,7 +323,7 @@ def request_governance(
     ``type`` (the distinct validators) drives the guardrail API call;
     ``rules`` + the job-context fields let the server write one LLMOps
     trace record per rule (Doc-2 audit structure). The job-context keys
-    are included only when resolvable from ``UiPathConfig`` / env.
+    are included only when resolvable from the environment.
 
     Skipped if the org or tenant id can't be resolved (no URL / no
     header). The server runs the disabled guardrails AND writes the
@@ -349,9 +346,8 @@ def request_governance(
     org_id = resolve_organization_id()
     if not org_id:
         logger.warning(
-            "Govern call skipped: UiPathConfig.organization_id is not "
-            "available (set %s or ensure uipath-platform is installed). "
-            "validators=[%s]",
+            "Govern call skipped: organization id is not available "
+            "(set %s). validators=[%s]",
             ENV_ORGANIZATION_ID,
             ", ".join(validators),
         )
@@ -360,9 +356,8 @@ def request_governance(
     tenant_id = resolve_tenant_id()
     if not tenant_id:
         logger.warning(
-            "Govern call skipped: UiPathConfig.tenant_id is not "
-            "available (set %s or ensure uipath-platform is installed). "
-            "validators=[%s]",
+            "Govern call skipped: tenant id is not available "
+            "(set %s). validators=[%s]",
             ENV_TENANT_ID,
             ", ".join(validators),
         )
