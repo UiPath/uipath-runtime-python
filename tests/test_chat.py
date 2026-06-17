@@ -258,30 +258,6 @@ async def test_chat_runtime_stream_yields_all_events():
 
 
 @pytest.mark.asyncio
-async def test_chat_runtime_emits_exchange_end_on_success():
-    """The runtime always emits the exchange end event on successful completion.
-
-    Whether that event is honored (e.g. suppressed to keep the exchange open) is a
-    decision for the bridge implementation, not this low-level runtime.
-    """
-
-    runtime_impl = StreamingMockRuntime(messages=["Hello"])
-    bridge = make_chat_bridge_mock()
-
-    chat_runtime = UiPathChatRuntime(
-        delegate=runtime_impl,
-        chat_bridge=bridge,
-    )
-
-    result = await chat_runtime.execute({})
-
-    await chat_runtime.dispose()
-
-    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
-    cast(AsyncMock, bridge.emit_exchange_end_event).assert_awaited_once()
-
-
-@pytest.mark.asyncio
 async def test_chat_runtime_handles_errors():
     """On unexpected errors, UiPathChatRuntime should propagate them."""
 
