@@ -23,6 +23,7 @@ import pytest
 from uipath.core.governance.exceptions import GovernanceBlockException
 from uipath.core.governance.models import Action, LifecycleHook
 
+from tests._helpers import reset_enforcement_mode
 from uipath.runtime.governance.audit import (
     AuditEvent,
     AuditSink,
@@ -32,7 +33,6 @@ from uipath.runtime.governance.audit import (
 )
 from uipath.runtime.governance.config import (
     EnforcementMode,
-    reset_enforcement_mode,
     set_enforcement_mode,
 )
 from uipath.runtime.governance.native.evaluator import GovernanceEvaluator

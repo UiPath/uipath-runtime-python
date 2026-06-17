@@ -94,7 +94,7 @@ def _get_vader_analyzer() -> Any:
     global _vader_analyzer
     if _vader_analyzer is _VADER_UNINITIALIZED:
         try:
-            from vaderSentiment.vaderSentiment import (
+            from vaderSentiment.vaderSentiment import (  # type: ignore[import-untyped]
                 SentimentIntensityAnalyzer,
             )
 
