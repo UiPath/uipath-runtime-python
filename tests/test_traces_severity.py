@@ -29,11 +29,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests._helpers import reset_enforcement_mode
 from uipath.runtime.governance.audit.base import AuditEvent, EventType
 from uipath.runtime.governance.audit.traces import TracesAuditSink
 from uipath.runtime.governance.config import (
     EnforcementMode,
-    reset_enforcement_mode,
     set_enforcement_mode,
 )
 

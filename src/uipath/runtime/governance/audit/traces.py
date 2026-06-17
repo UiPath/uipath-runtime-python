@@ -7,7 +7,16 @@ appear in the UiPath Orchestrator Traces UI for observability.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
+
+from uipath.runtime.governance.native.backend_client import (
+    ENV_FOLDER_KEY,
+    ENV_JOB_KEY,
+    ENV_ORGANIZATION_ID,
+    ENV_TENANT_ID,
+    ENV_TRACE_ID,
+)
 
 from .base import AuditEvent, AuditSink, EventType
 
@@ -65,30 +74,24 @@ class TracesAuditSink(AuditSink):
         return self._tracer if self._tracer else None
 
     def _get_uipath_trace_id(self) -> str | None:
-        """Get trace ID from UiPath config."""
-        try:
-            from uipath.platform.common import UiPathConfig
-
-            return UiPathConfig.trace_id
-        except (ImportError, AttributeError):
-            return None
+        """Get the trace id from the environment."""
+        return os.environ.get(ENV_TRACE_ID)
 
     def _get_uipath_context(self) -> dict[str, str]:
-        """Get UiPath context attributes."""
+        """Get UiPath context attributes from the environment."""
         context = {}
-        try:
-            from uipath.platform.common import UiPathConfig
-
-            if UiPathConfig.organization_id:
-                context["uipath.organization_id"] = UiPathConfig.organization_id
-            if UiPathConfig.tenant_id:
-                context["uipath.tenant_id"] = UiPathConfig.tenant_id
-            if UiPathConfig.folder_key:
-                context["uipath.folder_key"] = UiPathConfig.folder_key
-            if UiPathConfig.job_key:
-                context["uipath.job_key"] = UiPathConfig.job_key
-        except (ImportError, AttributeError):
-            pass
+        organization_id = os.environ.get(ENV_ORGANIZATION_ID)
+        if organization_id:
+            context["uipath.organization_id"] = organization_id
+        tenant_id = os.environ.get(ENV_TENANT_ID)
+        if tenant_id:
+            context["uipath.tenant_id"] = tenant_id
+        folder_key = os.environ.get(ENV_FOLDER_KEY)
+        if folder_key:
+            context["uipath.folder_key"] = folder_key
+        job_key = os.environ.get(ENV_JOB_KEY)
+        if job_key:
+            context["uipath.job_key"] = job_key
         return context
 
     def emit(self, event: AuditEvent) -> None:
