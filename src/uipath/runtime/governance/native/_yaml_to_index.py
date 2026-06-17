@@ -22,6 +22,7 @@ from uipath.core.governance.models import Action, LifecycleHook
 from uipath.runtime.governance.native.models import (
     Check,
     Condition,
+    Logic,
     PolicyIndex,
     PolicyPack,
     Rule,
@@ -431,7 +432,11 @@ def _build_check(
         default_logic = "any"
     else:
         default_logic = "all"
-    logic = str(data.get("logic", default_logic))
+    logic_str = str(data.get("logic", default_logic)).lower()
+    try:
+        logic = Logic(logic_str)
+    except ValueError:
+        logic = Logic.ALL
 
     return Check(conditions=conditions, action=action, message=message, logic=logic)
 

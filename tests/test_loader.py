@@ -13,10 +13,10 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from tests._helpers import reset_enforcement_mode
 from uipath.runtime.governance.config import (
     EnforcementMode,
     get_enforcement_mode,
-    reset_enforcement_mode,
 )
 from uipath.runtime.governance.native import loader
 from uipath.runtime.governance.native.loader import (
@@ -74,13 +74,13 @@ def _clean_loader_state(monkeypatch: pytest.MonkeyPatch):
 def test_empty_index_reason_missing_org_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("UIPATH_ORGANIZATION_ID", raising=False)
     msg = _empty_index_reason()
-    assert "organization_id" in msg
+    assert "UIPATH_ORGANIZATION_ID" in msg
 
 
 def test_empty_index_reason_missing_tenant_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("UIPATH_TENANT_ID", raising=False)
     msg = _empty_index_reason()
-    assert "tenant_id" in msg
+    assert "UIPATH_TENANT_ID" in msg
 
 
 def test_empty_index_reason_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
