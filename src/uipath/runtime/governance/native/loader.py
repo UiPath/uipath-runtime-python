@@ -208,13 +208,13 @@ def _empty_index_reason() -> str:
     """Diagnose why the policy fetch produced nothing."""
     if not resolve_organization_id():
         return (
-            f"UiPathConfig.organization_id unavailable — set {ENV_ORGANIZATION_ID} "
-            "or install uipath-platform; backend API not contacted"
+            f"organization id unavailable — set {ENV_ORGANIZATION_ID}; "
+            "backend API not contacted"
         )
     if not resolve_tenant_id():
         return (
-            f"UiPathConfig.tenant_id unavailable — set {ENV_TENANT_ID} "
-            "or install uipath-platform; backend API not contacted"
+            f"tenant id unavailable — set {ENV_TENANT_ID}; "
+            "backend API not contacted"
         )
     if not os.environ.get(ENV_ACCESS_TOKEN):
         return f"{ENV_ACCESS_TOKEN} unset — backend API not contacted"

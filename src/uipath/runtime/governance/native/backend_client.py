@@ -11,8 +11,8 @@ Hosts the shared infrastructure used by every governance-backend call:
 - :func:`build_governance_url` — composes an org-scoped URL against
   the ``agenticgovernance_`` ingress.
 - :func:`resolve_organization_id` / :func:`resolve_tenant_id` — read
-  the active org/tenant from ``UiPathConfig`` with an env-var fallback
-  for installations that don't have ``uipath-platform``.
+  the active org/tenant from the environment (published by the UiPath
+  runtime host), keeping runtime independent of ``uipath-platform``.
 - :func:`safe_call` — fail-open helper that catches every non-block
   exception so governance hooks never crash an agent run.
 - Module-level constants — request timeout, service path prefix,
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # Explicit dev/test override — used verbatim, no path-stripping.
 ENV_BACKEND_BASE_URL = "UIPATH_GOVERNANCE_BACKEND_URL"
-# The canonical platform URL env var (also backs ``UiPathConfig.base_url``).
+# The canonical platform URL env var.
 ENV_PLATFORM_BASE_URL = "UIPATH_URL"
 # Bearer token; missing means the policy fetch and compensating call are
 # skipped (and that fact is logged) rather than producing 401s on every call.
@@ -50,9 +50,12 @@ ENV_ACCESS_TOKEN = "UIPATH_ACCESS_TOKEN"
 # Org / tenant scoping for the agenticgovernance_ ingress.
 ENV_ORGANIZATION_ID = "UIPATH_ORGANIZATION_ID"
 ENV_TENANT_ID = "UIPATH_TENANT_ID"
+# Trace id used to bind governance spans / compensation records to the
+# agent's trace.
+ENV_TRACE_ID = "UIPATH_TRACE_ID"
 # Job-execution context forwarded in the /runtime/govern payload so the
 # server can populate the LLMOps trace record (Doc-2 audit structure).
-# Each falls back to the named env var when uipath-platform isn't present.
+# Published into the process environment by the UiPath runtime host.
 ENV_FOLDER_KEY = "UIPATH_FOLDER_KEY"
 ENV_JOB_KEY = "UIPATH_JOB_KEY"
 ENV_PROCESS_KEY = "UIPATH_PROCESS_UUID"
@@ -79,7 +82,7 @@ AGENT_TYPE_PARAM = "agentType"
 AGENT_TYPE_CONVERSATIONAL = "conversational"
 AGENT_TYPE_AUTONOMOUS = "autonomous"
 
-# Default base URL when no override and no UiPathConfig / UIPATH_URL value is
+# Default base URL when no override and no UIPATH_URL value is
 # available. Used only on developer machines doing fully-offline work; real
 # deployments always have UIPATH_URL injected by the host.
 _DEFAULT_BACKEND_BASE_URL = "https://alpha.uipath.com"
@@ -183,12 +186,10 @@ def get_backend_base_url() -> str:
 
     1. ``UIPATH_GOVERNANCE_BACKEND_URL`` — explicit dev/test override,
        used verbatim.
-    2. ``UiPathConfig.base_url`` from ``uipath-platform`` — the
-       canonical platform URL. Org/tenant path segments are stripped
-       so the caller can append its own org-scoped path.
-    3. ``UIPATH_URL`` env var — same as (2) but works when
-       ``uipath-platform`` is not installed.
-    4. ``https://alpha.uipath.com`` — last-resort default for offline
+    2. ``UIPATH_URL`` env var — the canonical platform URL. Org/tenant
+       path segments are stripped so the caller can append its own
+       org-scoped path.
+    3. ``https://alpha.uipath.com`` — last-resort default for offline
        development; real deployments always have ``UIPATH_URL`` set.
 
     Reading on each call (not at import) lets the runtime entrypoint
@@ -198,17 +199,7 @@ def get_backend_base_url() -> str:
     if explicit_override:
         return explicit_override.rstrip("/")
 
-    # Lazy import — uipath-platform is optional; falls through to the
-    # env-var path when only uipath-core / uipath-runtime are installed.
-    platform_url: str | None = None
-    try:
-        from uipath.platform.common import UiPathConfig
-
-        platform_url = UiPathConfig.base_url
-    except (ImportError, AttributeError):
-        pass
-
-    raw = platform_url or os.environ.get(ENV_PLATFORM_BASE_URL)
+    raw = os.environ.get(ENV_PLATFORM_BASE_URL)
     if raw:
         return _strip_to_origin(raw)
 
@@ -234,20 +225,15 @@ def build_governance_url(org_id: str, path: str) -> str:
 # ----------------------------------------------------------------------------
 
 
-def _resolve_uipath_config_field(attr: str, env_var: str) -> str | None:
-    """Read a single ``UiPathConfig`` attribute with an env-var fallback.
+def _resolve_env_field(env_var: str) -> str | None:
+    """Read a runtime-context value from its environment variable.
 
-    Lazy-imports ``UiPathConfig`` so ``uipath-runtime`` doesn't require
-    ``uipath-platform`` at install time. When the platform package is
-    missing (``ImportError``) or the attribute isn't yet exposed
-    (``AttributeError``), falls back to reading the named env var.
+    Org/tenant ids and job context are published into the process
+    environment by the UiPath runtime host. Reading them directly keeps
+    ``uipath-runtime`` independent of ``uipath-platform`` (the lower layer
+    must not import the higher one).
     """
-    try:
-        from uipath.platform.common import UiPathConfig
-
-        return getattr(UiPathConfig, attr, None) or os.environ.get(env_var)
-    except ImportError:
-        return os.environ.get(env_var)
+    return os.environ.get(env_var)
 
 
 # ----------------------------------------------------------------------------
@@ -286,23 +272,22 @@ def agent_type_param() -> str | None:
 
 
 def resolve_organization_id() -> str | None:
-    """Return the current organization id from ``UiPathConfig`` / env.
+    """Return the current organization id from the environment.
 
-    Returns ``None`` when neither source yields a value — callers skip
-    the backend interaction (no URL can be built without an org id)
-    and the agent runs with no policies / no compensation.
+    Returns ``None`` when unset — callers skip the backend interaction
+    (no URL can be built without an org id) and the agent runs with no
+    policies / no compensation.
     """
-    return _resolve_uipath_config_field("organization_id", ENV_ORGANIZATION_ID)
+    return _resolve_env_field(ENV_ORGANIZATION_ID)
 
 
 def resolve_tenant_id() -> str | None:
-    """Return the current tenant id from ``UiPathConfig`` / env.
+    """Return the current tenant id from the environment.
 
-    Returns ``None`` when neither source yields a value — callers skip
-    the backend interaction since the ``x-uipath-internal-tenantid``
-    header would be missing.
+    Returns ``None`` when unset — callers skip the backend interaction
+    since the ``x-uipath-internal-tenantid`` header would be missing.
     """
-    return _resolve_uipath_config_field("tenant_id", ENV_TENANT_ID)
+    return _resolve_env_field(ENV_TENANT_ID)
 
 
 @lru_cache(maxsize=1)
@@ -314,13 +299,11 @@ def _resolved_job_context() -> tuple[tuple[str, str], ...]:
     mutate env vars can invalidate via ``resolve_job_context.cache_clear()``.
     """
     candidates = {
-        "folderKey": _resolve_uipath_config_field("folder_key", ENV_FOLDER_KEY),
-        "jobKey": _resolve_uipath_config_field("job_key", ENV_JOB_KEY),
-        "processKey": _resolve_uipath_config_field("process_uuid", ENV_PROCESS_KEY),
-        "referenceId": _resolve_uipath_config_field("agent_id", ENV_REFERENCE_ID),
-        "agentVersion": _resolve_uipath_config_field(
-            "process_version", ENV_AGENT_VERSION
-        ),
+        "folderKey": _resolve_env_field(ENV_FOLDER_KEY),
+        "jobKey": _resolve_env_field(ENV_JOB_KEY),
+        "processKey": _resolve_env_field(ENV_PROCESS_KEY),
+        "referenceId": _resolve_env_field(ENV_REFERENCE_ID),
+        "agentVersion": _resolve_env_field(ENV_AGENT_VERSION),
     }
     return tuple((k, v) for k, v in candidates.items() if v)
 
@@ -328,7 +311,7 @@ def _resolved_job_context() -> tuple[tuple[str, str], ...]:
 def resolve_job_context() -> dict[str, str]:
     """Return the agent's job-execution context for the govern payload.
 
-    Each field is read from ``UiPathConfig`` (env-var fallback) and only
+    Each field is read from its environment variable and only
     included when it resolves to a truthy value, so the server receives
     exactly the keys the agent actually knows. Cached per-process — the
     underlying values are immutable for the agent's lifetime. The server

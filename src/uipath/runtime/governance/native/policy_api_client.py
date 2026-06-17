@@ -120,10 +120,9 @@ def _fetch_policy_response_inner() -> PolicyResponse | None:
     org_id = resolve_organization_id()
     if not org_id:
         logger.warning(
-            "Policy fetch skipped: UiPathConfig.organization_id is not "
-            "available (set %s in the environment, or ensure uipath-platform "
-            "is installed); governance will run with no policies. The "
-            "backend API was NOT contacted.",
+            "Policy fetch skipped: organization id is not available "
+            "(set %s in the environment); governance will run with no "
+            "policies. The backend API was NOT contacted.",
             ENV_ORGANIZATION_ID,
         )
         return None
@@ -131,10 +130,9 @@ def _fetch_policy_response_inner() -> PolicyResponse | None:
     tenant_id = resolve_tenant_id()
     if not tenant_id:
         logger.warning(
-            "Policy fetch skipped: UiPathConfig.tenant_id is not "
-            "available (set %s in the environment, or ensure uipath-platform "
-            "is installed); governance will run with no policies. The "
-            "backend API was NOT contacted.",
+            "Policy fetch skipped: tenant id is not available "
+            "(set %s in the environment); governance will run with no "
+            "policies. The backend API was NOT contacted.",
             ENV_TENANT_ID,
         )
         return None
