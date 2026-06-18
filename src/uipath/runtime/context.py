@@ -37,6 +37,10 @@ class UiPathRuntimeContext(BaseModel):
     )
     exchange_id: str | None = Field(None, description="Exchange identifier for CAS")
     message_id: str | None = Field(None, description="Message identifier for CAS")
+    conversational_user_id: str | None = Field(
+        None,
+        description="Conversation owner id for CAS (a real cloud user id or a synthetic user id)",
+    )
     voice_mode: Literal["session"] | None = Field(
         None, description="Voice job type for CAS"
     )
@@ -364,6 +368,7 @@ class UiPathRuntimeContext(BaseModel):
             "conversationalService.conversationId": "conversation_id",
             "conversationalService.exchangeId": "exchange_id",
             "conversationalService.messageId": "message_id",
+            "conversationalService.conversationalUserId": "conversational_user_id",
             "mcpServer.id": "mcp_server_id",
             "mcpServer.slug": "mcp_server_slug",
             "voice.mode": "voice_mode",
