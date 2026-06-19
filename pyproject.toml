@@ -5,7 +5,10 @@ description = "Runtime abstractions and interfaces for building agents and autom
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 dependencies = [
-  "uipath-core>=0.5.17, <0.6.0"
+  "uipath-core>=0.5.19, <0.6.0",
+  "pyyaml>=6.0, <7.0",
+  "vaderSentiment>=3.3.2, <4.0",
+  "chardet>=5.2.0, <8.0",
 ]
 classifiers = [
   "Intended Audience :: Developers",
@@ -40,6 +43,7 @@ dev = [
   "pytest-cov>=4.1.0",
   "pytest-mock>=3.11.1",
   "pre-commit>=4.1.0",
+  "types-PyYAML>=6.0",
 ]
 
 [tool.hatch.build.targets.wheel]
