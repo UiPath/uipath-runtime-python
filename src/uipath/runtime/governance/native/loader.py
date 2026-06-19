@@ -20,15 +20,17 @@ from uipath.core.governance.config import is_governance_enabled
 
 from uipath.runtime.governance.config import EnforcementMode, set_enforcement_mode
 from uipath.runtime.governance.native._yaml_to_index import build_policy_index_from_yaml
-from uipath.runtime.governance.native.backend_client import ENV_ACCESS_TOKEN
-from uipath.runtime.governance.native.models import PolicyIndex
-from uipath.runtime.governance.native.policy_api_client import (
+from uipath.runtime.governance.native.backend_client import (
+    ENV_ACCESS_TOKEN,
     ENV_ORGANIZATION_ID,
     ENV_TENANT_ID,
-    POLICY_API_TIMEOUT_SECONDS,
-    fetch_policy_response,
     resolve_organization_id,
     resolve_tenant_id,
+)
+from uipath.runtime.governance.native.models import PolicyIndex
+from uipath.runtime.governance.native.policy_api_client import (
+    POLICY_API_TIMEOUT_SECONDS,
+    fetch_policy_response,
 )
 
 logger = logging.getLogger(__name__)
