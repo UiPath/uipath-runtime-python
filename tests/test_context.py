@@ -183,6 +183,7 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
             "conversationalService.conversationId": "conv-123",
             "conversationalService.exchangeId": "ex-456",
             "conversationalService.messageId": "msg-789",
+            "conversationalService.conversationalUserId": "owner-guid",
             "mcpServer.id": "server-id-123",
             "mcpServer.slug": "my-mcp-server",
         }
@@ -195,6 +196,7 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
     assert ctx.conversation_id == "conv-123"
     assert ctx.exchange_id == "ex-456"
     assert ctx.message_id == "msg-789"
+    assert ctx.conversational_user_id == "owner-guid"
     assert ctx.mcp_server_id == "server-id-123"
     assert ctx.mcp_server_slug == "my-mcp-server"
 
