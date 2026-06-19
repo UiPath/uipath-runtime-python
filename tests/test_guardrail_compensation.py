@@ -778,15 +778,31 @@ def test_evaluator_does_not_emit_audit_trace_for_guardrail_fallback_rule():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_trace_id_prefers_active_otel_span():
-    """Inside an active span, it returns that span's trace id (32-char hex).
+def test_resolve_trace_id_prefers_env_over_active_span(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """UIPATH_TRACE_ID wins over a live span — this is the binding fix.
 
-    This is the binding fix: the server-written compensation records must
-    land on the agent's real trace — the same one the native audit spans
-    use — not a detached id.
+    The native audit spans are exported under UIPATH_TRACE_ID (the platform
+    rebinds spans to the agent's run trace), so the server-written
+    compensation records must land on that same id, not the live OTel
+    span's id.
     """
     from opentelemetry.sdk.trace import TracerProvider
 
+    monkeypatch.setenv("UIPATH_TRACE_ID", "env-trace-0001")
+    tracer = TracerProvider().get_tracer("test")
+    with tracer.start_as_current_span("root"):
+        assert _resolve_trace_id("fallback-id") == "env-trace-0001"
+
+
+def test_resolve_trace_id_falls_back_to_active_span_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """With UIPATH_TRACE_ID unset, the live span's trace id is used."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    monkeypatch.delenv("UIPATH_TRACE_ID", raising=False)
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("root") as span:
         expected = format(span.get_span_context().trace_id, "032x")

@@ -184,13 +184,24 @@ def _resolve_trace_id(fallback: str) -> str:
     MUST be called before the background-pool hop in
     :func:`submit_compensation`: the worker thread that issues the
     ``/govern`` call has no OpenTelemetry context, so resolving there would
-    miss the live span and fall back to a detached id — orphaning the
-    server-written compensation records from the agent's real trace (which
-    is exactly what the native audit spans bind to).
+    fall back to a detached id — orphaning the server-written compensation
+    records from the agent's real trace.
 
-    Order: live OTel span trace id (32-char hex) -> ``UIPATH_TRACE_ID``
-    env var -> the caller-supplied ``fallback``.
+    Order: ``UIPATH_TRACE_ID`` env var -> live OTel span trace id
+    (32-char hex) -> the caller-supplied ``fallback``.
+
+    ``UIPATH_TRACE_ID`` is preferred over the live OTel span because the
+    native governance audit spans are exported under that id (the platform
+    rebinds spans to the agent's run trace). The compensation records must
+    land on the *same* trace, so we use it first. The live OTel span is the
+    fallback for contexts where the env var isn't set; in conversational
+    runs the hook thread has no live span anyway, so the env var is what
+    keeps native + compensation on one trace.
     """
+    env_trace_id = os.environ.get(ENV_TRACE_ID)
+    if env_trace_id:
+        return env_trace_id
+
     try:
         from opentelemetry import trace
 
@@ -199,10 +210,6 @@ def _resolve_trace_id(fallback: str) -> str:
             return format(ctx.trace_id, "032x")
     except Exception:  # noqa: BLE001 - tracing is best-effort; fall through
         pass
-
-    env_trace_id = os.environ.get(ENV_TRACE_ID)
-    if env_trace_id:
-        return env_trace_id
 
     return fallback
 
