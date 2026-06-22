@@ -37,6 +37,10 @@ class UiPathRuntimeContext(BaseModel):
     )
     exchange_id: str | None = Field(None, description="Exchange identifier for CAS")
     message_id: str | None = Field(None, description="Message identifier for CAS")
+    end_exchange: bool = Field(
+        True,
+        description="Whether to emit the exchange end event for CAS",
+    )
     conversational_user_id: str | None = Field(
         None,
         description="Conversation owner id for CAS (a real cloud user id or a synthetic user id)",
@@ -368,6 +372,7 @@ class UiPathRuntimeContext(BaseModel):
             "conversationalService.conversationId": "conversation_id",
             "conversationalService.exchangeId": "exchange_id",
             "conversationalService.messageId": "message_id",
+            "conversationalService.endExchange": "end_exchange",
             "conversationalService.conversationalUserId": "conversational_user_id",
             "mcpServer.id": "mcp_server_id",
             "mcpServer.slug": "mcp_server_slug",

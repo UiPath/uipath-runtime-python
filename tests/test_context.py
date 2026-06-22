@@ -243,6 +243,38 @@ def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
     assert ctx.mcp_server_slug == "test-server-slug"
 
 
+def test_from_config_maps_end_exchange_fps_property(tmp_path: Path) -> None:
+    """conversationalService.endExchange should map onto end_exchange."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.conversationId": "conv-123",
+            "conversationalService.exchangeId": "ex-456",
+            "conversationalService.endExchange": False,
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.end_exchange is False
+
+
+def test_end_exchange_defaults_true_when_fps_property_absent(tmp_path: Path) -> None:
+    """end_exchange defaults to True (legacy behavior) when the fps key is missing."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.conversationId": "conv-123",
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.end_exchange is True
+
+
 def test_result_file_written_on_faulted_trigger_error(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     ctx = UiPathRuntimeContext(
