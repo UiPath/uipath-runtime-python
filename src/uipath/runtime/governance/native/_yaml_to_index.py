@@ -2,8 +2,9 @@
 
 Mirrors the shape produced by ``packs/compile_packs.py`` but builds the
 PolicyIndex directly from parsed YAML data rather than generating Python
-source. Used by :mod:`uipath.runtime.governance.native.loader` when policies are fetched
-from the governance backend at startup.
+source. Used by :mod:`uipath.runtime.governance.native.loader` to
+compile the YAML body returned by the registered policy provider into
+an in-memory index at startup.
 
 Accepts either a single YAML document (one pack) or a multi-document
 stream (``---``-separated packs). Unknown check types and malformed
@@ -334,9 +335,7 @@ def _build_check(
                     },
                 )
             )
-        message = str(
-            data.get("message", "A.7.4: Data quality signal (encoding or entropy)")
-        )
+        message = str(data.get("message", ""))
 
     elif check_type == "incident_taxonomy":
         field = data.get("field", "model_output")
@@ -347,7 +346,7 @@ def _build_check(
         conditions.append(
             Condition(operator="incident_concern", field=field, value=value)
         )
-        message = str(data.get("message", "A.8.4: Incident signal detected"))
+        message = str(data.get("message", ""))
 
     elif check_type == "commitment_extractor":
         field = data.get("field", "model_output")
@@ -361,9 +360,7 @@ def _build_check(
                 },
             )
         )
-        message = str(
-            data.get("message", "A.10.4: Customer commitment language detected")
-        )
+        message = str(data.get("message", ""))
 
     elif check_type == "sentiment_concern":
         field = data.get("field", "model_input")
