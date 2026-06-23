@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.11"
 
 [options]
-exclude-newer = "2026-06-17T19:38:11.87942Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P2D"
 
 [options.exclude-newer-package]
@@ -998,21 +998,21 @@ wheels = [
 
 [[package]]
 name = "uipath-core"
-version = "0.5.17"
+version = "0.5.22"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e3/80/a626eb3136a6765e0af06c9d5080ac0843c2a72f17b7a2170f1f45da40dd/uipath_core-0.5.17.tar.gz", hash = "sha256:13565e1eba9f059a8221494dfb3239257ddf7f265fc7057199ffe03ed066300a", size = 119023, upload-time = "2026-05-28T21:34:10.903Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/e0/1cdf0537ae1db831b066604e0e83132a2dd559371ac6e5d56e96b9039163/uipath_core-0.5.22.tar.gz", hash = "sha256:01ae7c3770369469acf5cef31908e8b878a5b1123f2d930f8537ea2d97d7d621", size = 136212, upload-time = "2026-06-23T16:18:43.081Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/cf/f4b481970621e2a9aec869302773fa2c7d346aef294a553429626369633f/uipath_core-0.5.17-py3-none-any.whl", hash = "sha256:6e088eec5130bc492ac176ab85d4924d7d4cb07ee290ed7e6a46984e9de8c12b", size = 44957, upload-time = "2026-05-28T21:34:09.534Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/97/2258d51969ec71b1056d67f39d612eac2d7c6e9458d3b3c9a0b10f42e730/uipath_core-0.5.22-py3-none-any.whl", hash = "sha256:60df655b207e02a6d3bfae8c61e1fc9bc0bf11576f7ead07b8b38f23d13fc4d6", size = 58222, upload-time = "2026-06-23T16:18:41.536Z" },
 ]
 
 [[package]]
 name = "uipath-runtime"
-version = "0.11.2"
+version = "0.11.3"
 source = { editable = "." }
 dependencies = [
     { name = "uipath-core" },
@@ -1034,7 +1034,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "uipath-core", specifier = ">=0.5.17,<0.6.0" }]
+requires-dist = [{ name = "uipath-core", specifier = ">=0.5.22,<0.6.0" }]
 
 [package.metadata.requires-dev]
 dev = [

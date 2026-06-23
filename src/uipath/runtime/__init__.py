@@ -43,6 +43,14 @@ from uipath.runtime.resumable.runtime import (
 )
 from uipath.runtime.schema import UiPathRuntimeSchema
 from uipath.runtime.storage import UiPathRuntimeStorageProtocol
+from uipath.runtime.workspace import (
+    AttachmentRegistryEntry,
+    HydrationPolicy,
+    HydrationRuntime,
+    Workspace,
+    WorkspaceHydrator,
+    WorkspaceRegistryStore,
+)
 
 __all__ = [
     "UiPathExecuteOptions",
@@ -73,4 +81,10 @@ __all__ = [
     "UiPathResumeTriggerName",
     "UiPathChatProtocol",
     "UiPathChatRuntime",
+    "AttachmentRegistryEntry",
+    "HydrationPolicy",
+    "HydrationRuntime",
+    "Workspace",
+    "WorkspaceHydrator",
+    "WorkspaceRegistryStore",
 ]
