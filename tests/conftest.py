@@ -23,27 +23,23 @@ def temp_dir() -> Generator[str, None, None]:
 def _reset_governance_process_state() -> Generator[None, None, None]:
     """Clear process-level governance state around every test.
 
-    The native governance layer keeps two pieces of state at module scope:
-    the conversational/autonomous selector consumed by the policy fetch,
-    and the memoized job-context. Both are stable per process in
+    The loader keeps the conversational selector and the registered
+    policy provider at module scope. Both are stable per process in
     production but leak across tests when not reset, masking ordering
-    bugs and producing flakes.
-
-    ``backend_client`` is imported lazily and guarded: this shared
-    conftest ships alongside the foundation slice, where that module may
-    not exist yet, and the reset is simply a no-op until it does.
+    bugs and producing flakes. Import is guarded so this fixture is a
+    no-op when the governance package isn't built yet.
     """
     try:
-        from uipath.runtime.governance.native.backend_client import (
-            resolve_job_context,
+        from uipath.runtime.governance.native.loader import (
             set_agent_conversational,
+            set_policy_provider,
         )
     except ImportError:
         yield
         return
 
     set_agent_conversational(None)
-    resolve_job_context.cache_clear()
+    set_policy_provider(None)
     yield
     set_agent_conversational(None)
-    resolve_job_context.cache_clear()
+    set_policy_provider(None)

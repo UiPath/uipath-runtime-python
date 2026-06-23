@@ -1,13 +1,13 @@
 """Tests for the default enforcement-mode resolution.
 
 The default is :attr:`EnforcementMode.AUDIT` so the wrapper attaches at
-runtime construction and the background policy fetch can run. If the
-backend later returns ``disabled``, ``set_enforcement_mode`` flips the
-mode and ``evaluate()`` short-circuits per-call.
+runtime construction and the background policy load can run. If the
+provider later returns ``disabled``, ``set_enforcement_mode`` flips
+the mode and ``evaluate()`` short-circuits per-call.
 
 Resolution (per :func:`get_enforcement_mode`):
-1. The backend-supplied value set via ``set_enforcement_mode`` (the
-   ``/runtime/policy`` response, applied by the policy loader).
+1. The provider-supplied value applied via ``set_enforcement_mode`` by
+   the policy loader.
 2. Default ``AUDIT``.
 """
 
