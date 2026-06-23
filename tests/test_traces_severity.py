@@ -1,26 +1,22 @@
 """Tests for trace-span verbosity / status semantics.
 
 ``TracesAuditSink`` emits an OpenTelemetry span for every governance
-hook end and every rule evaluation. The contract:
+hook end and every rule evaluation. The contract follows §4 of the
+cross-product unification doc — verdict is split into ``evaluator_result``
+(what the rule decided, mode-independent) and ``action_applied`` (what
+actually happened, derived from evaluator_result + mode).
 
-- Matched non-allow rules carry a ``verbosityLevel`` span attribute
-  (UiPath Orchestrator log levels: 3=Warning, 4=Error). Platform default
-  is 2 (Information); we only emit this attribute when a violation
-  warrants Warning or Error. OTel ``StatusCode`` only has OK / ERROR /
-  UNSET, so verbosityLevel is the channel that distinguishes
-  "audit-mode advisory violation" from "actually blocked the agent".
 - ``verbosityLevel = 4`` (Error) and ``StatusCode.ERROR`` fire **only**
-  when the runtime actually blocked the agent — enforce mode AND the
-  rule's action is ``deny`` or ``escalate``.
+  when ``action_applied = DENY`` — i.e. the runtime actually blocked
+  the agent (ENFORCE mode + configured action ``deny``).
 - ``verbosityLevel = 3`` (Warning) and ``Status.UNSET`` for advisory
-  violations — audit mode (any non-allow action), or audit-action rules
-  even in enforce mode. The agent didn't fail; surfacing Status.ERROR
-  would falsely paint a successful run as a failure.
-- Hook spans never set Status, regardless of enforcement mode or
-  final_action. They're summary containers; verbosityLevel belongs on
-  the individual rule span that fired.
-- ``allow`` actions and unmatched evaluations leave Status at UNSET and
-  do not emit a verbosityLevel attribute (platform default applies).
+  outcomes (``action_applied`` in ``{AUDIT, HITL}``). HITL is its own
+  spec bucket — escalation pauses for human review, it doesn't fail
+  the run, so it stays Warning even in ENFORCE mode.
+- Hook spans never set Status, regardless of mode or final_action.
+  They're summary containers; severity belongs on the per-rule span.
+- ``ALLOW`` / ``NONE`` results leave verbosityLevel unset (platform
+  default = 2, Information) and never call set_status.
 """
 
 from __future__ import annotations
@@ -30,8 +26,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests._helpers import reset_enforcement_mode
-from uipath.runtime.governance.audit.base import AuditEvent, EventType
-from uipath.runtime.governance.audit.traces import TracesAuditSink
+from uipath.runtime.governance._audit.base import AuditEvent, EventType
+from uipath.runtime.governance._audit.traces import TracesAuditSink
 from uipath.runtime.governance.config import (
     EnforcementMode,
     set_enforcement_mode,
@@ -77,7 +73,7 @@ def _rule_event(matched: bool, action: str) -> AuditEvent:
         agent_name="agent",
         hook="after_model",
         data={
-            "rule_id": "A.10.4",
+            "policy_id": "A.10.4",
             "rule_name": "commitment-language",
             "pack_name": "iso42001",
             "matched": matched,
@@ -125,26 +121,24 @@ def test_hook_span_never_sets_error(
 
 
 # ---------------------------------------------------------------------------
-# Rule span — enforce-mode actually-blocking violations
+# Rule span — enforce-mode DENY is the only Status.ERROR case
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("action", ["deny", "escalate"])
-def test_enforce_mode_blocking_violation_is_error(
-    captured_span: MagicMock, action: str
-) -> None:
-    """Enforce mode + deny/escalate = real failure → verbosityLevel=4 + Status.ERROR."""
+def test_enforce_mode_deny_is_error(captured_span: MagicMock) -> None:
+    """Enforce mode + action=deny = real block → verbosityLevel=4 + Status.ERROR."""
     set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
-    sink.emit(_rule_event(matched=True, action=action))
+    sink.emit(_rule_event(matched=True, action="deny"))
 
     attrs = _span_attrs(captured_span)
     assert attrs.get("verbosityLevel") == 4
-    assert "severity" not in attrs
-    assert "governance.severity" not in attrs
+    assert attrs.get("uipath_governance.evaluator_result") == "DENY"
+    assert attrs.get("uipath_governance.action_applied") == "DENY"
+    assert attrs.get("uipath_governance.mode") == "ENFORCE"
 
     assert captured_span.set_status.called, (
-        f"Status.ERROR must fire for enforce-mode {action} violation"
+        "Status.ERROR must fire for enforce-mode deny violation"
     )
     (status_arg,) = captured_span.set_status.call_args.args
     from opentelemetry.trace import Status, StatusCode
@@ -152,7 +146,26 @@ def test_enforce_mode_blocking_violation_is_error(
     assert isinstance(status_arg, Status)
     assert status_arg.status_code is StatusCode.ERROR
     assert "commitment-language" in status_arg.description
-    assert action in status_arg.description
+    assert "deny" in status_arg.description
+
+
+def test_enforce_mode_escalate_is_hitl_warning(captured_span: MagicMock) -> None:
+    """Enforce mode + action=escalate = HITL pause, not a block.
+
+    HITL is its own spec bucket distinct from DENY — escalation pauses
+    for human review, the run isn't failed. So verbosityLevel stays at
+    Warning and Status is not marked ERROR.
+    """
+    set_enforcement_mode(EnforcementMode.ENFORCE)
+    sink = TracesAuditSink()
+    sink.emit(_rule_event(matched=True, action="escalate"))
+
+    attrs = _span_attrs(captured_span)
+    assert attrs.get("verbosityLevel") == 3
+    assert attrs.get("uipath_governance.evaluator_result") == "HITL"
+    assert attrs.get("uipath_governance.action_applied") == "HITL"
+    assert attrs.get("uipath_governance.mode") == "ENFORCE"
+    assert not captured_span.set_status.called
 
 
 # ---------------------------------------------------------------------------
@@ -160,15 +173,19 @@ def test_enforce_mode_blocking_violation_is_error(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("action", ["deny", "audit", "escalate"])
+@pytest.mark.parametrize(
+    "action,expected_evaluator",
+    [("deny", "DENY"), ("audit", "DENY"), ("escalate", "HITL")],
+)
 def test_audit_mode_violation_is_warning(
-    captured_span: MagicMock, action: str
+    captured_span: MagicMock, action: str, expected_evaluator: str
 ) -> None:
-    """Audit mode never blocks → verbosityLevel=3, Status.UNSET.
+    """Audit mode never blocks → action_applied=AUDIT, verbosityLevel=3.
 
     Surfacing Status.ERROR for an audit-mode violation would falsely
     mark the agent's run as failed when the runtime intentionally
-    let it through.
+    let it through. evaluator_result still records the rule's actual
+    decision (DENY/HITL), independent of mode.
     """
     set_enforcement_mode(EnforcementMode.AUDIT)
     sink = TracesAuditSink()
@@ -176,8 +193,9 @@ def test_audit_mode_violation_is_warning(
 
     attrs = _span_attrs(captured_span)
     assert attrs.get("verbosityLevel") == 3
-    assert "severity" not in attrs
-    assert "governance.severity" not in attrs
+    assert attrs.get("uipath_governance.evaluator_result") == expected_evaluator
+    assert attrs.get("uipath_governance.action_applied") == "AUDIT"
+    assert attrs.get("uipath_governance.mode") == "AUDIT"
 
     assert not captured_span.set_status.called, (
         f"Audit-mode {action} violation must NOT set Status.ERROR"
@@ -185,11 +203,12 @@ def test_audit_mode_violation_is_warning(
 
 
 def test_enforce_mode_audit_action_is_warning(captured_span: MagicMock) -> None:
-    """Enforce mode + action=audit is still advisory → verbosityLevel=3.
+    """Enforce mode + action=audit is a per-rule audit override.
 
-    An ``audit`` action means "log this match but don't block" even
-    when the policy is in enforce mode. The runtime doesn't block;
-    verbosity stays Warning.
+    The rule's configured ``audit`` action means "log this match but
+    don't block" even when the global mode is ENFORCE. evaluator_result
+    is DENY (the rule decided to deny), but action_applied is AUDIT
+    (the per-rule override kicks in), so verbosity stays Warning.
     """
     set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
@@ -197,6 +216,9 @@ def test_enforce_mode_audit_action_is_warning(captured_span: MagicMock) -> None:
 
     attrs = _span_attrs(captured_span)
     assert attrs.get("verbosityLevel") == 3
+    assert attrs.get("uipath_governance.evaluator_result") == "DENY"
+    assert attrs.get("uipath_governance.action_applied") == "AUDIT"
+    assert attrs.get("uipath_governance.mode") == "ENFORCE"
     assert not captured_span.set_status.called
 
 
@@ -206,13 +228,15 @@ def test_enforce_mode_audit_action_is_warning(captured_span: MagicMock) -> None:
 
 
 def test_unmatched_rule_no_verbosity_no_error(captured_span: MagicMock) -> None:
-    """Unmatched evaluations are quiet: no verbosityLevel attr, no Status."""
+    """Unmatched evaluations → evaluator_result=ALLOW, action_applied=NONE, quiet."""
     set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
     sink.emit(_rule_event(matched=False, action="deny"))
 
     attrs = _span_attrs(captured_span)
     assert "verbosityLevel" not in attrs
+    assert attrs.get("uipath_governance.evaluator_result") == "ALLOW"
+    assert attrs.get("uipath_governance.action_applied") == "NONE"
     assert not captured_span.set_status.called
 
 
@@ -224,4 +248,6 @@ def test_matched_allow_action_no_verbosity(captured_span: MagicMock) -> None:
 
     attrs = _span_attrs(captured_span)
     assert "verbosityLevel" not in attrs
+    assert attrs.get("uipath_governance.evaluator_result") == "ALLOW"
+    assert attrs.get("uipath_governance.action_applied") == "NONE"
     assert not captured_span.set_status.called

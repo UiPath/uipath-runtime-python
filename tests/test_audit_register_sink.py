@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from uipath.runtime.governance.audit.base import (
+from uipath.runtime.governance._audit.base import (
     AuditEvent,
     AuditManager,
     AuditSink,

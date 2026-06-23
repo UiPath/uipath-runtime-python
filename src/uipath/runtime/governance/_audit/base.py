@@ -178,8 +178,7 @@ class AuditManager:
     _SINK_FAILURE_THRESHOLD = 10
     # Bound the async queue so a stuck sink can't grow memory without limit.
     # Matches the order of magnitude of a long-running agent's per-session
-    # audit volume; on overflow the oldest event is dropped (loss visible
-    # via stats.events_dropped).
+    # audit volume; on overflow the oldest event is dropped to make room.
     _DEFAULT_QUEUE_MAXSIZE = 10_000
 
     def __init__(
@@ -196,16 +195,12 @@ class AuditManager:
                        oldest queued event is dropped to make room.
         """
         self._sinks: list[AuditSink] = []
-        # Single lock guards _sinks, _sink_failures, _tripped_sinks,
-        # _event_count, _error_count, _dropped_count — every counter and
-        # collection that the worker thread and emit-caller mutate.
+        # Single lock guards _sinks, _sink_failures, _tripped_sinks — every
+        # collection mutated by both the worker thread and the emit caller.
         self._sinks_lock = threading.Lock()
         # Per-sink consecutive-failure counter, keyed by sink name.
         self._sink_failures: dict[str, int] = {}
         self._tripped_sinks: set[str] = set()
-        self._event_count = 0
-        self._error_count = 0
-        self._dropped_count = 0
         self._async_mode = async_mode
         self._pid = os.getpid()
 
@@ -290,7 +285,6 @@ class AuditManager:
                         self._sink_failures[sink.name] = 0
             except Exception as e:
                 with self._sinks_lock:
-                    self._error_count += 1
                     fails = self._sink_failures.get(sink.name, 0) + 1
                     self._sink_failures[sink.name] = fails
                     tripped_now = fails >= self._SINK_FAILURE_THRESHOLD
@@ -393,14 +387,10 @@ class AuditManager:
         """
         self._ensure_alive_after_fork()
 
-        with self._sinks_lock:
-            self._event_count += 1
-
         if self._async_mode:
             # Non-blocking enqueue with drop-oldest backpressure: if the
             # worker is wedged on a slow sink, this keeps memory bounded
-            # rather than growing without limit. The dropped count is
-            # surfaced via ``stats``.
+            # rather than growing without limit.
             try:
                 self._queue.put_nowait(event)
             except queue.Full:
@@ -409,8 +399,6 @@ class AuditManager:
                     self._queue.task_done()
                 except queue.Empty:
                     pass
-                with self._sinks_lock:
-                    self._dropped_count += 1
                 try:
                     self._queue.put_nowait(event)
                 except queue.Full:
@@ -438,7 +426,7 @@ class AuditManager:
 
     def emit_rule_evaluation(
         self,
-        rule_id: str,
+        policy_id: str,
         rule_name: str,
         pack_name: str,
         hook: str,
@@ -457,7 +445,7 @@ class AuditManager:
                 agent_name=agent_name,
                 hook=hook,
                 data={
-                    "rule_id": rule_id,
+                    "policy_id": policy_id,
                     "rule_name": rule_name,
                     "pack_name": pack_name,
                     "matched": matched,
@@ -625,24 +613,6 @@ class AuditManager:
             except Exception as e:
                 logger.warning("Audit sink '%s' failed to close: %s", sink.name, e)
 
-    @property
-    def stats(self) -> dict[str, Any]:
-        """Get audit statistics."""
-        with self._sinks_lock:
-            sink_names = [s.name for s in self._sinks]
-            event_count = self._event_count
-            error_count = self._error_count
-            dropped_count = self._dropped_count
-        return {
-            "sinks": len(sink_names),
-            "sink_names": sink_names,
-            "events_emitted": event_count,
-            "events_queued": self._queue.qsize() if self._async_mode else 0,
-            "events_dropped": dropped_count,
-            "errors": error_count,
-            "async_mode": self._async_mode,
-        }
-
 
 # =============================================================================
 # Global Audit Manager
@@ -650,6 +620,10 @@ class AuditManager:
 
 _audit_manager: AuditManager | None = None
 _atexit_registered = False
+# Guards the lazy init in ``get_audit_manager`` against two threads racing
+# on the first call and constructing two managers (which would silently
+# leak a background worker thread and split audit traffic across them).
+_audit_manager_lock = threading.Lock()
 
 
 def _cleanup_audit_manager() -> None:
@@ -666,65 +640,68 @@ def _cleanup_audit_manager() -> None:
 def get_audit_manager() -> AuditManager:
     """Get or create the global audit manager.
 
-    On first call, initializes sinks based on environment configuration.
-    The manager uses a background thread for async event processing.
+    On first call, registers the platform-mandated ``traces`` sink. Events
+    are processed on a background worker thread so audit emission never
+    blocks agent execution.
+
+    Thread-safe: uses double-checked locking around the lazy init so two
+    concurrent first callers can't construct two managers (which would
+    leak a worker thread and split audit traffic across them).
 
     Returns:
         The global AuditManager instance
     """
     global _audit_manager, _atexit_registered
 
-    if _audit_manager is None:
-        # Check if async mode should be disabled (for testing or debugging)
-        async_mode = os.getenv("UIPATH_AUDIT_SYNC", "false").lower() != "true"
-        _audit_manager = AuditManager(async_mode=async_mode)
-        _configure_default_sinks(_audit_manager)
+    # Fast path: instance already constructed. The read is racy but
+    # benign — at worst a late reader sees ``None`` and falls through
+    # to the locked slow path, where the double-check resolves it.
+    if _audit_manager is not None:
+        return _audit_manager
 
-        # Register cleanup handler
-        if not _atexit_registered:
-            atexit.register(_cleanup_audit_manager)
-            _atexit_registered = True
+    with _audit_manager_lock:
+        if _audit_manager is None:
+            manager = AuditManager()
+            _configure_default_sinks(manager)
+            # Register cleanup handler before publishing the manager
+            # so an emit-then-process-exit race can't observe a manager
+            # whose atexit hook didn't fire.
+            if not _atexit_registered:
+                atexit.register(_cleanup_audit_manager)
+                _atexit_registered = True
+            _audit_manager = manager
 
     return _audit_manager
 
 
 def _configure_default_sinks(manager: AuditManager) -> None:
-    """Configure default sinks.
+    """Register the platform-mandated traces sink.
 
-    The traces sink (OpenTelemetry spans to the Orchestrator audit UI)
-    is **platform-mandated** and is always registered — no developer-side
-    env var can disable it. This preserves the principle that governance
-    is platform-owned and developers cannot bypass the audit trail.
-
-    The console sink is a developer aid for local debugging and is
-    opt-in via ``UIPATH_GOVERNANCE_CONSOLE_LOG=true``.
+    Governance is platform-owned, so the traces sink (OpenTelemetry spans
+    to the Orchestrator audit UI) is always registered and cannot be
+    disabled. Developers cannot bypass the audit trail.
     """
     from .factory import create_sink
 
-    sink_names: list[str] = ["traces"]  # mandatory — platform-controlled
-
-    if os.getenv("UIPATH_GOVERNANCE_CONSOLE_LOG", "false").lower() == "true":
-        sink_names.append("console")
-
-    for sink_name in sink_names:
-        sink = create_sink(sink_name)
-        if sink:
-            manager.register_sink(sink)
-            logger.info("Audit sink registered: %s", sink_name)
-
-    logger.info("Governance audit sinks configured: %s", ", ".join(sink_names))
+    sink = create_sink("traces")
+    if sink:
+        manager.register_sink(sink)
+        logger.info("Governance audit sink registered: traces")
 
 
 def reset_audit_manager() -> None:
     """Reset the global audit manager (for testing).
 
     Flushes pending events and stops the background worker before resetting.
+    Holds the same lock as :func:`get_audit_manager` so a concurrent first
+    caller can't observe a half-torn-down manager.
     """
     global _audit_manager
-    if _audit_manager:
+    with _audit_manager_lock:
+        manager, _audit_manager = _audit_manager, None
+    if manager is not None:
         try:
-            _audit_manager.flush(timeout=1.0)
+            manager.flush(timeout=1.0)
         except Exception:
             pass
-        _audit_manager.close()
-    _audit_manager = None
+        manager.close()
