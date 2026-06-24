@@ -329,10 +329,24 @@ def test_string_output_wrapped_in_dict() -> None:
         ("eval", "eval"),
     ],
 )
+def test_constructor_derives_execution_source(command: str, expected: str) -> None:
+    """execution_source is derived from the command on the plain constructor path."""
+    ctx = UiPathRuntimeContext(command=command)
+
+    assert ctx.execution_source == expected
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ("run", "runtime"),
+        ("eval", "eval"),
+    ],
+)
 def test_with_defaults_derives_execution_source(
     command: str, expected: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """execution_source is derived from the command when not provided."""
+    """execution_source is also derived via with_defaults."""
     monkeypatch.chdir(tmp_path)
 
     ctx = UiPathRuntimeContext.with_defaults(command=command)
@@ -340,23 +354,20 @@ def test_with_defaults_derives_execution_source(
     assert ctx.execution_source == expected
 
 
-def test_with_defaults_execution_source_none_for_unmapped_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Commands that do not run an agent leave execution_source unset."""
-    monkeypatch.chdir(tmp_path)
+def test_execution_source_unset_for_unmapped_command() -> None:
+    """Commands that do not run an agent leave execution_source unset.
 
-    ctx = UiPathRuntimeContext.with_defaults(command="pack")
+    The field must remain unset (not explicitly None) so it is absent from
+    model_dump(exclude_unset=True).
+    """
+    ctx = UiPathRuntimeContext(command="pack")
 
     assert ctx.execution_source is None
+    assert "execution_source" not in ctx.model_dump(exclude_unset=True)
 
 
-def test_with_defaults_explicit_execution_source_not_overwritten(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_explicit_execution_source_not_overwritten() -> None:
     """An explicitly provided execution_source takes precedence over the command."""
-    monkeypatch.chdir(tmp_path)
-
-    ctx = UiPathRuntimeContext.with_defaults(command="run", execution_source="custom")
+    ctx = UiPathRuntimeContext(command="run", execution_source="custom")
 
     assert ctx.execution_source == "custom"

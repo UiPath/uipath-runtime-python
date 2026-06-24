@@ -7,7 +7,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from uipath.core.errors import UiPathFaultedTriggerError
 from uipath.core.tracing import UiPathTraceManager
 
@@ -23,8 +23,6 @@ from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 logger = logging.getLogger(__name__)
 
-# Maps the executing command to an execution source. Commands that do not run
-# an agent are absent, leaving execution_source unset.
 _EXECUTION_SOURCE_BY_COMMAND: dict[str, str] = {
     "run": "runtime",
     "debug": "playground",
@@ -41,12 +39,7 @@ class UiPathRuntimeContext(BaseModel):
     resume: bool = False
     command: str | None = None
     execution_source: str | None = Field(
-        None,
-        description=(
-            "Execution source derived from the command "
-            "(runtime/playground/eval). Propagated to platform clients so "
-            "downstream calls (e.g. guardrails) can identify the run context."
-        ),
+        None, description="Execution source derived from the command."
     )
     job_id: str | None = None
     conversation_id: str | None = Field(
@@ -112,6 +105,28 @@ class UiPathRuntimeContext(BaseModel):
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+    def _apply_execution_source(self) -> None:
+        """Derive execution_source from the command, if not already set.
+
+        Only assigns a mapped value, so the field stays unset (absent under
+        ``model_dump(exclude_unset=True)``) for unmapped commands, and an
+        explicitly-provided value is never overwritten.
+        """
+        if self.execution_source is None and self.command is not None:
+            source = _EXECUTION_SOURCE_BY_COMMAND.get(self.command)
+            if source is not None:
+                self.execution_source = source
+
+    @model_validator(mode="after")
+    def _derive_execution_source(self) -> "UiPathRuntimeContext":
+        """Derive execution_source on the constructor path (e.g. dev/init).
+
+        ``with_defaults`` mutates ``command`` via ``setattr`` after construction,
+        so it re-applies the derivation itself.
+        """
+        self._apply_execution_source()
+        return self
 
     def get_input(self) -> dict[str, Any] | None:
         """Get parsed input data.
@@ -362,9 +377,8 @@ class UiPathRuntimeContext(BaseModel):
         for k, v in kwargs.items():
             setattr(base, k, v)
 
-        # Derive the execution source from the command unless explicitly set.
-        if base.execution_source is None and base.command is not None:
-            base.execution_source = _EXECUTION_SOURCE_BY_COMMAND.get(base.command)
+        # setattr does not re-run the validator, so derive explicitly.
+        base._apply_execution_source()
 
         return base
 
