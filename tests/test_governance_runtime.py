@@ -211,6 +211,29 @@ def test_governance_runtime_with_none_provider_yields_empty_index() -> None:
     assert index.total_rules == 0
 
 
+def test_governance_runtime_stashes_trace_id() -> None:
+    """``trace_id`` constructor arg is exposed via the ``trace_id`` property.
+
+    The wiring layer (uipath CLI) reads ``UIPATH_TRACE_ID`` from the
+    host env and passes the value in. The evaluator slice (future)
+    consumes it through :attr:`GovernanceRuntime.trace_id` and
+    forwards it into the :class:`GuardrailCompensator` constructor so
+    compensation records land on the agent's run trace.
+    """
+    runtime = GovernanceRuntime(
+        _StubDelegate(),
+        policy_provider=None,
+        trace_id="wired-trace-0001",
+    )
+    assert runtime.trace_id == "wired-trace-0001"
+
+
+def test_governance_runtime_default_trace_id_is_none() -> None:
+    """Omitting ``trace_id`` leaves the property as ``None``."""
+    runtime = GovernanceRuntime(_StubDelegate(), policy_provider=None)
+    assert runtime.trace_id is None
+
+
 async def test_governance_runtime_execute_delegates() -> None:
     delegate = _StubDelegate()
     runtime = GovernanceRuntime(delegate, policy_provider=None)

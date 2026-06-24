@@ -1,4 +1,4 @@
-"""Tests for compensating governance calls to /runtime/govern.
+"""Tests for the instance-scoped GuardrailCompensator.
 
 The runtime layer owns only the bounded background pool and the
 trace-id capture; HTTP/auth/URL/header concerns live behind the
@@ -9,20 +9,19 @@ These tests cover:
 
 - ``disabled_guardrails`` — distilling fired ``guardrail_fallback`` rules
   into per-rule wire metadata.
-- ``submit_compensation`` — pool routing, in-flight backpressure,
-  shutdown safety, wire-model assembly, and the thread-boundary
-  trace-id capture.
+- ``GuardrailCompensator.submit`` — pool routing, in-flight
+  backpressure, shutdown safety, wire-model assembly, and the
+  thread-boundary trace-id capture.
 - ``_resolve_trace_id`` — env > live OTel span > fallback ordering.
-- Evaluator integration is guarded by ``importorskip`` because the
-  evaluator module isn't present on this branch yet; when it lands,
-  the dispatch tests need to be rewritten for the new
-  ``provider``-first signature.
+- Cross-instance isolation — two compensators do not share a pool or
+  semaphore.
+- Process-level cleanup — one ``atexit`` registration, weak refs only.
 """
 
 from __future__ import annotations
 
+import gc
 import threading
-import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -33,41 +32,26 @@ from uipath.core.governance import (
     GovernanceCompensationProvider,
     GovernRequest,
 )
-from uipath.core.governance.models import Action, LifecycleHook
 
-from tests._helpers import reset_enforcement_mode
-from uipath.runtime.governance.config import (
-    EnforcementMode,
-    set_enforcement_mode,
-)
 from uipath.runtime.governance.native import guardrail_compensation
 from uipath.runtime.governance.native.guardrail_compensation import (
+    GuardrailCompensator,
     _resolve_trace_id,
     disabled_guardrails,
-    submit_compensation,
-)
-from uipath.runtime.governance.native.models import (
-    Check,
-    CheckContext,
-    Condition,
-    PolicyIndex,
-    PolicyPack,
-    Rule,
 )
 
-# The evaluator wiring (which injects the provider and calls
-# ``submit_compensation``) is not present on this branch yet. Tests that
-# need it are skipped until the module lands; when it does, they must be
-# rewritten because the function signature changed (``provider`` is now
-# positional-first).
+# Evaluator integration is not present on this branch — the evaluator
+# module (which would consume the compensator) lands in a later slice.
+# Tests that exercise the full dispatch path skip until then.
+_HAS_EVALUATOR = False
 try:
-    from uipath.runtime.governance.native.evaluator import (  # type: ignore[import-not-found]
+    from uipath.runtime.governance.native.evaluator import (  # type: ignore[import-not-found]  # noqa: F401
         GovernanceEvaluator,
     )
 
     _HAS_EVALUATOR = True
 except ImportError:
-    _HAS_EVALUATOR = False
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -98,11 +82,34 @@ def _rules(
     ]
 
 
+def _run_inline(compensator: GuardrailCompensator) -> None:
+    """Replace the pool's ``submit`` with synchronous execution.
+
+    Lets tests assert provider behavior deterministically without
+    relying on wait()/sleep().
+    """
+
+    def _sync_submit(fn: Any, *args: Any, **kwargs: Any) -> None:
+        fn()
+
+    compensator._pool.submit = _sync_submit  # type: ignore[method-assign]
+
+
 @pytest.fixture(autouse=True)
-def _reset_enforcement_mode() -> Any:
-    reset_enforcement_mode()
+def _close_dangling_compensators() -> Any:
+    """Best-effort teardown: close any compensator weak-refs still in the set.
+
+    Each test should call ``compensator.close()``, but a failing
+    assertion mid-test could leak. The sweep prevents pytest from
+    hanging at exit on a leftover worker pool.
+    """
     yield
-    reset_enforcement_mode()
+    for compensator in list(guardrail_compensation._live_compensators):
+        try:
+            compensator.close()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+    guardrail_compensation._live_compensators.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +166,7 @@ def test_disabled_guardrails_skips_non_guardrail_conditions() -> None:
 
 
 def test_disabled_guardrails_skips_enabled_guardrails() -> None:
-    """If the guardrail is mapped to UiPath AND enabled, no compensation needed."""
+    """Mapped to UiPath AND enabled → no compensation needed."""
     cond = SimpleNamespace(
         operator="guardrail_fallback",
         value={
@@ -177,7 +184,7 @@ def test_disabled_guardrails_skips_enabled_guardrails() -> None:
 
 
 def test_disabled_guardrails_skips_unmapped_guardrails() -> None:
-    """If the guardrail isn't mapped to UiPath, server can't fall back for us."""
+    """Not mapped to UiPath → server can't fall back; skip."""
     cond = SimpleNamespace(
         operator="guardrail_fallback",
         value={
@@ -195,35 +202,37 @@ def test_disabled_guardrails_skips_unmapped_guardrails() -> None:
 
 
 # ---------------------------------------------------------------------------
-# submit_compensation — short-circuits + pool routing + backpressure
+# GuardrailCompensator.submit — short-circuits + pool routing + backpressure
 # ---------------------------------------------------------------------------
 
 
-def test_submit_compensation_empty_rules_short_circuits() -> None:
+def test_submit_empty_rules_short_circuits() -> None:
     """No rules → no pool submit, no provider call."""
     provider = _provider()
-    with patch.object(guardrail_compensation, "_pool") as mock_pool:
-        submit_compensation(provider, [], {}, "before_model", "t", "ts", "a", "r")
+    compensator = GuardrailCompensator(provider)
+    with patch.object(compensator, "_pool") as mock_pool:
+        compensator.submit([], {}, "before_model", "t", "ts", "a", "r")
     mock_pool.submit.assert_not_called()
     provider.compensate.assert_not_called()
 
 
-def test_submit_compensation_no_validators_short_circuits() -> None:
+def test_submit_no_validators_short_circuits() -> None:
     """Rules with empty validator strings → no call (nothing to dispatch)."""
     provider = _provider()
+    compensator = GuardrailCompensator(provider)
     rules = [FiredRule(rule_id="R", rule_name="n", pack_name="p", validator="")]
-    with patch.object(guardrail_compensation, "_pool") as mock_pool:
-        submit_compensation(provider, rules, {}, "before_model", "t", "ts", "a", "r")
+    with patch.object(compensator, "_pool") as mock_pool:
+        compensator.submit(rules, {}, "before_model", "t", "ts", "a", "r")
     mock_pool.submit.assert_not_called()
     provider.compensate.assert_not_called()
 
 
-def test_submit_compensation_routes_through_pool() -> None:
+def test_submit_routes_through_pool() -> None:
     """A non-empty rules list submits a single task to the pool."""
     provider = _provider()
-    with patch.object(guardrail_compensation, "_pool") as mock_pool:
-        submit_compensation(
-            provider,
+    compensator = GuardrailCompensator(provider)
+    with patch.object(compensator, "_pool") as mock_pool:
+        compensator.submit(
             _rules("pii_detection"),
             {"content": "x"},
             "before_model",
@@ -235,18 +244,18 @@ def test_submit_compensation_routes_through_pool() -> None:
     mock_pool.submit.assert_called_once()
 
 
-def test_submit_compensation_drops_when_pool_saturated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_submit_drops_when_pool_saturated() -> None:
     """When the in-flight semaphore is exhausted, the call is dropped."""
+    provider = _provider()
+    compensator = GuardrailCompensator(provider)
+
+    # Force the semaphore into "exhausted" state.
     drained = threading.BoundedSemaphore(1)
     drained.acquire()  # next acquire(blocking=False) returns False
-    monkeypatch.setattr(guardrail_compensation, "_inflight", drained)
+    compensator._inflight = drained
 
-    provider = _provider()
-    with patch.object(guardrail_compensation, "_pool") as mock_pool:
-        submit_compensation(
-            provider,
+    with patch.object(compensator, "_pool") as mock_pool:
+        compensator.submit(
             _rules("pii_detection"),
             {},
             "before_model",
@@ -260,55 +269,34 @@ def test_submit_compensation_drops_when_pool_saturated(
     provider.compensate.assert_not_called()
 
 
-def test_submit_compensation_swallows_pool_shutdown_runtimeerror(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If the pool was shut down at process exit, submit must not raise."""
-    monkeypatch.setattr(
-        guardrail_compensation, "_inflight", threading.BoundedSemaphore(4)
-    )
+def test_submit_swallows_pool_shutdown_runtimeerror() -> None:
+    """If the pool was shut down, submit must not raise."""
 
     class _ShutdownPool:
         def submit(self, fn: Any, *args: Any, **kwargs: Any) -> None:
             raise RuntimeError("cannot schedule new futures after shutdown")
 
-    monkeypatch.setattr(guardrail_compensation, "_pool", _ShutdownPool())
+    compensator = GuardrailCompensator(_provider())
+    compensator._pool = _ShutdownPool()  # type: ignore[assignment]
+    compensator._inflight = threading.BoundedSemaphore(4)
 
     # Must not raise.
-    submit_compensation(
-        _provider(), _rules("x"), {}, "before_model", "t", "ts", "a", "r"
-    )
+    compensator.submit(_rules("x"), {}, "before_model", "t", "ts", "a", "r")
 
 
 # ---------------------------------------------------------------------------
-# submit_compensation — wire-model assembly + provider invocation
+# GuardrailCompensator.submit — wire-model assembly + provider invocation
 # ---------------------------------------------------------------------------
 
 
-def _run_inline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make ``_pool.submit`` execute its task synchronously on the caller.
-
-    Lets us assert provider behavior without leaning on a wait()/sleep().
-    """
-
-    def _sync_submit(fn: Any, *args: Any, **kwargs: Any) -> None:
-        fn()
-
-    monkeypatch.setattr(
-        guardrail_compensation._pool, "submit", _sync_submit
-    )
-
-
-def test_submit_compensation_invokes_provider_with_govern_request(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_submit_invokes_provider_with_govern_request() -> None:
     """The provider receives a GovernRequest carrying every wire field."""
-    _run_inline(monkeypatch)
     provider = _provider()
+    compensator = GuardrailCompensator(provider)
+    _run_inline(compensator)
     rules = _rules("pii_detection", "harmful_content")
 
-    submit_compensation(
-        provider,
+    compensator.submit(
         rules,
         {"content": "x"},
         "before_model",
@@ -338,17 +326,14 @@ def test_submit_compensation_invokes_provider_with_govern_request(
     assert request.agent_version is None
 
 
-def test_submit_compensation_dedupes_validators(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_submit_dedupes_validators() -> None:
     """Multiple rules with the same validator collapse on the wire."""
-    _run_inline(monkeypatch)
     provider = _provider()
+    compensator = GuardrailCompensator(provider)
+    _run_inline(compensator)
     rules = _rules("pii_detection") + _rules("pii_detection", rule_id="R2")
 
-    submit_compensation(
-        provider, rules, {}, "before_model", "t", "ts", "a", "r"
-    )
+    compensator.submit(rules, {}, "before_model", "t", "ts", "a", "r")
 
     (request,) = provider.compensate.call_args.args
     assert request.validators == ["pii_detection"]
@@ -356,20 +341,35 @@ def test_submit_compensation_dedupes_validators(
     assert len(request.rules) == 2
 
 
-def test_submit_compensation_swallows_provider_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_submit_swallows_provider_errors() -> None:
     """A provider exception must never propagate to the caller / agent."""
-    _run_inline(monkeypatch)
     provider = _provider()
     provider.compensate.side_effect = RuntimeError("network down")
+    compensator = GuardrailCompensator(provider)
+    _run_inline(compensator)
 
     # Must not raise.
-    submit_compensation(
-        provider, _rules("x"), {}, "before_model", "t", "ts", "a", "r"
-    )
+    compensator.submit(_rules("x"), {}, "before_model", "t", "ts", "a", "r")
 
     provider.compensate.assert_called_once()
+
+
+def test_submit_releases_semaphore_on_provider_error() -> None:
+    """Provider failure must not leak a semaphore slot."""
+    provider = _provider()
+    provider.compensate.side_effect = RuntimeError("transient")
+    # 4 workers × 1 oversubscription = 4 slots total.
+    compensator = GuardrailCompensator(provider, inflight_oversubscription=1)
+    _run_inline(compensator)
+
+    # Fire 8 — all 8 must reach the provider; the semaphore must release
+    # on each error so the next submit can acquire.
+    for _ in range(8):
+        compensator.submit(_rules("x"), {}, "before_model", "t", "ts", "a", "r")
+
+    assert provider.compensate.call_count == 8, (
+        "All 8 submissions should fire — semaphore must release on error"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -377,53 +377,89 @@ def test_submit_compensation_swallows_provider_errors(
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_trace_id_prefers_env_over_active_span(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """UIPATH_TRACE_ID wins over a live span — keeps native + compensation on one trace."""
+def test_resolve_trace_id_prefers_supplied_over_active_span() -> None:
+    """Constructor-supplied trace id wins over a live span.
+
+    The wiring layer (uipath CLI) reads ``UIPATH_TRACE_ID`` and passes
+    the value into :class:`GuardrailCompensator`. That id is
+    authoritative because native governance audit spans are exported
+    under it (platform rebinds spans to the agent's run trace) and
+    server-written compensation records must land on the same id.
+    """
     from opentelemetry.sdk.trace import TracerProvider
 
-    monkeypatch.setenv("UIPATH_TRACE_ID", "env-trace-0001")
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("root"):
-        assert _resolve_trace_id("fallback-id") == "env-trace-0001"
+        assert _resolve_trace_id("supplied-0001", "fallback-id") == "supplied-0001"
 
 
-def test_resolve_trace_id_falls_back_to_active_span_when_env_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With UIPATH_TRACE_ID unset, the live span's trace id is used."""
+def test_resolve_trace_id_falls_back_to_active_span_when_not_supplied() -> None:
+    """No supplied id → the live span's trace id is used."""
     from opentelemetry.sdk.trace import TracerProvider
 
-    monkeypatch.delenv("UIPATH_TRACE_ID", raising=False)
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("root") as span:
         expected = format(span.get_span_context().trace_id, "032x")
-        result = _resolve_trace_id("fallback-id")
+        result = _resolve_trace_id(None, "fallback-id")
         assert result == expected
         assert len(result) == 32  # dashless OTel hex, not a dashed uuid
 
 
-def test_resolve_trace_id_uses_fallback_without_context(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With no active span and no UIPATH_TRACE_ID env, fallback wins."""
-    monkeypatch.delenv("UIPATH_TRACE_ID", raising=False)
-    assert _resolve_trace_id("fallback-id") == "fallback-id"
+def test_resolve_trace_id_uses_fallback_without_context() -> None:
+    """No supplied id and no active span → fallback wins."""
+    assert _resolve_trace_id(None, "fallback-id") == "fallback-id"
 
 
-def test_submit_compensation_captures_live_trace_before_thread_hop() -> None:
+def test_resolve_trace_id_does_not_read_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Runtime layer must not read host env vars; only the wiring layer does.
+
+    Pin radu's PR #121 boundary rule for this code path. Even when
+    ``UIPATH_TRACE_ID`` is set in the environment, ``_resolve_trace_id``
+    ignores it — the wiring layer is solely responsible for env reads.
+    """
+    monkeypatch.setenv("UIPATH_TRACE_ID", "env-should-be-ignored")
+    # No supplied, no active span → fallback should win, NOT the env value.
+    assert _resolve_trace_id(None, "fallback-id") == "fallback-id"
+
+
+def test_compensator_trace_id_overrides_caller_supplied_value() -> None:
+    """A compensator constructed with ``trace_id`` stamps it on every dispatch.
+
+    The wiring layer passes ``UIPATH_TRACE_ID`` into the compensator at
+    construction; per-call ``trace_id`` arguments become only a fallback
+    for the case where the constructor value is absent.
+    """
+    provider = _provider()
+    compensator = GuardrailCompensator(provider, trace_id="wired-trace-0001")
+    _run_inline(compensator)
+
+    compensator.submit(
+        _rules("pii_detection"),
+        {},
+        "before_model",
+        "per-call-fallback",  # must lose to the constructor value
+        "ts",
+        "agent",
+        "run",
+    )
+
+    (request,) = provider.compensate.call_args.args
+    assert request.trace_id == "wired-trace-0001"
+
+
+def test_submit_captures_live_trace_before_thread_hop() -> None:
     """End-to-end thread-boundary proof.
 
-    ``submit_compensation`` runs on the caller (hook) thread, then hands the
-    compensation call to a background worker pool. The trace id must be
-    resolved on the caller (where the OTel span is live) and carried into
-    the worker — the worker has no live OTel context.
+    ``submit`` runs on the caller (hook) thread, then hands the
+    compensation call to a background worker pool. The trace id must
+    be resolved on the caller (where the OTel span is live) and
+    carried into the worker — the worker has no live OTel context.
     """
     from opentelemetry.sdk.trace import TracerProvider
 
     tracer = TracerProvider().get_tracer("test")
     provider = _provider()
+    compensator = GuardrailCompensator(provider)
 
     done = threading.Event()
     captured: dict[str, Any] = {}
@@ -431,16 +467,17 @@ def test_submit_compensation_captures_live_trace_before_thread_hop() -> None:
     def _capture(request: GovernRequest) -> None:
         # Runs on the background worker thread.
         captured["trace_id"] = request.trace_id
-        # Prove the worker has NO live context: resolving here falls back.
-        captured["worker_resolves_to"] = _resolve_trace_id("WORKER-MISS")
+        # Prove the worker has NO live context: resolving here with no
+        # supplied id and no live span falls all the way through to the
+        # WORKER-MISS sentinel.
+        captured["worker_resolves_to"] = _resolve_trace_id(None, "WORKER-MISS")
         done.set()
 
     provider.compensate.side_effect = _capture
 
     with tracer.start_as_current_span("agent-run") as span:
         expected = format(span.get_span_context().trace_id, "032x")
-        submit_compensation(
-            provider,
+        compensator.submit(
             _rules("pii_detection"),
             {"content": "x"},
             "before_model",
@@ -459,152 +496,81 @@ def test_submit_compensation_captures_live_trace_before_thread_hop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Evaluator integration — skipped until evaluator.py lands on this branch
+# Cross-instance isolation — the architectural motivation for the refactor
 # ---------------------------------------------------------------------------
 
 
-_skip_no_evaluator = pytest.mark.skipif(
-    not _HAS_EVALUATOR,
-    reason=(
-        "evaluator module not present on this branch; "
-        "tests must be rewritten when it lands to match the new "
-        "provider-first submit_compensation signature"
-    ),
-)
+def test_two_compensators_do_not_share_pool_or_semaphore() -> None:
+    """Parallel runtimes cannot saturate each other's compensation pool."""
+    p1 = _provider()
+    p2 = _provider()
+    c1 = GuardrailCompensator(p1)
+    c2 = GuardrailCompensator(p2)
+
+    assert c1._pool is not c2._pool
+    assert c1._inflight is not c2._inflight
+
+    # Drain c1's semaphore to its cap; c2 must remain unaffected.
+    drained = threading.BoundedSemaphore(1)
+    drained.acquire()
+    c1._inflight = drained
+
+    _run_inline(c2)
+    c2.submit(_rules("pii_detection"), {}, "before_model", "t", "ts", "a", "r")
+    p2.compensate.assert_called_once()
+    p1.compensate.assert_not_called()
 
 
-def _guardrail_fallback_rule() -> Rule:
-    """A rule whose only check is a guardrail_fallback condition."""
-    return Rule(
-        rule_id="UIP-GR-01",
-        name="PII guardrail (UiPath-mapped, disabled)",
-        clause="UiPath-Mapped Guardrail",
-        hook=LifecycleHook.BEFORE_MODEL,
-        action=Action.AUDIT,
-        checks=[
-            Check(
-                conditions=[
-                    Condition(
-                        operator="guardrail_fallback",
-                        field="",
-                        value={
-                            "validator": "pii_detection",
-                            "mapped_to_uipath": True,
-                            "policy_enabled": False,
-                        },
-                    )
-                ],
-                action=Action.AUDIT,
-                message="PII guardrail disabled",
-            )
-        ],
-    )
+# ---------------------------------------------------------------------------
+# Lifecycle — bounded atexit + weakref tracking (mirrors AuditManager pattern)
+# ---------------------------------------------------------------------------
 
 
-def _build_index_with(rule: Rule) -> PolicyIndex:
-    idx = PolicyIndex()
-    idx.add_pack(
-        PolicyPack(
-            name="test_pack",
-            version="1.0",
-            description="test",
-            rules=[rule],
-        )
-    )
-    return idx
+def test_three_compensators_register_one_process_atexit_hook() -> None:
+    """N compensators → 1 atexit registration, not N.
 
-
-@_skip_no_evaluator
-def test_evaluator_dispatches_compensation_for_fired_guardrail() -> None:
-    """A matched guardrail_fallback rule must trigger the provider."""
-    set_enforcement_mode(EnforcementMode.AUDIT)
-    evaluator = GovernanceEvaluator(_build_index_with(_guardrail_fallback_rule()))
-
-    ctx = CheckContext(
-        hook=LifecycleHook.BEFORE_MODEL,
-        agent_name="agent-x",
-        runtime_id="run-1",
-        trace_id="trace-1",
-        model_input="contact jane@acme.com",
-    )
-
-    # NOTE: this test needs to be rewritten when the evaluator lands —
-    # the new signature is ``submit_compensation(provider, rules, ...)``
-    # and the evaluator must thread a provider through to the call site.
-    audit = evaluator.evaluate(ctx)
-    assert audit.final_action == Action.AUDIT
-    assert audit.rules_matched == 1
-
-
-@_skip_no_evaluator
-def test_evaluator_does_not_emit_audit_trace_for_guardrail_fallback_rule() -> None:
-    """Python must not emit a per-rule audit trace for guardrail_fallback.
-
-    The governance-server writes the trace from its side; emitting one
-    here would duplicate. The rule still appears in the AuditRecord so
-    ``disabled_guardrails`` can find it.
+    Regression: a per-instance ``atexit.register(self.close)`` would
+    grow the atexit list linearly. The fix routes everyone through one
+    process-level cleanup hook keyed by a WeakSet.
     """
-    from uipath.runtime.governance._audit.base import (
-        AuditEvent,
-        AuditSink,
-        EventType,
-        get_audit_manager,
-        reset_audit_manager,
+    with patch.object(guardrail_compensation.atexit, "register") as mock_register:
+        guardrail_compensation._atexit_registered = False
+        GuardrailCompensator(_provider())
+        GuardrailCompensator(_provider())
+        GuardrailCompensator(_provider())
+        assert mock_register.call_count == 1, (
+            "Each compensator must NOT register its own atexit handler"
+        )
+
+
+def test_disposed_compensator_can_be_garbage_collected() -> None:
+    """The WeakSet must NOT keep a disposed compensator alive."""
+    import weakref
+
+    compensator = GuardrailCompensator(_provider())
+    ref = weakref.ref(compensator)
+
+    assert compensator in guardrail_compensation._live_compensators
+
+    compensator.close()
+    del compensator
+    gc.collect()
+
+    assert ref() is None, (
+        "GuardrailCompensator kept alive — strong reference leak in cleanup machinery"
     )
 
-    class _CapturingSink(AuditSink):
-        def __init__(self) -> None:
-            self.events: list[AuditEvent] = []
 
-        @property
-        def name(self) -> str:
-            return "capturing"
+def test_process_cleanup_handles_already_closed_compensator() -> None:
+    """If a compensator was explicitly closed, the process hook is a no-op for it."""
+    c = GuardrailCompensator(_provider())
+    c.close()
+    # Must not raise.
+    guardrail_compensation._process_cleanup_compensators()
 
-        def emit(self, event: AuditEvent) -> None:
-            self.events.append(event)
 
-    reset_audit_manager()
-    try:
-        manager = get_audit_manager()
-        for existing in list(manager.list_sinks()):
-            manager.unregister_sink(existing)
-        sink = _CapturingSink()
-        manager.register_sink(sink)
-        manager._async_mode = False  # synchronous emission for assertions
-
-        set_enforcement_mode(EnforcementMode.AUDIT)
-        evaluator = GovernanceEvaluator(
-            _build_index_with(_guardrail_fallback_rule())
-        )
-
-        ctx = CheckContext(
-            hook=LifecycleHook.BEFORE_MODEL,
-            agent_name="agent-x",
-            runtime_id="run-1",
-            trace_id="trace-1",
-            model_input="hi",
-        )
-
-        audit = evaluator.evaluate(ctx)
-        time.sleep(0.05)
-
-        assert audit.rules_matched == 1
-        assert any(
-            ev.matched and ev.rule_id == "UIP-GR-01" for ev in audit.evaluations
-        )
-
-        rule_events = [
-            e for e in sink.events if e.event_type == EventType.RULE_EVALUATION
-        ]
-        assert not any(
-            e.data.get("rule_id") == "UIP-GR-01" for e in rule_events
-        ), "guardrail_fallback rule must not emit a Python-side audit trace"
-
-        summaries = [
-            e for e in sink.events if e.event_type == EventType.HOOK_END
-        ]
-        assert len(summaries) == 1
-        assert summaries[0].data["total_rules"] == 0
-        assert summaries[0].data["matched_rules"] == 0
-    finally:
-        reset_audit_manager()
+def test_close_is_idempotent() -> None:
+    """Calling close() twice is a logged no-op, not a crash."""
+    c = GuardrailCompensator(_provider())
+    c.close()
+    c.close()  # must not raise

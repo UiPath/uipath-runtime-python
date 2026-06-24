@@ -9,9 +9,9 @@ governance policies.
 
 The wiring layer (uipath CLI) decides whether to construct
 ``GovernanceRuntime`` at all (feature flag, project config, etc.) and
-passes ``is_conversational`` explicitly when it knows the agent type.
-The runtime layer does not introspect the delegate's private attributes
-to discover that.
+passes ``is_conversational`` and ``trace_id`` explicitly. The runtime
+layer does not introspect the delegate's private attributes nor read
+env vars to discover those.
 
 **Staging caveat — policy loading only, no enforcement yet.** This
 module is the policy-loading scaffold: ``__init__`` constructs an
@@ -19,7 +19,7 @@ instance-scoped :class:`PolicyLoader` and kicks off a background
 prefetch. ``execute`` / ``stream`` / ``get_schema`` / ``dispose`` are
 pure passthroughs — no per-hook policy evaluation runs. The evaluator
 and framework adapter wiring that consumes the loader's policy index
-lands in a follow-up slice. Customers constructing
+and the ``trace_id`` lands in a follow-up slice. Customers constructing
 :class:`GovernanceRuntime` today get policy loading without policy
 enforcement; this is intentional and will change when the evaluator
 slice merges.
@@ -68,6 +68,7 @@ class GovernanceRuntime:
         policy_provider: GovernancePolicyProvider | None,
         *,
         is_conversational: bool | None = None,
+        trace_id: str | None = None,
     ):
         """Initialize the governance runtime.
 
@@ -83,8 +84,17 @@ class GovernanceRuntime:
                 leaves the selector unset — the provider applies its
                 default. The wiring layer (uipath CLI) is expected to
                 pass the concrete value when it knows the agent type.
+            trace_id: Trace identifier the platform host has bound to
+                this run (typically read from ``UIPATH_TRACE_ID`` by
+                the wiring layer). The evaluator slice forwards this
+                into the :class:`GuardrailCompensator` so server-written
+                compensation records land on the agent's run trace
+                instead of a detached id. ``None`` (default) leaves
+                downstream consumers to fall back to the live OTel
+                span / caller-supplied value.
         """
         self._delegate = delegate
+        self._trace_id = trace_id
         self._loader = PolicyLoader(
             policy_provider,
             is_conversational=is_conversational,
@@ -99,6 +109,16 @@ class GovernanceRuntime:
         call :meth:`PolicyLoader.get_policy_index` at hook time.
         """
         return self._loader
+
+    @property
+    def trace_id(self) -> str | None:
+        """Trace id supplied by the wiring layer (or ``None``).
+
+        Exposed so the evaluator slice can read it at hook-wire time
+        and pass it into the :class:`GuardrailCompensator` it
+        constructs.
+        """
+        return self._trace_id
 
     async def execute(
         self,

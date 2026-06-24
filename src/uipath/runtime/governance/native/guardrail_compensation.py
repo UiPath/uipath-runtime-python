@@ -22,20 +22,24 @@ The call is **fire-and-forget**: the server runs the guardrail AND
 writes the audit trace from its side. The agent doesn't inspect the
 response — it only cares about whether the call reached the server.
 
-The call also runs on a **bounded background pool** so even an agent
-that fires hundreds of compensation events in a session can't pile up
-threads or memory. :data:`COMPENSATION_MAX_WORKERS` workers process
-the queue, and an in-flight semaphore drops submissions when the pool
-is genuinely saturated — at that point the next call is logged and
-skipped rather than queued indefinitely.
+The compensator is **instance-scoped**: each :class:`GovernanceRuntime`
+owns its own pool and semaphore. ``uipath eval`` parallel runtimes
+don't share workers, queue slots, or saturation state — one runtime's
+spam can't silently drop another's compensation calls.
+
+The compensator does **not** read host env vars. The trace id is
+passed in by the wiring layer (uipath CLI → :class:`GovernanceRuntime`
+→ :class:`GuardrailCompensator`). Inside the compensator, resolution
+order is: constructor-supplied trace id → live OTel span on the caller
+thread → per-call fallback.
 """
 
 from __future__ import annotations
 
 import atexit
 import logging
-import os
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -47,58 +51,44 @@ from uipath.core.governance import (
 
 logger = logging.getLogger(__name__)
 
-# Trace-id env var published by the UiPath runtime host. Native governance
-# audit spans are exported under this id (the platform rebinds spans to the
-# agent's run trace), so server-written compensation records must land on
-# the same id — see :func:`_resolve_trace_id`.
-ENV_TRACE_ID = "UIPATH_TRACE_ID"
-
-# Max concurrent workers in the compensation pool. Compensation is
-# fire-and-forget I/O bounded by the provider's HTTP timeout, so a small
-# fixed pool is enough; the in-flight semaphore (workers × oversubscription)
-# is what really bounds memory under load.
-COMPENSATION_MAX_WORKERS = 4
-
 
 # ----------------------------------------------------------------------------
-# Bounded thread pool — caps both concurrent threads AND queued work.
+# Process-wide cleanup machinery
 #
-# ThreadPoolExecutor alone caps concurrent worker threads, but its internal
-# queue is unbounded — a misbehaving agent that fires compensation faster than
-# the server can absorb would queue indefinitely (memory pressure). The
-# semaphore caps total in-flight submissions (running + queued) at a
-# multiple of the worker count. Saturated submissions are dropped with a
-# warning. Process exit cancels queued work and lets running tasks finish
-# (bounded by the provider's HTTP timeout) via the atexit handler.
+# One ``atexit`` hook walks a ``WeakSet`` of live compensators on exit and
+# closes each. Bounded atexit registrations (N runtimes → 1 hook, not N) and
+# weakref tracking so a disposed compensator can be GC'd. Same pattern as
+# :class:`uipath.runtime.governance._audit.base.AuditManager`.
 # ----------------------------------------------------------------------------
 
-_INFLIGHT_OVERSUBSCRIPTION = 4  # queue up to (workers × this many) before dropping
-_INFLIGHT_CAP = COMPENSATION_MAX_WORKERS * _INFLIGHT_OVERSUBSCRIPTION
-
-_pool = ThreadPoolExecutor(
-    max_workers=COMPENSATION_MAX_WORKERS,
-    thread_name_prefix="governance-compensation",
-)
-_inflight = threading.BoundedSemaphore(_INFLIGHT_CAP)
+_live_compensators: weakref.WeakSet[GuardrailCompensator] = weakref.WeakSet()
+_atexit_registered = False
+_atexit_lock = threading.Lock()
 
 
-@atexit.register
-def _shutdown_pool() -> None:
-    """Cancel queued compensation tasks at process exit.
+def _process_cleanup_compensators() -> None:
+    """Process-exit handler: close every live compensator."""
+    for compensator in list(_live_compensators):
+        try:
+            compensator.close()
+        except Exception as exc:  # noqa: BLE001 - exit cleanup must not raise
+            logger.debug("Compensator process cleanup error: %s", exc)
 
-    ``wait=False`` returns immediately so process shutdown isn't held
-    up; ``cancel_futures=True`` (Python 3.9+) drops anything not yet
-    running. Tasks already running finish bounded by the provider's
-    own HTTP timeout.
-    """
-    try:
-        _pool.shutdown(wait=False, cancel_futures=True)
-    except Exception:  # noqa: BLE001 - shutdown must never raise from atexit
-        pass
+
+def _register_compensator_for_cleanup(compensator: GuardrailCompensator) -> None:
+    """Add ``compensator`` to the cleanup set + ensure atexit is wired once."""
+    global _atexit_registered
+    _live_compensators.add(compensator)
+    if _atexit_registered:
+        return
+    with _atexit_lock:
+        if not _atexit_registered:
+            atexit.register(_process_cleanup_compensators)
+            _atexit_registered = True
 
 
 # ----------------------------------------------------------------------------
-# Public API
+# Stateless helpers
 # ----------------------------------------------------------------------------
 
 
@@ -159,29 +149,34 @@ def _validators(rules: list[FiredRule]) -> list[str]:
     return list(dict.fromkeys(r.validator for r in rules if r.validator))
 
 
-def _resolve_trace_id(fallback: str) -> str:
+def _resolve_trace_id(supplied: str | None, fallback: str) -> str:
     """Resolve the agent's trace id while still on the caller thread.
 
     MUST be called before the background-pool hop in
-    :func:`submit_compensation`: the worker thread that issues the
-    ``/govern`` call has no OpenTelemetry context, so resolving there would
-    fall back to a detached id — orphaning the server-written compensation
-    records from the agent's real trace.
+    :meth:`GuardrailCompensator.submit`: the worker thread that issues
+    the ``/govern`` call has no OpenTelemetry context, so resolving
+    there would fall back to a detached id — orphaning the
+    server-written compensation records from the agent's real trace.
 
-    Order: ``UIPATH_TRACE_ID`` env var -> live OTel span trace id
-    (32-char hex) -> the caller-supplied ``fallback``.
+    Resolution order:
 
-    ``UIPATH_TRACE_ID`` is preferred over the live OTel span because the
-    native governance audit spans are exported under that id (the platform
-    rebinds spans to the agent's run trace). The compensation records must
-    land on the *same* trace, so we use it first. The live OTel span is the
-    fallback for contexts where the env var isn't set; in conversational
-    runs the hook thread has no live span anyway, so the env var is what
-    keeps native + compensation on one trace.
+    1. ``supplied`` — the trace id the wiring layer passed into
+       :class:`GuardrailCompensator` at construction (typically read
+       from ``UIPATH_TRACE_ID`` by ``uipath`` CLI). Authoritative when
+       set: native governance audit spans are exported under that id
+       (the platform rebinds spans to the agent's run trace), so
+       server-written compensation records must land on the *same* id.
+    2. Live OTel span trace id (32-char hex) — used when the wiring
+       layer didn't supply one and a current OTel context exists.
+    3. ``fallback`` — the per-call value the caller passed to
+       ``submit``. Last resort.
+
+    The function does **not** read host env vars. Env reading lives
+    in the wiring layer (per the boundary discipline applied across
+    the governance stack).
     """
-    env_trace_id = os.environ.get(ENV_TRACE_ID)
-    if env_trace_id:
-        return env_trace_id
+    if supplied:
+        return supplied
 
     try:
         from opentelemetry import trace
@@ -189,97 +184,170 @@ def _resolve_trace_id(fallback: str) -> str:
         ctx = trace.get_current_span().get_span_context()
         if ctx.is_valid:
             return format(ctx.trace_id, "032x")
-    except Exception:  # noqa: BLE001 - tracing is best-effort; fall through
-        pass
+    except Exception as exc:  # noqa: BLE001 - tracing is best-effort; fall through
+        logger.debug("OTel trace-id lookup failed in _resolve_trace_id: %s", exc)
 
     return fallback
 
 
-def submit_compensation(
-    provider: GovernanceCompensationProvider,
-    rules: list[FiredRule],
-    data: dict[str, Any],
-    hook: str,
-    trace_id: str,
-    src_timestamp: str,
-    agent_name: str,
-    runtime_id: str,
-) -> None:
-    """Schedule a /runtime/govern call on the bounded background pool.
+# ----------------------------------------------------------------------------
+# GuardrailCompensator
+# ----------------------------------------------------------------------------
 
-    Fire-and-forget. Returns immediately; the call runs on a worker
-    thread bounded by :data:`COMPENSATION_MAX_WORKERS`. When the
-    in-flight queue is saturated (cap = workers × oversubscription),
-    the call is dropped with a warning and the agent continues.
 
-    The actual HTTP work is delegated to ``provider.compensate(request)``
-    where ``request`` is a :class:`GovernRequest`. The provider owns URL
-    composition, auth, headers, JSON serialisation, and env-backed
-    auto-fill of job-context fields (``folder_key`` / ``job_key`` /
-    ``process_key`` / ``reference_id`` / ``agent_version``) — this module
-    only assembles the wire model and schedules the call.
+class GuardrailCompensator:
+    """Instance-scoped compensating-governance dispatcher.
 
-    ``rules`` is the per-rule metadata from :func:`disabled_guardrails`;
-    the validators sent to the guardrail API are derived from it.
+    Each :class:`GovernanceRuntime` constructs one. Owns:
 
-    Never raises — including when the pool has already been shut down
-    by process exit.
+    - A :class:`ThreadPoolExecutor` (default 4 workers) that runs the
+      ``/runtime/govern`` POST off the agent's hook thread.
+    - A :class:`threading.BoundedSemaphore` (default cap = workers × 4)
+      that bounds total in-flight submissions (running + queued) so a
+      misbehaving agent firing compensation faster than the server can
+      absorb can't grow memory without limit. Saturated submissions are
+      dropped with a warning.
+
+    Process exit cancels queued work via a single process-level atexit
+    handler (see :func:`_process_cleanup_compensators`); running tasks
+    finish bounded by the provider's HTTP timeout.
+
+    Fire-and-forget: :meth:`submit` returns immediately. The actual HTTP
+    work is delegated to :meth:`GovernanceCompensationProvider.compensate`
+    — this class never touches URL/headers/auth/JSON itself.
     """
-    if not rules:
-        return
 
-    validators = _validators(rules)
-    if not validators:
-        return
+    _DEFAULT_MAX_WORKERS = 4
+    # Queue depth multiplier — total in-flight cap = max_workers × this.
+    _INFLIGHT_OVERSUBSCRIPTION = 4
 
-    # Resolve the trace id HERE, on the caller (hook) thread where the
-    # agent's OTel span is still live. The provider.compensate call below
-    # runs on a background worker where that context is gone, so the
-    # resolved value is captured now and carried into the worker —
-    # ensuring the server writes compensation records under the agent's
-    # real trace, not a detached id.
-    trace_id = _resolve_trace_id(trace_id)
+    def __init__(
+        self,
+        provider: GovernanceCompensationProvider,
+        *,
+        trace_id: str | None = None,
+        max_workers: int = _DEFAULT_MAX_WORKERS,
+        inflight_oversubscription: int = _INFLIGHT_OVERSUBSCRIPTION,
+    ) -> None:
+        """Construct a compensator bound to one provider.
 
-    if not _inflight.acquire(blocking=False):
-        logger.warning(
-            "Compensation pool saturated (>%d in flight); dropping call "
-            "(validators=[%s])",
-            _INFLIGHT_CAP,
-            ", ".join(validators),
+        Args:
+            provider: The :class:`GovernanceCompensationProvider` that
+                actually fires the ``/runtime/govern`` POST. Typically
+                ``uipath.platform.governance.UiPathPlatformGovernanceProvider``.
+            trace_id: Trace id the wiring layer (uipath CLI) read from
+                ``UIPATH_TRACE_ID`` and propagated through
+                :class:`GovernanceRuntime`. Authoritative when set:
+                server-written compensation records land on the agent's
+                run trace. ``None`` (default) falls back to the live
+                OTel span / caller-supplied id at submit time.
+            max_workers: Concurrent worker threads in the pool.
+            inflight_oversubscription: How deep the work queue grows
+                before saturated submissions get dropped. Total cap is
+                ``max_workers * inflight_oversubscription``.
+        """
+        self._provider = provider
+        self._trace_id = trace_id
+        self._inflight_cap = max_workers * inflight_oversubscription
+        self._pool = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="governance-compensation",
         )
-        return
+        self._inflight = threading.BoundedSemaphore(self._inflight_cap)
+        _register_compensator_for_cleanup(self)
 
-    request = GovernRequest(
-        validators=validators,
-        rules=rules,
-        data=data,
-        hook=hook,
-        trace_id=trace_id,
-        src_timestamp=src_timestamp,
-        agent_name=agent_name,
-        runtime_id=runtime_id,
-    )
+    def submit(
+        self,
+        rules: list[FiredRule],
+        data: dict[str, Any],
+        hook: str,
+        trace_id: str,
+        src_timestamp: str,
+        agent_name: str,
+        runtime_id: str,
+    ) -> None:
+        """Schedule a /runtime/govern call on the bounded background pool.
 
-    def _run() -> None:
-        try:
-            provider.compensate(request)
-        except Exception as exc:  # noqa: BLE001 - fail-open by contract
+        Fire-and-forget. Returns immediately; the call runs on a worker
+        thread. When the in-flight queue is saturated the call is
+        dropped with a warning and the agent continues.
+
+        ``rules`` is the per-rule metadata from :func:`disabled_guardrails`;
+        the validators sent to the guardrail API are derived from it.
+
+        Never raises — including when the pool has already been shut down.
+        """
+        if not rules:
+            return
+
+        validators = _validators(rules)
+        if not validators:
+            return
+
+        # Resolve the trace id HERE, on the caller (hook) thread where the
+        # agent's OTel span is still live. The provider.compensate call
+        # below runs on a background worker where that context is gone,
+        # so the resolved value is captured now and carried into the
+        # worker — ensuring the server writes compensation records under
+        # the agent's real trace, not a detached id.
+        trace_id = _resolve_trace_id(self._trace_id, trace_id)
+
+        if not self._inflight.acquire(blocking=False):
             logger.warning(
-                "Compensation worker failed (validators=[%s]): %s",
+                "Compensation pool saturated (>%d in flight); dropping call "
+                "(validators=[%s])",
+                self._inflight_cap,
+                ", ".join(validators),
+            )
+            return
+
+        request = GovernRequest(
+            validators=validators,
+            rules=rules,
+            data=data,
+            hook=hook,
+            trace_id=trace_id,
+            src_timestamp=src_timestamp,
+            agent_name=agent_name,
+            runtime_id=runtime_id,
+        )
+
+        provider = self._provider
+        inflight = self._inflight
+
+        def _run() -> None:
+            try:
+                provider.compensate(request)
+            except Exception as exc:  # noqa: BLE001 - fail-open by contract
+                logger.warning(
+                    "Compensation worker failed (validators=[%s]): %s",
+                    ", ".join(validators),
+                    exc,
+                )
+            finally:
+                inflight.release()
+
+        try:
+            self._pool.submit(_run)
+        except RuntimeError as exc:
+            # Pool was shut down (atexit, dispose, or test teardown) —
+            # release the semaphore slot we took and log; never raise.
+            self._inflight.release()
+            logger.warning(
+                "Compensation pool unavailable (validators=[%s]): %s",
                 ", ".join(validators),
                 exc,
             )
-        finally:
-            _inflight.release()
 
-    try:
-        _pool.submit(_run)
-    except RuntimeError as exc:
-        # Pool was shut down (atexit or test teardown) — release the
-        # semaphore slot we took and log; never raise.
-        _inflight.release()
-        logger.warning(
-            "Compensation pool unavailable (validators=[%s]): %s",
-            ", ".join(validators),
-            exc,
-        )
+    def close(self) -> None:
+        """Cancel queued tasks. Running tasks finish bounded by the provider HTTP timeout.
+
+        ``wait=False`` returns immediately so caller / process shutdown
+        isn't held up; ``cancel_futures=True`` drops anything not yet
+        running. Idempotent — calling close on an already-closed pool
+        is a logged no-op.
+        """
+        try:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+        except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+            logger.debug("Compensator shutdown error: %s", exc)
