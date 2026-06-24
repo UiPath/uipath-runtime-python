@@ -8,13 +8,9 @@ commitment) and the ``evaluate_*`` dispatchers.
 from __future__ import annotations
 
 import pytest
+from uipath.core.governance import EnforcementMode
 from uipath.core.governance.models import Action, LifecycleHook
 
-from tests._helpers import reset_enforcement_mode
-from uipath.runtime.governance.config import (
-    EnforcementMode,
-    set_enforcement_mode,
-)
 from uipath.runtime.governance.native.evaluator import (
     _INCIDENT_PATTERNS,
     GovernanceEvaluator,
@@ -34,7 +30,12 @@ from uipath.runtime.governance.native.models import (
 
 
 def _evaluator() -> GovernanceEvaluator:
-    """Build a GovernanceEvaluator with an empty PolicyIndex (operators only)."""
+    """Build a GovernanceEvaluator with an empty PolicyIndex (operators only).
+
+    AUDIT is the default mode; operator tests don't care about
+    enforcement and we don't need an audit manager for purely
+    operator-level assertions.
+    """
     return GovernanceEvaluator(policy_index=PolicyIndex())
 
 
@@ -67,12 +68,9 @@ def _rule_with_condition(operator: str, field: str, value, *, negate: bool = Fal
     )
 
 
-@pytest.fixture(autouse=True)
-def _isolate_mode() -> None:
-    reset_enforcement_mode()
-    set_enforcement_mode(EnforcementMode.AUDIT)
-    yield
-    reset_enforcement_mode()
+# Mode is per-instance now — tests construct evaluators with the mode
+# they need via the ``enforcement_mode`` kwarg. No process-globals to
+# reset.
 
 
 # ---------------------------------------------------------------------------
@@ -667,13 +665,13 @@ def test_evaluate_after_tool_carries_result() -> None:
 
 def test_disabled_mode_returns_empty_audit_record() -> None:
     """DISABLED mode short-circuits the rule loop and audit emission."""
-    set_enforcement_mode(EnforcementMode.DISABLED)
-
     rule = _rule_with_condition("contains", "model_output", "anything")
     pack = PolicyPack(name="p", version="1", description="", rules=[rule])
     idx = PolicyIndex()
     idx.add_pack(pack)
-    ev = GovernanceEvaluator(policy_index=idx)
+    ev = GovernanceEvaluator(
+        policy_index=idx, enforcement_mode=EnforcementMode.DISABLED
+    )
 
     audit = ev.evaluate(_ctx(model_output="contains anything"))
     assert audit.final_action == Action.ALLOW

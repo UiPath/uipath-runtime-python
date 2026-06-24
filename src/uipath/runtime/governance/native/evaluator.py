@@ -1,4 +1,11 @@
-"""Governance rule evaluator."""
+"""Governance rule evaluator.
+
+Instance-scoped — every :class:`GovernanceRuntime` constructs its own
+evaluator with explicit dependencies (audit manager, compensator,
+enforcement mode). The evaluator does not reach across the runtime
+layer through process-globals; the wiring layer composes the runtime
+graph and the evaluator consumes what it's given.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +17,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
+from uipath.core.governance import EnforcementMode
 from uipath.core.governance.exceptions import GovernanceBlockException
 from uipath.core.governance.models import (
     Action,
@@ -18,11 +26,10 @@ from uipath.core.governance.models import (
     RuleEvaluation,
 )
 
-from uipath.runtime.governance.audit import get_audit_manager
-from uipath.runtime.governance.config import EnforcementMode, get_enforcement_mode
+from uipath.runtime.governance._audit.base import AuditManager
 from uipath.runtime.governance.native.guardrail_compensation import (
+    GuardrailCompensator,
     disabled_guardrails,
-    submit_compensation,
 )
 from uipath.runtime.governance.native.models import (
     Check,
@@ -260,20 +267,51 @@ class GovernanceEvaluator:
     """Evaluates governance rules against check contexts.
 
     Supports two enforcement modes:
-    - AUDIT: Log all violations but never block (DENY becomes AUDIT in final action)
-    - ENFORCE: Actually block on DENY rules
 
-    Default mode is AUDIT for safety.
+    - ``AUDIT``: log all violations but never block (DENY collapses to
+      AUDIT in the final action).
+    - ``ENFORCE``: actually block on DENY rules — raises
+      :class:`GovernanceBlockException` and the agent stops.
+
+    All dependencies (mode, audit manager, compensator) are injected
+    via the constructor. The evaluator does not consult any
+    process-global state — parallel runtimes (``uipath eval``) get
+    their own evaluator with their own audit + compensation pipelines.
     """
 
     def __init__(
         self,
         policy_index: PolicyIndex,
-        mode: EnforcementMode | None = None,
+        *,
+        enforcement_mode: EnforcementMode = EnforcementMode.AUDIT,
+        audit_manager: AuditManager | None = None,
+        compensator: GuardrailCompensator | None = None,
     ) -> None:
-        """Initialize with a compiled policy index and optional mode override."""
+        """Initialize with a compiled policy index and runtime-scoped deps.
+
+        Args:
+            policy_index: The compiled :class:`PolicyIndex` to evaluate.
+                Typically sourced from the owning runtime's
+                :class:`PolicyLoader`.
+            enforcement_mode: Mode the evaluator applies. Defaults to
+                ``AUDIT`` — the safe default for callers that don't
+                explicitly opt in to ENFORCE. The wiring layer should
+                pass ``policy_loader.enforcement_mode`` here so the
+                evaluator and loader agree on a single source of truth.
+            audit_manager: Per-runtime :class:`AuditManager`. When
+                ``None`` the evaluator runs silently (no audit events
+                emitted). Tests that don't care about emission can
+                leave this out.
+            compensator: Per-runtime :class:`GuardrailCompensator`
+                used to dispatch ``/runtime/govern`` POSTs for
+                guardrail-fallback rules. When ``None`` such dispatch
+                is skipped — the evaluator still records the matched
+                rules in the :class:`AuditRecord`.
+        """
         self._policy_index = policy_index
-        self._mode = mode
+        self._enforcement_mode = enforcement_mode
+        self._audit_manager = audit_manager
+        self._compensator = compensator
 
     @property
     def policy_index(self) -> PolicyIndex:
@@ -282,23 +320,12 @@ class GovernanceEvaluator:
 
     @property
     def mode(self) -> EnforcementMode:
-        """Get the enforcement mode (uses config default if not set)."""
-        if self._mode is not None:
-            return self._mode
-        return get_enforcement_mode()
-
-    @mode.setter
-    def mode(self, value: EnforcementMode) -> None:
-        """Set the enforcement mode."""
-        self._mode = value
+        """The enforcement mode this evaluator applies."""
+        return self._enforcement_mode
 
     def is_audit_mode(self) -> bool:
         """Check if running in audit-only mode."""
-        return self.mode == EnforcementMode.AUDIT
-
-    def is_enforce_mode(self) -> bool:
-        """Check if running in enforce mode (will block on DENY)."""
-        return self.mode == EnforcementMode.ENFORCE
+        return self._enforcement_mode == EnforcementMode.AUDIT
 
     def evaluate(self, context: CheckContext) -> AuditRecord:
         """Evaluate rules registered for ``context.hook`` against the context.
@@ -316,8 +343,8 @@ class GovernanceEvaluator:
           :class:`GovernanceBlockException` is raised.
 
         Audit events (per-rule + hook summary) are emitted via the
-        global :func:`get_audit_manager` so callers do not need to do
-        any emission themselves.
+        :class:`AuditManager` injected at construction (skipped when
+        none was supplied).
 
         Args:
             context: The check context with hook and content
@@ -328,7 +355,7 @@ class GovernanceEvaluator:
         Raises:
             GovernanceBlockException: In ENFORCE mode when a DENY rule matches.
         """
-        mode = self.mode
+        mode = self._enforcement_mode
         if mode == EnforcementMode.DISABLED:
             return AuditRecord(
                 timestamp=datetime.now(timezone.utc),
@@ -409,18 +436,24 @@ class GovernanceEvaluator:
     ) -> None:
         """Schedule compensating governance for any matched fallback rules.
 
-        Hands the call to the bounded background pool in
-        :func:`uipath.runtime.governance.native.guardrail_compensation.submit_compensation`.
-        That helper owns concurrency, queue caps, exception isolation,
+        Delegates to the injected :class:`GuardrailCompensator`. The
+        compensator owns concurrency, queue caps, exception isolation,
         and graceful process-exit cancellation — this method just
         builds the payload, logs the summary, and submits.
+
+        No-op when no compensator was supplied at construction (e.g.
+        unit tests that don't care about the dispatch path).
         """
+        if self._compensator is None:
+            return
+
         try:
             disabled = disabled_guardrails(audit, self._policy_index)
             if not disabled:
                 return
 
-            validators = [rule["validator"] for rule in disabled]
+            # Distinct validator names for the operator-facing log line.
+            validators = [rule.validator for rule in disabled]
 
             # Surface the disabled-guardrail fire-up: how many rules
             # triggered the compensating call, and which validators
@@ -434,7 +467,7 @@ class GovernanceEvaluator:
                 ", ".join(validators),
             )
 
-            submit_compensation(
+            self._compensator.submit(
                 rules=disabled,
                 data=_compensation_data_for_hook(context),
                 hook=audit.hook.value,
@@ -449,15 +482,14 @@ class GovernanceEvaluator:
             )
 
     def _emit_audit(self, audit: AuditRecord, mode: EnforcementMode) -> None:
-        """Emit per-rule and hook-summary events to the global audit manager.
+        """Emit per-rule and hook-summary events to the injected audit manager.
 
-        Failure-isolated: audit-sink errors must never break evaluation.
-        Sink-level circuit breaking is handled inside :class:`AuditManager`.
+        No-op when no audit manager was supplied at construction. The
+        per-runtime :class:`AuditManager` handles sink-level circuit
+        breaking; emission errors stay there and never break evaluation.
         """
-        try:
-            manager = get_audit_manager()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("Audit manager unavailable; skipping emission: %s", exc)
+        manager = self._audit_manager
+        if manager is None:
             return
 
         hook_name = audit.hook.name
@@ -476,12 +508,13 @@ class GovernanceEvaluator:
 
         for evaluation in emittable:
             manager.emit_rule_evaluation(
-                rule_id=evaluation.rule_id,
+                policy_id=evaluation.rule_id,
                 rule_name=evaluation.rule_name,
                 pack_name=evaluation.pack_name,
                 hook=hook_name,
                 matched=evaluation.matched,
                 action=evaluation.action.value if evaluation.matched else "allow",
+                enforcement_mode=mode,
                 detail=evaluation.detail,
                 agent_name=audit.agent_name,
                 trace_id=audit.trace_id,
@@ -494,8 +527,8 @@ class GovernanceEvaluator:
             total_rules=len(emittable),
             matched_rules=sum(1 for ev in emittable if ev.matched),
             final_action=audit.final_action.value,
+            enforcement_mode=mode,
             trace_id=audit.trace_id,
-            enforcement_mode=mode.value,
         )
 
     def _is_guardrail_fallback_rule(self, rule_id: str) -> bool:
@@ -527,7 +560,7 @@ class GovernanceEvaluator:
         In ENFORCE mode:
         - All actions pass through unchanged
         """
-        if self.mode == EnforcementMode.AUDIT:
+        if self._enforcement_mode == EnforcementMode.AUDIT:
             if raw_action in (Action.DENY, Action.ESCALATE):
                 return Action.AUDIT
         return raw_action

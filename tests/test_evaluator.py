@@ -1,7 +1,6 @@
 """Tests for the audit + enforcement behavior of GovernanceEvaluator.
 
-The evaluator owns three responsibilities that used to be scattered
-across wrapper.py and adapter callbacks:
+The evaluator's three load-bearing responsibilities:
 
 1. DISABLED enforcement mode short-circuits — no rules evaluated, no
    audit events emitted, no exceptions raised.
@@ -11,29 +10,25 @@ across wrapper.py and adapter callbacks:
    :class:`GovernanceBlockException` when a DENY rule matches.
 
 Plus a fail-safe contract: a misbehaving audit sink must not stop
-evaluation from completing or propagate as an exception.
+evaluation from completing or propagate as an exception. The
+evaluator is constructed with explicit dependencies (audit manager,
+enforcement mode); no process-globals are involved.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
 
 import pytest
+from uipath.core.governance import EnforcementMode
 from uipath.core.governance.exceptions import GovernanceBlockException
 from uipath.core.governance.models import Action, LifecycleHook
 
-from tests._helpers import reset_enforcement_mode
-from uipath.runtime.governance.audit import (
+from uipath.runtime.governance._audit.base import (
     AuditEvent,
+    AuditManager,
     AuditSink,
     EventType,
-    get_audit_manager,
-    reset_audit_manager,
-)
-from uipath.runtime.governance.config import (
-    EnforcementMode,
-    set_enforcement_mode,
 )
 from uipath.runtime.governance.native.evaluator import GovernanceEvaluator
 from uipath.runtime.governance.native.models import (
@@ -112,37 +107,37 @@ def _ctx(agent_input: str) -> CheckContext:
     )
 
 
+def _build_evaluator(
+    rule: Rule,
+    mode: EnforcementMode,
+    audit_manager: AuditManager | None = None,
+) -> GovernanceEvaluator:
+    """Construct an evaluator with explicit deps — no process-globals involved."""
+    return GovernanceEvaluator(
+        _build_index_with(rule),
+        enforcement_mode=mode,
+        audit_manager=audit_manager,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def capturing_audit():
-    """Replace the global audit manager with a fresh one wired to a capturing sink.
+def audit_setup() -> Any:
+    """Per-test :class:`AuditManager` + capturing sink — no default sinks.
 
-    Yields the sink so tests can inspect emitted events. Restores the
-    global manager on teardown.
+    Returns ``(manager, sink)`` so a test can build evaluators with the
+    manager and inspect emitted events through the sink. Synchronous
+    mode keeps assertions deterministic.
     """
-    reset_audit_manager()
-    manager = get_audit_manager()
-    # Default sinks (traces / console) are noisy here — drop them.
-    for existing_name in list(manager.list_sinks()):
-        manager.unregister_sink(existing_name)
+    manager = AuditManager(async_mode=False, register_default_sinks=False)
     sink = _CapturingSink()
     manager.register_sink(sink)
-    # Force synchronous emission so assertions don't race the worker thread.
-    manager._async_mode = False
-    yield sink
-    reset_audit_manager()
-
-
-@pytest.fixture(autouse=True)
-def _reset_enforcement_mode():
-    """Each test gets a clean enforcement-mode slate."""
-    reset_enforcement_mode()
-    yield
-    reset_enforcement_mode()
+    yield manager, sink
+    manager.close()
 
 
 # ---------------------------------------------------------------------------
@@ -150,11 +145,13 @@ def _reset_enforcement_mode():
 # ---------------------------------------------------------------------------
 
 
-def test_disabled_mode_short_circuits_with_empty_record(capturing_audit):
+def test_disabled_mode_short_circuits_with_empty_record(audit_setup: Any) -> None:
     """DISABLED returns an empty AuditRecord and emits nothing."""
-    set_enforcement_mode(EnforcementMode.DISABLED)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("secret"))
+    manager, sink = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("secret"),
+        EnforcementMode.DISABLED,
+        audit_manager=manager,
     )
 
     audit = evaluator.evaluate(_ctx("definitely contains secret"))
@@ -162,14 +159,16 @@ def test_disabled_mode_short_circuits_with_empty_record(capturing_audit):
     assert audit.evaluations == []
     assert audit.final_action == Action.ALLOW
     assert audit.metadata["enforcement_mode"] == "disabled"
-    assert capturing_audit.events == []
+    assert sink.events == []
 
 
-def test_disabled_mode_does_not_raise_on_deny_match(capturing_audit):
+def test_disabled_mode_does_not_raise_on_deny_match(audit_setup: Any) -> None:
     """Even when a DENY rule WOULD match, DISABLED never raises."""
-    set_enforcement_mode(EnforcementMode.DISABLED)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("blocked"))
+    manager, _ = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("blocked"),
+        EnforcementMode.DISABLED,
+        audit_manager=manager,
     )
 
     # Must not raise.
@@ -181,11 +180,13 @@ def test_disabled_mode_does_not_raise_on_deny_match(capturing_audit):
 # ---------------------------------------------------------------------------
 
 
-def test_audit_mode_transforms_deny_to_audit(capturing_audit):
+def test_audit_mode_transforms_deny_to_audit(audit_setup: Any) -> None:
     """AUDIT mode evaluates rules but never returns a DENY final_action."""
-    set_enforcement_mode(EnforcementMode.AUDIT)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("secret"))
+    manager, _ = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("secret"),
+        EnforcementMode.AUDIT,
+        audit_manager=manager,
     )
 
     audit = evaluator.evaluate(_ctx("contains secret data"))
@@ -197,54 +198,62 @@ def test_audit_mode_transforms_deny_to_audit(capturing_audit):
     assert audit.metadata["audit_mode_would_deny"] is True
 
 
-def test_audit_mode_does_not_raise_on_deny_match(capturing_audit):
+def test_audit_mode_does_not_raise_on_deny_match(audit_setup: Any) -> None:
     """AUDIT mode never raises GovernanceBlockException, even on a DENY hit."""
-    set_enforcement_mode(EnforcementMode.AUDIT)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("blocked"))
+    manager, _ = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("blocked"),
+        EnforcementMode.AUDIT,
+        audit_manager=manager,
     )
 
     evaluator.evaluate(_ctx("this is blocked"))  # must not raise
 
 
-def test_audit_mode_emits_per_rule_and_summary_events(capturing_audit):
+def test_audit_mode_emits_per_rule_and_summary_events(audit_setup: Any) -> None:
     """One rule_evaluation event per rule + one hook_summary per evaluate()."""
-    set_enforcement_mode(EnforcementMode.AUDIT)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("secret"))
+    manager, sink = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("secret"),
+        EnforcementMode.AUDIT,
+        audit_manager=manager,
     )
 
     evaluator.evaluate(_ctx("contains secret"))
 
     rule_events = [
-        e for e in capturing_audit.events if e.event_type == EventType.RULE_EVALUATION
+        e for e in sink.events if e.event_type == EventType.RULE_EVALUATION
     ]
     summary_events = [
-        e for e in capturing_audit.events if e.event_type == EventType.HOOK_END
+        e for e in sink.events if e.event_type == EventType.HOOK_END
     ]
     assert len(rule_events) == 1
     assert rule_events[0].hook == "BEFORE_AGENT"
-    assert rule_events[0].data["rule_id"] == "TEST-01"
+    assert rule_events[0].data["policy_id"] == "TEST-01"
     assert rule_events[0].data["matched"] is True
     assert rule_events[0].data["action"] == "deny"
+    # Mode travels on every event (PR #122 contract).
+    assert rule_events[0].data["enforcement_mode"] == EnforcementMode.AUDIT
 
     assert len(summary_events) == 1
     assert summary_events[0].data["matched_rules"] == 1
     assert summary_events[0].data["final_action"] == "audit"
-    assert summary_events[0].data["enforcement_mode"] == "audit"
+    assert summary_events[0].data["enforcement_mode"] == EnforcementMode.AUDIT
 
 
-def test_audit_mode_unmatched_rule_logged_as_allow(capturing_audit):
+def test_audit_mode_unmatched_rule_logged_as_allow(audit_setup: Any) -> None:
     """Unmatched rules still emit a rule_evaluation event with action='allow'."""
-    set_enforcement_mode(EnforcementMode.AUDIT)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("secret"))
+    manager, sink = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("secret"),
+        EnforcementMode.AUDIT,
+        audit_manager=manager,
     )
 
     evaluator.evaluate(_ctx("benign user query"))
 
     rule_events = [
-        e for e in capturing_audit.events if e.event_type == EventType.RULE_EVALUATION
+        e for e in sink.events if e.event_type == EventType.RULE_EVALUATION
     ]
     assert len(rule_events) == 1
     assert rule_events[0].data["matched"] is False
@@ -256,11 +265,13 @@ def test_audit_mode_unmatched_rule_logged_as_allow(capturing_audit):
 # ---------------------------------------------------------------------------
 
 
-def test_enforce_mode_raises_on_deny_match(capturing_audit):
+def test_enforce_mode_raises_on_deny_match(audit_setup: Any) -> None:
     """ENFORCE mode raises GovernanceBlockException when a DENY rule matches."""
-    set_enforcement_mode(EnforcementMode.ENFORCE)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("blocked"))
+    manager, _ = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("blocked"),
+        EnforcementMode.ENFORCE,
+        audit_manager=manager,
     )
 
     with pytest.raises(GovernanceBlockException) as exc_info:
@@ -273,32 +284,36 @@ def test_enforce_mode_raises_on_deny_match(capturing_audit):
     assert exc.audit_record.final_action == Action.DENY
 
 
-def test_enforce_mode_emits_audit_before_raising(capturing_audit):
+def test_enforce_mode_emits_audit_before_raising(audit_setup: Any) -> None:
     """The audit trail must be emitted even when the call raises."""
-    set_enforcement_mode(EnforcementMode.ENFORCE)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("blocked"))
+    manager, sink = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("blocked"),
+        EnforcementMode.ENFORCE,
+        audit_manager=manager,
     )
 
     with pytest.raises(GovernanceBlockException):
         evaluator.evaluate(_ctx("contains blocked"))
 
     rule_events = [
-        e for e in capturing_audit.events if e.event_type == EventType.RULE_EVALUATION
+        e for e in sink.events if e.event_type == EventType.RULE_EVALUATION
     ]
     summary_events = [
-        e for e in capturing_audit.events if e.event_type == EventType.HOOK_END
+        e for e in sink.events if e.event_type == EventType.HOOK_END
     ]
     assert len(rule_events) == 1
     assert summary_events[0].data["final_action"] == "deny"
-    assert summary_events[0].data["enforcement_mode"] == "enforce"
+    assert summary_events[0].data["enforcement_mode"] == EnforcementMode.ENFORCE
 
 
-def test_enforce_mode_returns_record_when_no_rule_matches(capturing_audit):
+def test_enforce_mode_returns_record_when_no_rule_matches(audit_setup: Any) -> None:
     """No DENY hit → no raise; the AuditRecord is returned normally."""
-    set_enforcement_mode(EnforcementMode.ENFORCE)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("blocked"))
+    manager, _ = audit_setup
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("blocked"),
+        EnforcementMode.ENFORCE,
+        audit_manager=manager,
     )
 
     audit = evaluator.evaluate(_ctx("benign query"))
@@ -308,17 +323,20 @@ def test_enforce_mode_returns_record_when_no_rule_matches(capturing_audit):
 
 
 # ---------------------------------------------------------------------------
-# Sink-failure isolation
+# Sink-failure isolation + no-audit-manager case
 # ---------------------------------------------------------------------------
 
 
-def test_sink_failure_does_not_propagate_or_block_evaluation(capturing_audit):
+def test_sink_failure_does_not_propagate_or_block_evaluation(
+    audit_setup: Any,
+) -> None:
     """A broken sink must not make evaluate() raise or lose its return value.
 
-    The contract: AuditManager wraps each sink's emit() in try/except with
-    a per-sink failure counter (circuit-breaker), so an exception inside a
-    sink never propagates back to the evaluator.
+    Contract: AuditManager wraps each sink's emit() in try/except with a
+    per-sink failure counter (circuit-breaker), so a sink exception
+    never propagates back to the evaluator.
     """
+    manager, capturing_sink = audit_setup
 
     class _BrokenSink(AuditSink):
         @property
@@ -328,12 +346,12 @@ def test_sink_failure_does_not_propagate_or_block_evaluation(capturing_audit):
         def emit(self, event: AuditEvent) -> None:
             raise RuntimeError("sink broke")
 
-    manager = get_audit_manager()
     manager.register_sink(_BrokenSink())
 
-    set_enforcement_mode(EnforcementMode.AUDIT)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("secret"))
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("secret"),
+        EnforcementMode.AUDIT,
+        audit_manager=manager,
     )
 
     # Must complete without raising even with a broken sink registered.
@@ -342,23 +360,25 @@ def test_sink_failure_does_not_propagate_or_block_evaluation(capturing_audit):
     assert audit.final_action == Action.AUDIT
     # The non-broken capturing sink still got its events.
     assert any(
-        e.event_type == EventType.RULE_EVALUATION for e in capturing_audit.events
+        e.event_type == EventType.RULE_EVALUATION for e in capturing_sink.events
     )
 
 
-def test_unavailable_audit_manager_is_swallowed():
-    """If get_audit_manager() itself raises, _emit_audit must swallow it."""
-    set_enforcement_mode(EnforcementMode.AUDIT)
-    evaluator = GovernanceEvaluator(
-        _build_index_with(_deny_rule_on_input_contains("secret"))
+def test_no_audit_manager_short_circuits_emission() -> None:
+    """``audit_manager=None`` is a no-op — evaluation still completes.
+
+    Replaces the previous test that mocked ``get_audit_manager`` to
+    raise. With explicit injection, the equivalent "no manager
+    available" state is simply ``audit_manager=None`` at construction.
+    """
+    evaluator = _build_evaluator(
+        _deny_rule_on_input_contains("secret"),
+        EnforcementMode.AUDIT,
+        audit_manager=None,
     )
 
-    with patch(
-        "uipath.runtime.governance.native.evaluator.get_audit_manager",
-        side_effect=RuntimeError("manager unavailable"),
-    ):
-        # Must complete, return record, and not raise.
-        audit = evaluator.evaluate(_ctx("contains secret"))
+    # Must complete, return record, and not raise.
+    audit = evaluator.evaluate(_ctx("contains secret"))
 
     assert audit.final_action == Action.AUDIT
     assert audit.evaluations[0].matched is True
@@ -369,7 +389,7 @@ def test_unavailable_audit_manager_is_swallowed():
 # ---------------------------------------------------------------------------
 
 
-def test_governance_evaluator_satisfies_evaluator_protocol():
+def test_governance_evaluator_satisfies_evaluator_protocol() -> None:
     """GovernanceEvaluator must be usable wherever EvaluatorProtocol is expected.
 
     Mirrors the pattern from test_detached_bridge_satisfies_debug_protocol —
@@ -382,7 +402,7 @@ def test_governance_evaluator_satisfies_evaluator_protocol():
     assert isinstance(evaluator, EvaluatorProtocol)
 
 
-def test_evaluator_protocol_methods_resolvable_on_concrete():
+def test_evaluator_protocol_methods_resolvable_on_concrete() -> None:
     """Every method the protocol declares must be callable on the concrete impl."""
     from uipath.core.adapters import EvaluatorProtocol
 
