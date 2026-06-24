@@ -19,8 +19,7 @@ def temp_dir() -> Generator[str, None, None]:
         yield tmp_dir
 
 
-# The loader no longer keeps provider / selector at module scope —
-# state is owned by each :class:`PolicyLoader` instance — so no
-# autouse cross-test reset is needed. Tests that share enforcement
-# mode call :func:`reset_enforcement_mode` from ``tests._helpers``
-# directly.
+# Governance state — provider, conversational selector, policy cache,
+# enforcement mode — is owned by each :class:`PolicyLoader` instance,
+# so no autouse cross-test reset is needed. Tests that want a clean
+# slate just construct a fresh loader.
