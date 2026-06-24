@@ -318,3 +318,45 @@ def test_string_output_wrapped_in_dict() -> None:
 
     assert result_dict["output"] == {"output": "primitive str"}
     assert result_dict["status"] == UiPathRuntimeStatus.SUCCESSFUL
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ("run", "runtime"),
+        ("debug", "playground"),
+        ("dev", "playground"),
+        ("eval", "eval"),
+    ],
+)
+def test_with_defaults_derives_execution_source(
+    command: str, expected: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """execution_source is derived from the command when not provided."""
+    monkeypatch.chdir(tmp_path)
+
+    ctx = UiPathRuntimeContext.with_defaults(command=command)
+
+    assert ctx.execution_source == expected
+
+
+def test_with_defaults_execution_source_none_for_unmapped_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Commands that do not run an agent leave execution_source unset."""
+    monkeypatch.chdir(tmp_path)
+
+    ctx = UiPathRuntimeContext.with_defaults(command="pack")
+
+    assert ctx.execution_source is None
+
+
+def test_with_defaults_explicit_execution_source_not_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicitly provided execution_source takes precedence over the command."""
+    monkeypatch.chdir(tmp_path)
+
+    ctx = UiPathRuntimeContext.with_defaults(command="run", execution_source="custom")
+
+    assert ctx.execution_source == "custom"

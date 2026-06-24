@@ -23,6 +23,15 @@ from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 logger = logging.getLogger(__name__)
 
+# Maps the executing command to an execution source. Commands that do not run
+# an agent are absent, leaving execution_source unset.
+_EXECUTION_SOURCE_BY_COMMAND: dict[str, str] = {
+    "run": "runtime",
+    "debug": "playground",
+    "dev": "playground",
+    "eval": "eval",
+}
+
 
 class UiPathRuntimeContext(BaseModel):
     """Context information passed throughout the runtime execution."""
@@ -31,6 +40,14 @@ class UiPathRuntimeContext(BaseModel):
     input: str | None = None
     resume: bool = False
     command: str | None = None
+    execution_source: str | None = Field(
+        None,
+        description=(
+            "Execution source derived from the command "
+            "(runtime/playground/eval). Propagated to platform clients so "
+            "downstream calls (e.g. guardrails) can identify the run context."
+        ),
+    )
     job_id: str | None = None
     conversation_id: str | None = Field(
         None, description="Conversation identifier for CAS"
@@ -344,6 +361,10 @@ class UiPathRuntimeContext(BaseModel):
         # Override with kwargs
         for k, v in kwargs.items():
             setattr(base, k, v)
+
+        # Derive the execution source from the command unless explicitly set.
+        if base.execution_source is None and base.command is not None:
+            base.execution_source = _EXECUTION_SOURCE_BY_COMMAND.get(base.command)
 
         return base
 
