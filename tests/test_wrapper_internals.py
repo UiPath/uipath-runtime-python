@@ -229,7 +229,20 @@ def test_extract_is_conversational_ignores_none_value_on_agent_def() -> None:
 
 @pytest.mark.parametrize(
     "attr_name",
-    ["_agent", "agent", "_runnable", "runnable", "_graph", "graph", "_chain", "chain", "_crew", "crew"],
+    [
+        "_agent",
+        "agent",
+        "_runnable",
+        "runnable",
+        "_graph",
+        "graph",
+        "_chain",
+        "chain",
+        "_crew",
+        "crew",
+        "_workflow",
+        "workflow",
+    ],
 )
 def test_extract_agent_finds_via_known_attribute(attr_name: str) -> None:
     runtime = _runtime_init_off()

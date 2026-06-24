@@ -269,6 +269,8 @@ class GovernanceRuntime:
         "chain",
         "_crew",
         "crew",
+        "_workflow",
+        "workflow",
     ]
 
     def __init__(
