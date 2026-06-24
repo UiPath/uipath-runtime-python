@@ -22,9 +22,12 @@ import time
 from collections import Counter
 
 import yaml
-from uipath.core.governance import GovernancePolicyProvider, PolicyContext
+from uipath.core.governance import (
+    EnforcementMode,
+    GovernancePolicyProvider,
+    PolicyContext,
+)
 
-from uipath.runtime.governance.config import set_enforcement_mode
 from uipath.runtime.governance.native._yaml_to_index import build_policy_index_from_yaml
 from uipath.runtime.governance.native.models import PolicyIndex
 
@@ -75,6 +78,12 @@ class PolicyLoader:
         self._provider = provider
         self._is_conversational = is_conversational
         self._policy_index: PolicyIndex | None = None
+        # Enforcement mode supplied by the provider on the most recent
+        # load. ``None`` until the first load lands (or whenever the
+        # provider omits a mode); :attr:`enforcement_mode` returns
+        # ``AUDIT`` in that case. Instance-scoped so parallel runtimes
+        # (e.g. ``uipath eval``) don't clobber each other.
+        self._enforcement_mode: EnforcementMode | None = None
         # ``_prefetch_event`` is set once the background load finishes
         # (success OR failure); callers of ``get_policy_index`` wait on
         # it. ``_prefetch_lock`` guards the start-once semantics so
@@ -244,7 +253,7 @@ class PolicyLoader:
             return None
 
         if response.mode is not None:
-            set_enforcement_mode(response.mode)
+            self._enforcement_mode = response.mode
             logger.info("Enforcement mode set from provider: %s", response.mode.value)
 
         if not response.policies:
@@ -290,6 +299,24 @@ class PolicyLoader:
             index.pack_names,
             index.total_rules,
             dict(hook_counts),
+        )
+
+    @property
+    def enforcement_mode(self) -> EnforcementMode:
+        """Active enforcement mode for this loader.
+
+        The canonical source is whatever the policy provider supplied on
+        the most recent load. Until that load lands (or if the provider
+        omits a mode), the default is :attr:`EnforcementMode.AUDIT` —
+        evaluate and log without blocking. Defaulting to AUDIT avoids
+        the chicken-and-egg where a DISABLED default would short-circuit
+        evaluation before the background load could ever opt the tenant
+        in.
+        """
+        return (
+            self._enforcement_mode
+            if self._enforcement_mode is not None
+            else EnforcementMode.AUDIT
         )
 
     @property

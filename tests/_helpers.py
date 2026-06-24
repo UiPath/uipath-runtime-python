@@ -1,8 +1,11 @@
 """Shared test-only helpers.
 
-Keeps test concerns out of the production governance package: per-test
-isolation utilities and shared stubs live here rather than inside the
-production modules.
+Keeps test concerns out of the production governance package: shared
+stubs live here rather than inside the production modules.
+
+The enforcement-mode reset helper is gone because the mode is now
+instance-scoped on :class:`PolicyLoader` — tests that want a clean
+slate just construct a fresh loader instead of touching a global.
 """
 
 from __future__ import annotations
@@ -10,17 +13,6 @@ from __future__ import annotations
 import time
 
 from uipath.core.governance import PolicyContext, PolicyResponse
-
-from uipath.runtime.governance import config
-
-
-def reset_enforcement_mode() -> None:
-    """Clear the process-wide enforcement mode so the AUDIT default re-applies.
-
-    Test isolation only — production code never resets the mode; the policy
-    loader sets it from the provider-supplied :class:`PolicyResponse`.
-    """
-    config._state.mode = None
 
 
 class StubPolicyProvider:

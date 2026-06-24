@@ -11,14 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from uipath.core.governance import (
     EnforcementMode,
     PolicyResponse,
 )
 
-from tests._helpers import StubPolicyProvider, reset_enforcement_mode
-from uipath.runtime.governance.config import get_enforcement_mode
+from tests._helpers import StubPolicyProvider
 from uipath.runtime.governance.native.loader import PolicyLoader
 from uipath.runtime.governance.native.models import PolicyIndex
 from uipath.runtime.governance.runtime import GovernanceRuntime
@@ -35,12 +33,8 @@ rules:
 """
 
 
-@pytest.fixture(autouse=True)
-def _reset_mode() -> Any:
-    """Each test starts with a clean enforcement-mode slate."""
-    reset_enforcement_mode()
-    yield
-    reset_enforcement_mode()
+# Each test constructs a fresh ``PolicyLoader`` / ``GovernanceRuntime``
+# — no module-level state to reset.
 
 
 # ---------------------------------------------------------------------------
@@ -53,12 +47,13 @@ def test_loader_builds_index_and_applies_mode() -> None:
         response=PolicyResponse(mode=EnforcementMode.ENFORCE, policies=SIMPLE_POLICY_YAML)
     )
 
-    index = PolicyLoader(provider).load_policy_index()
+    loader = PolicyLoader(provider)
+    index = loader.load_policy_index()
 
     assert isinstance(index, PolicyIndex)
     assert index.total_rules == 1
     assert "provider-pack" in index.pack_names
-    assert get_enforcement_mode() == EnforcementMode.ENFORCE
+    assert loader.enforcement_mode == EnforcementMode.ENFORCE
 
 
 def test_loader_passes_is_conversational_in_context() -> None:
@@ -118,16 +113,23 @@ def test_loader_returns_empty_on_malformed_yaml() -> None:
 
 
 def test_loader_does_not_change_mode_when_response_mode_is_none() -> None:
-    from uipath.runtime.governance.config import set_enforcement_mode
+    """Provider returning ``mode=None`` doesn't clobber a previously-set mode."""
+    p1 = StubPolicyProvider(
+        response=PolicyResponse(mode=EnforcementMode.ENFORCE, policies=SIMPLE_POLICY_YAML)
+    )
+    loader = PolicyLoader(p1)
+    loader.load_policy_index()
+    assert loader.enforcement_mode == EnforcementMode.ENFORCE
 
-    set_enforcement_mode(EnforcementMode.ENFORCE)
-    provider = StubPolicyProvider(
+    # Next load via a different provider that returns mode=None must not
+    # demote the loader's mode back to AUDIT.
+    loader._provider = StubPolicyProvider(
         response=PolicyResponse(mode=None, policies=SIMPLE_POLICY_YAML)
     )
+    loader.clear_cache()
+    loader.load_policy_index()
 
-    PolicyLoader(provider).load_policy_index()
-
-    assert get_enforcement_mode() == EnforcementMode.ENFORCE
+    assert loader.enforcement_mode == EnforcementMode.ENFORCE
 
 
 # ---------------------------------------------------------------------------

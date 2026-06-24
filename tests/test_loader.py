@@ -19,14 +19,13 @@ import time
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 from uipath.core.governance import (
     EnforcementMode,
     PolicyContext,
     PolicyResponse,
 )
 
-from tests._helpers import StubPolicyProvider, reset_enforcement_mode
+from tests._helpers import StubPolicyProvider
 from uipath.runtime.governance.native import loader as loader_mod
 from uipath.runtime.governance.native.loader import PolicyLoader
 from uipath.runtime.governance.native.models import PolicyIndex
@@ -47,12 +46,7 @@ def _ok_response() -> PolicyResponse:
     return PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
 
 
-@pytest.fixture(autouse=True)
-def _clean_enforcement_mode() -> Any:
-    """Each test starts from a clean enforcement-mode slate."""
-    reset_enforcement_mode()
-    yield
-    reset_enforcement_mode()
+# Each test constructs a fresh ``PolicyLoader`` — no shared state to reset.
 
 
 # ---------------------------------------------------------------------------
