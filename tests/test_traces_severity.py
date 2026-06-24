@@ -6,6 +6,10 @@ cross-product unification doc — verdict is split into ``evaluator_result``
 (what the rule decided, mode-independent) and ``action_applied`` (what
 actually happened, derived from evaluator_result + mode).
 
+Mode travels with the event (set by the evaluator from the per-loader
+:class:`PolicyLoader.enforcement_mode`) so parallel runtimes running
+different modes don't cross-contaminate the sink's view.
+
 - ``verbosityLevel = 4`` (Error) and ``StatusCode.ERROR`` fire **only**
   when ``action_applied = DENY`` — i.e. the runtime actually blocked
   the agent (ENFORCE mode + configured action ``deny``).
@@ -24,14 +28,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from uipath.core.governance import EnforcementMode
 
-from tests._helpers import reset_enforcement_mode
 from uipath.runtime.governance._audit.base import AuditEvent, EventType
 from uipath.runtime.governance._audit.traces import TracesAuditSink
-from uipath.runtime.governance.config import (
-    EnforcementMode,
-    set_enforcement_mode,
-)
 
 
 @pytest.fixture
@@ -45,15 +45,7 @@ def captured_span(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return span
 
 
-@pytest.fixture(autouse=True)
-def _reset_mode() -> None:
-    """Each test selects its own enforcement mode explicitly."""
-    reset_enforcement_mode()
-    yield
-    reset_enforcement_mode()
-
-
-def _hook_event(final_action: str, mode: str = "audit") -> AuditEvent:
+def _hook_event(final_action: str, mode: EnforcementMode) -> AuditEvent:
     return AuditEvent(
         event_type=EventType.HOOK_END,
         agent_name="agent",
@@ -67,7 +59,9 @@ def _hook_event(final_action: str, mode: str = "audit") -> AuditEvent:
     )
 
 
-def _rule_event(matched: bool, action: str) -> AuditEvent:
+def _rule_event(
+    matched: bool, action: str, mode: EnforcementMode = EnforcementMode.AUDIT
+) -> AuditEvent:
     return AuditEvent(
         event_type=EventType.RULE_EVALUATION,
         agent_name="agent",
@@ -78,6 +72,7 @@ def _rule_event(matched: bool, action: str) -> AuditEvent:
             "pack_name": "iso42001",
             "matched": matched,
             "action": action,
+            "enforcement_mode": mode,
             "status": "MATCHED" if matched else "PASS",
             "detail": "Customer-binding commitment detected.",
         },
@@ -101,15 +96,15 @@ def _span_attrs(span: MagicMock) -> dict[str, object]:
 @pytest.mark.parametrize(
     "final_action,mode",
     [
-        ("deny", "enforce"),
-        ("deny", "audit"),
-        ("audit", "audit"),
-        ("escalate", "audit"),
-        ("allow", "audit"),
+        ("deny", EnforcementMode.ENFORCE),
+        ("deny", EnforcementMode.AUDIT),
+        ("audit", EnforcementMode.AUDIT),
+        ("escalate", EnforcementMode.AUDIT),
+        ("allow", EnforcementMode.AUDIT),
     ],
 )
 def test_hook_span_never_sets_error(
-    captured_span: MagicMock, final_action: str, mode: str
+    captured_span: MagicMock, final_action: str, mode: EnforcementMode
 ) -> None:
     """Hook spans are summary containers — they never carry an ERROR Status."""
     sink = TracesAuditSink()
@@ -127,9 +122,8 @@ def test_hook_span_never_sets_error(
 
 def test_enforce_mode_deny_is_error(captured_span: MagicMock) -> None:
     """Enforce mode + action=deny = real block → verbosityLevel=4 + Status.ERROR."""
-    set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
-    sink.emit(_rule_event(matched=True, action="deny"))
+    sink.emit(_rule_event(matched=True, action="deny", mode=EnforcementMode.ENFORCE))
 
     attrs = _span_attrs(captured_span)
     assert attrs.get("verbosityLevel") == 4
@@ -156,9 +150,8 @@ def test_enforce_mode_escalate_is_hitl_warning(captured_span: MagicMock) -> None
     for human review, the run isn't failed. So verbosityLevel stays at
     Warning and Status is not marked ERROR.
     """
-    set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
-    sink.emit(_rule_event(matched=True, action="escalate"))
+    sink.emit(_rule_event(matched=True, action="escalate", mode=EnforcementMode.ENFORCE))
 
     attrs = _span_attrs(captured_span)
     assert attrs.get("verbosityLevel") == 3
@@ -187,9 +180,8 @@ def test_audit_mode_violation_is_warning(
     let it through. evaluator_result still records the rule's actual
     decision (DENY/HITL), independent of mode.
     """
-    set_enforcement_mode(EnforcementMode.AUDIT)
     sink = TracesAuditSink()
-    sink.emit(_rule_event(matched=True, action=action))
+    sink.emit(_rule_event(matched=True, action=action, mode=EnforcementMode.AUDIT))
 
     attrs = _span_attrs(captured_span)
     assert attrs.get("verbosityLevel") == 3
@@ -210,9 +202,8 @@ def test_enforce_mode_audit_action_is_warning(captured_span: MagicMock) -> None:
     is DENY (the rule decided to deny), but action_applied is AUDIT
     (the per-rule override kicks in), so verbosity stays Warning.
     """
-    set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
-    sink.emit(_rule_event(matched=True, action="audit"))
+    sink.emit(_rule_event(matched=True, action="audit", mode=EnforcementMode.ENFORCE))
 
     attrs = _span_attrs(captured_span)
     assert attrs.get("verbosityLevel") == 3
@@ -229,9 +220,8 @@ def test_enforce_mode_audit_action_is_warning(captured_span: MagicMock) -> None:
 
 def test_unmatched_rule_no_verbosity_no_error(captured_span: MagicMock) -> None:
     """Unmatched evaluations → evaluator_result=ALLOW, action_applied=NONE, quiet."""
-    set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
-    sink.emit(_rule_event(matched=False, action="deny"))
+    sink.emit(_rule_event(matched=False, action="deny", mode=EnforcementMode.ENFORCE))
 
     attrs = _span_attrs(captured_span)
     assert "verbosityLevel" not in attrs
@@ -242,12 +232,37 @@ def test_unmatched_rule_no_verbosity_no_error(captured_span: MagicMock) -> None:
 
 def test_matched_allow_action_no_verbosity(captured_span: MagicMock) -> None:
     """A rule whose action is 'allow' is an explicit non-violation."""
-    set_enforcement_mode(EnforcementMode.ENFORCE)
     sink = TracesAuditSink()
-    sink.emit(_rule_event(matched=True, action="allow"))
+    sink.emit(_rule_event(matched=True, action="allow", mode=EnforcementMode.ENFORCE))
 
     attrs = _span_attrs(captured_span)
     assert "verbosityLevel" not in attrs
     assert attrs.get("uipath_governance.evaluator_result") == "ALLOW"
     assert attrs.get("uipath_governance.action_applied") == "NONE"
     assert not captured_span.set_status.called
+
+
+# ---------------------------------------------------------------------------
+# Cross-runtime isolation — the architectural motivation for the refactor
+# ---------------------------------------------------------------------------
+
+
+def test_two_events_carry_independent_modes(captured_span: MagicMock) -> None:
+    """Parallel runtimes (different modes) cannot cross-contaminate the sink.
+
+    Previously the sink read mode via a process-global; an ENFORCE
+    runtime's emit could clobber an AUDIT runtime's span. With mode on
+    the event, two consecutive emits with different modes each render
+    their own correct ``uipath_governance.mode`` value.
+    """
+    sink = TracesAuditSink()
+
+    sink.emit(_rule_event(matched=True, action="deny", mode=EnforcementMode.ENFORCE))
+    sink.emit(_rule_event(matched=True, action="deny", mode=EnforcementMode.AUDIT))
+
+    # Collect every set_attribute call ordered by emit.
+    calls = [c.args for c in captured_span.set_attribute.call_args_list]
+    modes = [v for k, v in calls if k == "uipath_governance.mode"]
+    actions_applied = [v for k, v in calls if k == "uipath_governance.action_applied"]
+    assert modes == ["ENFORCE", "AUDIT"]
+    assert actions_applied == ["DENY", "AUDIT"]

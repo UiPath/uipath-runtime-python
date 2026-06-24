@@ -17,10 +17,7 @@ import importlib.metadata
 import logging
 from typing import Any
 
-from uipath.runtime.governance.config import (
-    EnforcementMode,
-    get_enforcement_mode,
-)
+from uipath.core.governance import EnforcementMode
 
 from .base import AuditEvent, AuditSink, EventType
 
@@ -72,18 +69,27 @@ ACTION_HITL = "HITL"
 ACTION_AUDIT = "AUDIT"
 ACTION_NONE = "NONE"
 
-# The spec draft uses ENFORCE / SIMULATE for ``mode``; we instead emit
-# AUDIT / ENFORCE to match the runtime's own EnforcementMode vocabulary
-# (only AUDIT is wired today; ENFORCE arrives in a later phase). When
-# the spec lands as final and SIMULATE is required, the mapping is a
-# one-line change here.
-MODE_AUDIT = "AUDIT"
-MODE_ENFORCE = "ENFORCE"
+def _resolve_mode(event: AuditEvent) -> EnforcementMode:
+    """Read the enforcement mode the evaluator stamped on the event.
 
+    Mode travels with the event (set by :meth:`AuditManager.emit_rule_evaluation`
+    / :meth:`emit_hook_summary` from the loader's per-instance mode) so
+    the sink doesn't read a process-global that wouldn't be authoritative
+    in a parallel-runtime setup.
 
-def _mode_to_spec(mode: EnforcementMode) -> str:
-    """Map runtime EnforcementMode → wire vocabulary (AUDIT / ENFORCE)."""
-    return MODE_ENFORCE if mode == EnforcementMode.ENFORCE else MODE_AUDIT
+    Falls back to ``AUDIT`` only when the field is missing — that's a
+    contract violation by the emitter (every governance event must carry
+    the mode), but defaulting to the safe option avoids a sink crash.
+    """
+    mode = event.data.get("enforcement_mode")
+    if isinstance(mode, EnforcementMode):
+        return mode
+    if isinstance(mode, str):
+        try:
+            return EnforcementMode(mode.lower())
+        except ValueError:
+            pass
+    return EnforcementMode.AUDIT
 
 
 def _derive_results(
@@ -205,11 +211,11 @@ class TracesAuditSink(AuditSink):
                 # dashboards) filter governance spans by producer when
                 # multiple SDKs / governance backends co-exist.
                 span.set_attribute(f"{NS}.source", GOVERNANCE_SOURCE)
-                # Hook summary attributes. Mode is sourced from the runtime
-                # (single source of truth), not the in-event field, so a
-                # stale ``enforcement_mode`` value in the event can't drift
-                # from what the evaluator actually used.
-                mode = get_enforcement_mode()
+                # Hook summary attributes. Mode comes from the event — the
+                # evaluator stamps it from the per-loader instance, so the
+                # sink is correct for parallel runtimes running different
+                # modes.
+                mode = _resolve_mode(event)
                 final_action = data.get("final_action", "allow")
                 _, action_applied = _derive_results(
                     matched=final_action.lower() != "allow",
@@ -218,7 +224,7 @@ class TracesAuditSink(AuditSink):
                 )
                 span.set_attribute(f"{NS}.hook", hook)
                 span.set_attribute(f"{NS}.action_applied", action_applied)
-                span.set_attribute(f"{NS}.mode", _mode_to_spec(mode))
+                span.set_attribute(f"{NS}.mode", mode.value.upper())
 
                 # Hook spans are summary containers — they're left at
                 # Status.UNSET regardless of final_action. Severity is
@@ -265,10 +271,12 @@ class TracesAuditSink(AuditSink):
                 span.set_attribute(f"{NS}.source", GOVERNANCE_SOURCE)
 
                 # Derive the spec-vocabulary verdict pair from the raw
-                # (matched, configured action, mode) tuple. Single source
-                # of truth for both the emitted attributes below AND the
-                # verbosityLevel/Status decision further down.
-                mode = get_enforcement_mode()
+                # (matched, configured action, mode) tuple. Mode comes
+                # from the event (per-loader instance) so parallel
+                # runtimes running different modes don't cross-contaminate.
+                # Single source of truth for the emitted attributes below
+                # AND the verbosityLevel/Status decision further down.
+                mode = _resolve_mode(event)
                 configured_action = data.get("action", "allow")
                 matched = bool(data.get("matched", False))
                 evaluator_result, action_applied = _derive_results(
@@ -284,7 +292,7 @@ class TracesAuditSink(AuditSink):
                 span.set_attribute(f"{NS}.hook", event.hook)
                 span.set_attribute(f"{NS}.evaluator_result", evaluator_result)
                 span.set_attribute(f"{NS}.action_applied", action_applied)
-                span.set_attribute(f"{NS}.mode", _mode_to_spec(mode))
+                span.set_attribute(f"{NS}.mode", mode.value.upper())
                 span.set_attribute(f"{NS}.version", SCHEMA_VERSION)
 
                 detail = data.get("detail", "")

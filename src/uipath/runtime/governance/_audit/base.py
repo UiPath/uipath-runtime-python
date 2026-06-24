@@ -18,15 +18,67 @@ import logging
 import os
 import queue
 import threading
+import weakref
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    pass
+from uipath.core.governance import EnforcementMode
 
 logger = logging.getLogger(__name__)
+
+
+# Process-wide cleanup machinery for AuditManager instances.
+#
+# A single ``atexit`` hook walks a ``WeakSet`` of live managers on exit
+# and flushes/closes each one. Two important properties:
+#
+# 1. **Bounded atexit registrations.** Per-instance ``atexit.register``
+#    grows the interpreter's atexit list without bound — N runtimes →
+#    N hooks → N × shutdown-timeout total exit delay. One process-level
+#    hook is constant work regardless of how many managers were
+#    constructed.
+#
+# 2. **No strong reference to the manager.** ``WeakSet`` lets a disposed
+#    manager get garbage-collected; if it's already gone by exit time,
+#    we just skip it. The per-instance atexit hook held the manager
+#    alive until process exit, leaking memory in long-running
+#    ``uipath eval`` runs that build many runtimes serially.
+_live_managers: weakref.WeakSet[AuditManager] = weakref.WeakSet()
+_atexit_registered = False
+_atexit_lock = threading.Lock()
+
+
+def _process_cleanup_managers() -> None:
+    """Process-exit handler: flush + close every live AuditManager.
+
+    Iteration over a snapshot — the WeakSet may mutate during cleanup
+    (close() touches sinks_lock, GC may fire). Bounded by each manager's
+    own flush / close timeouts.
+    """
+    for manager in list(_live_managers):
+        try:
+            manager.flush(timeout=2.0)
+            manager.close()
+        except Exception as exc:  # noqa: BLE001 - exit cleanup must not raise
+            logger.debug("Audit manager process cleanup error: %s", exc)
+
+
+def _register_manager_for_cleanup(manager: AuditManager) -> None:
+    """Add ``manager`` to the cleanup set + ensure process atexit is wired.
+
+    Double-checked under ``_atexit_lock`` so two concurrent first-time
+    constructions don't both register the process atexit handler.
+    """
+    global _atexit_registered
+    _live_managers.add(manager)
+    if _atexit_registered:
+        return
+    with _atexit_lock:
+        if not _atexit_registered:
+            atexit.register(_process_cleanup_managers)
+            _atexit_registered = True
 
 
 # =============================================================================
@@ -165,13 +217,19 @@ class AuditSink(ABC):
 class AuditManager:
     """Manages multiple audit sinks and routes events to them.
 
-    The AuditManager is the central hub for audit events. It maintains
-    a list of registered sinks and broadcasts events to all of them.
+    Instance-scoped: each :class:`GovernanceRuntime` owns its own
+    manager. Parallel runtimes (``uipath eval``) don't share sinks,
+    workers, or per-sink failure state.
+
+    Constructor automatically registers the platform-mandated ``traces``
+    sink (OpenTelemetry → Orchestrator audit UI). Developers cannot
+    bypass that audit trail. Additional sinks can be added via
+    :meth:`register_sink`.
 
     Thread Safety:
         Events are queued and processed by a background thread, making
-        emit() non-blocking. This avoids blocking agent execution during
-        audit trace HTTP calls.
+        :meth:`emit` non-blocking. This avoids blocking agent execution
+        during audit trace HTTP calls.
     """
 
     # Trip a sink after this many consecutive emit failures (circuit-breaker).
@@ -185,6 +243,7 @@ class AuditManager:
         self,
         async_mode: bool = True,
         queue_maxsize: int = _DEFAULT_QUEUE_MAXSIZE,
+        register_default_sinks: bool = True,
     ) -> None:
         """Initialize the audit manager.
 
@@ -193,6 +252,10 @@ class AuditManager:
                        thread. If False, events are processed synchronously.
             queue_maxsize: Max queued events in async mode. On overflow the
                        oldest queued event is dropped to make room.
+            register_default_sinks: If True (default), register the platform
+                       mandated ``traces`` sink and an atexit cleanup
+                       handler. Tests that want a bare manager can pass
+                       ``False`` and register sinks explicitly.
         """
         self._sinks: list[AuditSink] = []
         # Single lock guards _sinks, _sink_failures, _tripped_sinks — every
@@ -211,6 +274,30 @@ class AuditManager:
 
         if self._async_mode:
             self._start_worker()
+
+        if register_default_sinks:
+            self._register_traces_sink()
+            # Process-level atexit (one shared handler, weakref-tracked
+            # set) instead of per-instance ``atexit.register(self.method)``:
+            # avoids unbounded atexit list growth and the strong reference
+            # that would otherwise pin a disposed manager until process
+            # exit. See module-level ``_process_cleanup_managers``.
+            _register_manager_for_cleanup(self)
+
+    def _register_traces_sink(self) -> None:
+        """Register the platform-mandated ``traces`` sink.
+
+        Governance is platform-owned, so the traces sink (OpenTelemetry
+        spans to the Orchestrator audit UI) is always registered and
+        cannot be disabled. The factory import is deferred to avoid a
+        module-load cycle (``factory`` imports back into this module).
+        """
+        from .factory import create_sink
+
+        sink = create_sink("traces")
+        if sink is not None:
+            self.register_sink(sink)
+            logger.info("Governance audit sink registered: traces")
 
     def _start_worker(self) -> None:
         """Start the background worker thread."""
@@ -411,18 +498,28 @@ class AuditManager:
             self._emit_sync(event)
 
     def _ensure_alive_after_fork(self) -> None:
-        """Reset queue and respawn worker if we're in a forked child."""
-        current_pid = os.getpid()
-        if current_pid == self._pid:
-            return
-        # Child process inherited a dead worker_thread reference and a
-        # queue the parent owned. Rebuild both so child events drain.
-        self._pid = current_pid
-        self._queue = queue.Queue(maxsize=self._queue.maxsize)
-        self._shutdown = threading.Event()
-        self._worker_thread = None
-        if self._async_mode:
-            self._start_worker()
+        """Reset queue and respawn worker if we're in a forked child.
+
+        Double-checked under ``_sinks_lock``: a fresh-fork child where
+        multiple threads call :meth:`emit` concurrently could otherwise
+        each see the stale ``_pid`` and each rebuild ``_queue`` /
+        ``_shutdown`` / ``_worker_thread`` — one thread's writes would
+        clobber the other's, leaking the queue+worker pair.
+        """
+        if os.getpid() == self._pid:
+            return  # fast path: same process, no rebuild needed
+        with self._sinks_lock:
+            current_pid = os.getpid()
+            if current_pid == self._pid:
+                return  # another thread won the rebuild race
+            # Child process inherited a dead worker_thread reference and
+            # a queue the parent owned. Rebuild both so child events drain.
+            self._pid = current_pid
+            self._queue = queue.Queue(maxsize=self._queue.maxsize)
+            self._shutdown = threading.Event()
+            self._worker_thread = None
+            if self._async_mode:
+                self._start_worker()
 
     def emit_rule_evaluation(
         self,
@@ -432,12 +529,19 @@ class AuditManager:
         hook: str,
         matched: bool,
         action: str,
+        enforcement_mode: EnforcementMode,
         detail: str = "",
         agent_name: str = "agent",
         trace_id: str = "",
         description: str = "",
     ) -> None:
-        """Convenience method to emit a rule evaluation event."""
+        """Convenience method to emit a rule evaluation event.
+
+        ``enforcement_mode`` travels on the event so sinks don't have to
+        read a process-global. With instance-scoped loaders the global
+        wouldn't be authoritative anyway — parallel runtimes can run in
+        different modes simultaneously.
+        """
         self.emit(
             AuditEvent(
                 event_type=EventType.RULE_EVALUATION,
@@ -450,6 +554,7 @@ class AuditManager:
                     "pack_name": pack_name,
                     "matched": matched,
                     "action": action,
+                    "enforcement_mode": enforcement_mode,
                     "detail": detail,
                     "description": description,
                     "status": "MATCHED" if matched else "PASS",
@@ -464,8 +569,8 @@ class AuditManager:
         total_rules: int,
         matched_rules: int,
         final_action: str,
+        enforcement_mode: EnforcementMode,
         trace_id: str = "",
-        enforcement_mode: str = "audit",
     ) -> None:
         """Convenience method to emit a hook summary event."""
         self.emit(
@@ -488,9 +593,15 @@ class AuditManager:
         session_id: str,
         agent_name: str,
         packs: list[str],
-        enforcement_mode: str = "audit",
+        enforcement_mode: EnforcementMode,
     ) -> None:
-        """Convenience method to emit a session start event."""
+        """Convenience method to emit a session start event.
+
+        Same ``enforcement_mode: EnforcementMode`` contract as
+        :meth:`emit_rule_evaluation` and :meth:`emit_hook_summary`
+        — every governance event carries the per-loader mode so sinks
+        don't depend on a process-global.
+        """
         self.emit(
             AuditEvent(
                 event_type=EventType.SESSION_START,
@@ -511,6 +622,7 @@ class AuditManager:
         total_evaluations: int,
         rules_matched: int,
         rules_denied: int,
+        enforcement_mode: EnforcementMode,
     ) -> None:
         """Convenience method to emit a session end event."""
         self.emit(
@@ -523,6 +635,7 @@ class AuditManager:
                     "total_evaluations": total_evaluations,
                     "rules_matched": rules_matched,
                     "rules_denied": rules_denied,
+                    "enforcement_mode": enforcement_mode,
                 },
             )
         )
@@ -534,7 +647,8 @@ class AuditManager:
         seconds elapse, whichever comes first. ``queue.Queue.join`` has
         no timeout argument — using it would block indefinitely on a
         wedged sink, which defeats the bounded-shutdown contract that
-        :func:`_cleanup_audit_manager` relies on at process exit.
+        the process-exit handler (see :func:`_process_cleanup_managers`)
+        relies on.
 
         Args:
             timeout: Maximum seconds to wait for queue to drain (default 5.0)
@@ -614,94 +728,3 @@ class AuditManager:
                 logger.warning("Audit sink '%s' failed to close: %s", sink.name, e)
 
 
-# =============================================================================
-# Global Audit Manager
-# =============================================================================
-
-_audit_manager: AuditManager | None = None
-_atexit_registered = False
-# Guards the lazy init in ``get_audit_manager`` against two threads racing
-# on the first call and constructing two managers (which would silently
-# leak a background worker thread and split audit traffic across them).
-_audit_manager_lock = threading.Lock()
-
-
-def _cleanup_audit_manager() -> None:
-    """Cleanup handler called at process exit."""
-    global _audit_manager
-    if _audit_manager is not None:
-        try:
-            _audit_manager.flush(timeout=2.0)
-            _audit_manager.close()
-        except Exception:
-            pass
-
-
-def get_audit_manager() -> AuditManager:
-    """Get or create the global audit manager.
-
-    On first call, registers the platform-mandated ``traces`` sink. Events
-    are processed on a background worker thread so audit emission never
-    blocks agent execution.
-
-    Thread-safe: uses double-checked locking around the lazy init so two
-    concurrent first callers can't construct two managers (which would
-    leak a worker thread and split audit traffic across them).
-
-    Returns:
-        The global AuditManager instance
-    """
-    global _audit_manager, _atexit_registered
-
-    # Fast path: instance already constructed. The read is racy but
-    # benign — at worst a late reader sees ``None`` and falls through
-    # to the locked slow path, where the double-check resolves it.
-    if _audit_manager is not None:
-        return _audit_manager
-
-    with _audit_manager_lock:
-        if _audit_manager is None:
-            manager = AuditManager()
-            _configure_default_sinks(manager)
-            # Register cleanup handler before publishing the manager
-            # so an emit-then-process-exit race can't observe a manager
-            # whose atexit hook didn't fire.
-            if not _atexit_registered:
-                atexit.register(_cleanup_audit_manager)
-                _atexit_registered = True
-            _audit_manager = manager
-
-    return _audit_manager
-
-
-def _configure_default_sinks(manager: AuditManager) -> None:
-    """Register the platform-mandated traces sink.
-
-    Governance is platform-owned, so the traces sink (OpenTelemetry spans
-    to the Orchestrator audit UI) is always registered and cannot be
-    disabled. Developers cannot bypass the audit trail.
-    """
-    from .factory import create_sink
-
-    sink = create_sink("traces")
-    if sink:
-        manager.register_sink(sink)
-        logger.info("Governance audit sink registered: traces")
-
-
-def reset_audit_manager() -> None:
-    """Reset the global audit manager (for testing).
-
-    Flushes pending events and stops the background worker before resetting.
-    Holds the same lock as :func:`get_audit_manager` so a concurrent first
-    caller can't observe a half-torn-down manager.
-    """
-    global _audit_manager
-    with _audit_manager_lock:
-        manager, _audit_manager = _audit_manager, None
-    if manager is not None:
-        try:
-            manager.flush(timeout=1.0)
-        except Exception:
-            pass
-        manager.close()
