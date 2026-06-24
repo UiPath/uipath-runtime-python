@@ -19,27 +19,8 @@ def temp_dir() -> Generator[str, None, None]:
         yield tmp_dir
 
 
-@pytest.fixture(autouse=True)
-def _reset_governance_process_state() -> Generator[None, None, None]:
-    """Clear process-level governance state around every test.
-
-    The loader keeps the conversational selector and the registered
-    policy provider at module scope. Both are stable per process in
-    production but leak across tests when not reset, masking ordering
-    bugs and producing flakes. Import is guarded so this fixture is a
-    no-op when the governance package isn't built yet.
-    """
-    try:
-        from uipath.runtime.governance.native.loader import (
-            set_agent_conversational,
-            set_policy_provider,
-        )
-    except ImportError:
-        yield
-        return
-
-    set_agent_conversational(None)
-    set_policy_provider(None)
-    yield
-    set_agent_conversational(None)
-    set_policy_provider(None)
+# The loader no longer keeps provider / selector at module scope —
+# state is owned by each :class:`PolicyLoader` instance — so no
+# autouse cross-test reset is needed. Tests that share enforcement
+# mode call :func:`reset_enforcement_mode` from ``tests._helpers``
+# directly.

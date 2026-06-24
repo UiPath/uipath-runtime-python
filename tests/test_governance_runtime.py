@@ -1,10 +1,15 @@
-"""Tests for the GovernanceRuntime wrapper and the provider loader path."""
+"""Tests for the GovernanceRuntime wrapper and the provider loader path.
+
+The runtime no longer introspects the delegate's private attributes to
+discover the conversational flag — the wiring layer passes it
+explicitly. The runtime also no longer reads the governance feature
+flag: the wiring layer decides whether to construct
+:class:`GovernanceRuntime` at all.
+"""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from uipath.core.governance import (
@@ -14,19 +19,9 @@ from uipath.core.governance import (
 
 from tests._helpers import StubPolicyProvider, reset_enforcement_mode
 from uipath.runtime.governance.config import get_enforcement_mode
-from uipath.runtime.governance.native import loader
-from uipath.runtime.governance.native.loader import (
-    _load_from_provider,
-    clear_policy_cache,
-    load_policy_index,
-    set_agent_conversational,
-    set_policy_provider,
-)
+from uipath.runtime.governance.native.loader import PolicyLoader
 from uipath.runtime.governance.native.models import PolicyIndex
-from uipath.runtime.governance.runtime import (
-    GovernanceRuntime,
-    _extract_is_conversational,
-)
+from uipath.runtime.governance.runtime import GovernanceRuntime
 
 SIMPLE_POLICY_YAML = """
 standard: provider-pack
@@ -41,32 +36,24 @@ rules:
 
 
 @pytest.fixture(autouse=True)
-def _enable_ff_and_reset(monkeypatch: pytest.MonkeyPatch):
-    """Reset module state and turn the governance FF on per test."""
-    from uipath.core.feature_flags import FeatureFlags
-
-    clear_policy_cache()
+def _reset_mode() -> Any:
+    """Each test starts with a clean enforcement-mode slate."""
     reset_enforcement_mode()
-    set_policy_provider(None)
-    FeatureFlags.configure_flags({"EnablePythonGovernanceChecker": True})
     yield
-    clear_policy_cache()
     reset_enforcement_mode()
-    set_policy_provider(None)
-    FeatureFlags.reset_flags()
 
 
 # ---------------------------------------------------------------------------
-# _load_from_provider — direct unit tests
+# PolicyLoader — provider plumbing (mode application, context, errors)
 # ---------------------------------------------------------------------------
 
 
-def test_load_from_provider_builds_index_and_applies_mode() -> None:
+def test_loader_builds_index_and_applies_mode() -> None:
     provider = StubPolicyProvider(
         response=PolicyResponse(mode=EnforcementMode.ENFORCE, policies=SIMPLE_POLICY_YAML)
     )
 
-    index = _load_from_provider(provider)
+    index = PolicyLoader(provider).load_policy_index()
 
     assert isinstance(index, PolicyIndex)
     assert index.total_rules == 1
@@ -74,52 +61,63 @@ def test_load_from_provider_builds_index_and_applies_mode() -> None:
     assert get_enforcement_mode() == EnforcementMode.ENFORCE
 
 
-def test_load_from_provider_passes_is_conversational_in_context() -> None:
-    set_agent_conversational(True)
+def test_loader_passes_is_conversational_in_context() -> None:
     provider = StubPolicyProvider(
         response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
     )
 
-    _load_from_provider(provider)
+    PolicyLoader(provider, is_conversational=True).load_policy_index()
 
     assert len(provider.calls) == 1
     assert provider.calls[0].is_conversational is True
 
 
-def test_load_from_provider_returns_none_when_provider_raises() -> None:
+def test_loader_omits_is_conversational_when_unset() -> None:
+    """``is_conversational=None`` (the default) leaves the selector unset."""
+    provider = StubPolicyProvider(
+        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
+    )
+
+    PolicyLoader(provider).load_policy_index()
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0].is_conversational is None
+
+
+def test_loader_returns_empty_when_provider_raises() -> None:
     provider = StubPolicyProvider(raises=RuntimeError("boom"))
+    index = PolicyLoader(provider).load_policy_index()
+    assert index.total_rules == 0
 
-    assert _load_from_provider(provider) is None
 
-
-def test_load_from_provider_returns_none_on_empty_policies() -> None:
+def test_loader_returns_empty_on_empty_policies() -> None:
     provider = StubPolicyProvider(
         response=PolicyResponse(mode=EnforcementMode.AUDIT, policies="")
     )
+    index = PolicyLoader(provider).load_policy_index()
+    assert index.total_rules == 0
 
-    assert _load_from_provider(provider) is None
 
-
-def test_load_from_provider_returns_none_on_zero_rules() -> None:
+def test_loader_returns_empty_on_zero_rules() -> None:
     empty_pack_yaml = "standard: empty\nrules: []\n"
     provider = StubPolicyProvider(
         response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=empty_pack_yaml)
     )
+    index = PolicyLoader(provider).load_policy_index()
+    assert index.total_rules == 0
 
-    assert _load_from_provider(provider) is None
 
-
-def test_load_from_provider_returns_none_on_malformed_yaml() -> None:
+def test_loader_returns_empty_on_malformed_yaml() -> None:
     provider = StubPolicyProvider(
         response=PolicyResponse(
             mode=EnforcementMode.AUDIT, policies="key: : invalid: : yaml"
         )
     )
+    index = PolicyLoader(provider).load_policy_index()
+    assert index.total_rules == 0
 
-    assert _load_from_provider(provider) is None
 
-
-def test_load_from_provider_does_not_change_mode_when_none() -> None:
+def test_loader_does_not_change_mode_when_response_mode_is_none() -> None:
     from uipath.runtime.governance.config import set_enforcement_mode
 
     set_enforcement_mode(EnforcementMode.ENFORCE)
@@ -127,47 +125,13 @@ def test_load_from_provider_does_not_change_mode_when_none() -> None:
         response=PolicyResponse(mode=None, policies=SIMPLE_POLICY_YAML)
     )
 
-    _load_from_provider(provider)
+    PolicyLoader(provider).load_policy_index()
 
     assert get_enforcement_mode() == EnforcementMode.ENFORCE
 
 
 # ---------------------------------------------------------------------------
-# load_policy_index dispatch — registered provider vs empty fallback
-# ---------------------------------------------------------------------------
-
-
-def test_load_policy_index_uses_registered_provider() -> None:
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
-    )
-    set_policy_provider(provider)
-
-    index = load_policy_index()
-
-    assert index.total_rules == 1
-    assert provider.calls, "provider.get_policy was not called"
-
-
-def test_load_policy_index_returns_empty_when_no_provider() -> None:
-    """No provider registered → empty PolicyIndex (no fallback path)."""
-    index = load_policy_index()
-    assert index.total_rules == 0
-
-
-def test_load_policy_index_empty_when_provider_yields_nothing() -> None:
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies="")
-    )
-    set_policy_provider(provider)
-
-    index = load_policy_index()
-
-    assert index.total_rules == 0
-
-
-# ---------------------------------------------------------------------------
-# GovernanceRuntime
+# GovernanceRuntime — passthroughs + loader wiring
 # ---------------------------------------------------------------------------
 
 
@@ -180,101 +144,72 @@ class _StubDelegate:
         self.disposed = False
         self.schema_called = False
 
-    async def execute(self, input=None, options=None):
+    async def execute(self, input: Any = None, options: Any = None) -> Any:
         self.execute_calls.append((input, options))
         return "result"
 
-    async def stream(self, input=None, options=None):
+    async def stream(self, input: Any = None, options: Any = None) -> Any:
         self.stream_calls.append((input, options))
         for event in ("a", "b"):
             yield event
 
-    async def get_schema(self):
+    async def get_schema(self) -> Any:
         self.schema_called = True
         return "schema"
 
-    async def dispose(self):
+    async def dispose(self) -> None:
         self.disposed = True
 
 
-def test_governance_runtime_registers_provider_and_prefetches(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Init wires provider into loader state and kicks off prefetch."""
+def test_governance_runtime_exposes_loader_bound_to_provider() -> None:
+    """The wrapper builds an instance-scoped PolicyLoader carrying the provider."""
     provider = StubPolicyProvider(
         response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
     )
 
-    # Spy on prefetch + set_policy_provider so we don't need a real
-    # background thread in the unit test.
-    prefetch_spy = MagicMock()
-    set_provider_spy = MagicMock()
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.prefetch_policy_index", prefetch_spy
-    )
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.set_policy_provider", set_provider_spy
-    )
+    runtime = GovernanceRuntime(_StubDelegate(), policy_provider=provider)
 
-    delegate = _StubDelegate()
-
-    GovernanceRuntime(delegate, policy_provider=provider)
-
-    set_provider_spy.assert_called_once_with(provider)
-    prefetch_spy.assert_called_once_with()
+    assert isinstance(runtime.loader, PolicyLoader)
+    assert runtime.loader._provider is provider
 
 
-def test_governance_runtime_with_none_provider_still_prefetches(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Passing ``None`` registers None → loader yields an empty PolicyIndex."""
-    prefetch_spy = MagicMock()
-    set_provider_spy = MagicMock()
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.prefetch_policy_index", prefetch_spy
-    )
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.set_policy_provider", set_provider_spy
+def test_governance_runtime_forwards_is_conversational_to_loader() -> None:
+    """The constructor's explicit ``is_conversational`` reaches PolicyContext."""
+    provider = StubPolicyProvider(
+        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
     )
 
-    GovernanceRuntime(_StubDelegate(), policy_provider=None)
-
-    set_provider_spy.assert_called_once_with(None)
-    prefetch_spy.assert_called_once_with()
-
-
-def test_governance_runtime_skips_prefetch_when_ff_off(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """FF off → no provider registration, no prefetch."""
-    from uipath.core.feature_flags import FeatureFlags
-
-    FeatureFlags.configure_flags({"EnablePythonGovernanceChecker": False})
-
-    prefetch_spy = MagicMock()
-    set_provider_spy = MagicMock()
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.prefetch_policy_index", prefetch_spy
+    runtime = GovernanceRuntime(
+        _StubDelegate(), policy_provider=provider, is_conversational=True
     )
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.set_policy_provider", set_provider_spy
+    # Force the prefetch to land — load synchronously so we can read calls[0].
+    runtime.loader.get_policy_index()
+
+    assert provider.calls, "provider.get_policy was never invoked"
+    assert provider.calls[0].is_conversational is True
+
+
+def test_governance_runtime_loader_default_selector_is_none() -> None:
+    """Omitting ``is_conversational`` leaves the selector unset on PolicyContext."""
+    provider = StubPolicyProvider(
+        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
     )
 
-    GovernanceRuntime(_StubDelegate(), policy_provider=StubPolicyProvider())
+    runtime = GovernanceRuntime(_StubDelegate(), policy_provider=provider)
+    runtime.loader.get_policy_index()
 
-    assert not set_provider_spy.called
-    assert not prefetch_spy.called
+    assert provider.calls[0].is_conversational is None
 
 
-async def test_governance_runtime_execute_delegates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.prefetch_policy_index", MagicMock()
-    )
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.set_policy_provider", MagicMock()
-    )
+def test_governance_runtime_with_none_provider_yields_empty_index() -> None:
+    """No provider → loader yields an empty PolicyIndex, no provider invocation."""
+    runtime = GovernanceRuntime(_StubDelegate(), policy_provider=None)
+
+    index = runtime.loader.get_policy_index()
+    assert index.total_rules == 0
+
+
+async def test_governance_runtime_execute_delegates() -> None:
     delegate = _StubDelegate()
     runtime = GovernanceRuntime(delegate, policy_provider=None)
 
@@ -284,15 +219,7 @@ async def test_governance_runtime_execute_delegates(
     assert delegate.execute_calls == [({"x": 1}, None)]
 
 
-async def test_governance_runtime_stream_delegates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.prefetch_policy_index", MagicMock()
-    )
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.set_policy_provider", MagicMock()
-    )
+async def test_governance_runtime_stream_delegates() -> None:
     delegate = _StubDelegate()
     runtime = GovernanceRuntime(delegate, policy_provider=None)
 
@@ -302,15 +229,7 @@ async def test_governance_runtime_stream_delegates(
     assert delegate.stream_calls == [({"x": 1}, None)]
 
 
-async def test_governance_runtime_schema_and_dispose_delegate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.prefetch_policy_index", MagicMock()
-    )
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.set_policy_provider", MagicMock()
-    )
+async def test_governance_runtime_schema_and_dispose_delegate() -> None:
     delegate = _StubDelegate()
     runtime = GovernanceRuntime(delegate, policy_provider=None)
 
@@ -318,143 +237,3 @@ async def test_governance_runtime_schema_and_dispose_delegate(
     await runtime.dispose()
     assert delegate.schema_called
     assert delegate.disposed
-
-
-# ---------------------------------------------------------------------------
-# _extract_is_conversational
-# ---------------------------------------------------------------------------
-
-
-def test_extract_is_conversational_true_from_agent_definition() -> None:
-    delegate = SimpleNamespace(
-        _agent_definition=SimpleNamespace(is_conversational=True)
-    )
-    assert _extract_is_conversational(delegate) is True
-
-
-def test_extract_is_conversational_false_from_agent_definition() -> None:
-    delegate = SimpleNamespace(
-        _agent_definition=SimpleNamespace(is_conversational=False)
-    )
-    assert _extract_is_conversational(delegate) is False
-
-
-def test_extract_is_conversational_returns_none_when_unreachable() -> None:
-    """No ``_agent_definition`` anywhere on the chain → ``None`` (let the provider default)."""
-    assert _extract_is_conversational(SimpleNamespace()) is None
-
-
-def test_extract_is_conversational_returns_none_when_field_is_none() -> None:
-    delegate = SimpleNamespace(
-        _agent_definition=SimpleNamespace(is_conversational=None)
-    )
-    assert _extract_is_conversational(delegate) is None
-
-
-def test_extract_is_conversational_unwraps_via_underscore_delegate() -> None:
-    inner = SimpleNamespace(_agent_definition=SimpleNamespace(is_conversational=True))
-    outer = SimpleNamespace(_delegate=inner)
-    assert _extract_is_conversational(outer) is True
-
-
-def test_extract_is_conversational_unwraps_via_delegate_attr() -> None:
-    inner = SimpleNamespace(_agent_definition=SimpleNamespace(is_conversational=False))
-    outer = SimpleNamespace(delegate=inner)
-    assert _extract_is_conversational(outer) is False
-
-
-def test_extract_is_conversational_depth_capped() -> None:
-    """A pathological self-referential wrapper can't loop forever."""
-    self_ref = SimpleNamespace()
-    self_ref._delegate = self_ref  # type: ignore[attr-defined]
-    assert _extract_is_conversational(self_ref) is None
-
-
-# ---------------------------------------------------------------------------
-# GovernanceRuntime wires the selector
-# ---------------------------------------------------------------------------
-
-
-def test_governance_runtime_sets_agent_type_from_delegate() -> None:
-    """Init reads ``delegate._agent_definition.is_conversational`` and writes the selector."""
-    delegate = SimpleNamespace(
-        _agent_definition=SimpleNamespace(is_conversational=True),
-        execute=_StubDelegate().execute,
-        stream=_StubDelegate().stream,
-        get_schema=_StubDelegate().get_schema,
-        dispose=_StubDelegate().dispose,
-    )
-
-    # Don't run the real prefetch thread — just confirm the selector
-    # ended up where the provider would read it.
-    GovernanceRuntime(delegate, policy_provider=None)
-
-    assert loader._agent_is_conversational is True
-
-
-def test_governance_runtime_sets_none_when_agent_definition_missing() -> None:
-    """No ``_agent_definition`` → selector stays unset (``None``)."""
-    GovernanceRuntime(_StubDelegate(), policy_provider=None)
-    assert loader._agent_is_conversational is None
-
-
-def test_governance_runtime_preserves_externally_set_selector_on_extraction_miss() -> None:
-    """Externally-set selector survives a runtime init that finds no ``_agent_definition``.
-
-    Regression: previously ``__init__`` unconditionally wrote whatever
-    ``_extract_is_conversational`` returned, so an extraction miss
-    (``None``) silently clobbered a value an integration had pre-seeded.
-    """
-    set_agent_conversational(True)
-    GovernanceRuntime(_StubDelegate(), policy_provider=None)
-    assert loader._agent_is_conversational is True
-
-
-def test_governance_runtime_fails_open_when_extraction_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A pathological delegate accessor raising mid-extraction can't break init."""
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime._extract_is_conversational",
-        MagicMock(side_effect=RuntimeError("boom")),
-    )
-    set_provider_spy = MagicMock()
-    prefetch_spy = MagicMock()
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.set_policy_provider", set_provider_spy
-    )
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime.prefetch_policy_index", prefetch_spy
-    )
-
-    # No exception escapes; the rest of init still runs.
-    GovernanceRuntime(_StubDelegate(), policy_provider=None)
-
-    set_provider_spy.assert_called_once_with(None)
-    prefetch_spy.assert_called_once_with()
-
-
-def test_governance_runtime_skips_extraction_when_ff_off(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """FF off → no selector write, no provider registration, no prefetch."""
-    from uipath.core.feature_flags import FeatureFlags
-
-    FeatureFlags.configure_flags({"EnablePythonGovernanceChecker": False})
-
-    extract_spy = MagicMock()
-    monkeypatch.setattr(
-        "uipath.runtime.governance.runtime._extract_is_conversational", extract_spy
-    )
-
-    delegate = SimpleNamespace(
-        _agent_definition=SimpleNamespace(is_conversational=True),
-        execute=_StubDelegate().execute,
-        stream=_StubDelegate().stream,
-        get_schema=_StubDelegate().get_schema,
-        dispose=_StubDelegate().dispose,
-    )
-    GovernanceRuntime(delegate, policy_provider=None)
-
-    assert not extract_spy.called
-    assert loader._agent_is_conversational is None

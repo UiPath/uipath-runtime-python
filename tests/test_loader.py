@@ -1,11 +1,15 @@
-"""Tests for the policy loader module.
+"""Tests for the policy loader.
 
-Provider-only world: the loader fetches policies exclusively through a
-registered :class:`GovernancePolicyProvider`. Tests here cover the
-caching, FF-gate, prefetch coordination, and fallback-to-empty behavior
-that's independent of any specific provider. End-to-end provider
-plumbing (mode application, YAML parsing, runtime wrapper integration)
-lives in :mod:`tests.test_governance_runtime`.
+Provider-only world: each :class:`PolicyLoader` is instance-scoped and
+bound to one :class:`GovernancePolicyProvider`. Tests here cover the
+caching, prefetch coordination, and fallback-to-empty behavior
+independent of any specific provider. End-to-end provider plumbing
+(mode application, YAML parsing, runtime wrapper integration) lives in
+:mod:`tests.test_governance_runtime`.
+
+The loader no longer reads the governance feature flag — deciding
+whether governance attaches at all is the wiring layer's concern, not
+the loader's.
 """
 
 from __future__ import annotations
@@ -23,16 +27,8 @@ from uipath.core.governance import (
 )
 
 from tests._helpers import StubPolicyProvider, reset_enforcement_mode
-from uipath.runtime.governance.native import loader
-from uipath.runtime.governance.native.loader import (
-    _empty_index_reason,
-    clear_policy_cache,
-    get_available_packs,
-    get_policy_index,
-    load_policy_index,
-    prefetch_policy_index,
-    set_policy_provider,
-)
+from uipath.runtime.governance.native import loader as loader_mod
+from uipath.runtime.governance.native.loader import PolicyLoader
 from uipath.runtime.governance.native.models import PolicyIndex
 
 SIMPLE_POLICY_YAML = """
@@ -48,60 +44,48 @@ rules:
 
 
 def _ok_response() -> PolicyResponse:
-    return PolicyResponse(
-        mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML
-    )
+    return PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
 
 
 @pytest.fixture(autouse=True)
-def _clean_loader_state():
-    """Each test starts with a fresh loader cache and FF on."""
-    from uipath.core.feature_flags import FeatureFlags
-
-    clear_policy_cache()
+def _clean_enforcement_mode() -> Any:
+    """Each test starts from a clean enforcement-mode slate."""
     reset_enforcement_mode()
-    set_policy_provider(None)
-    FeatureFlags.configure_flags({"EnablePythonGovernanceChecker": True})
     yield
-    clear_policy_cache()
     reset_enforcement_mode()
-    set_policy_provider(None)
-    FeatureFlags.reset_flags()
 
 
 # ---------------------------------------------------------------------------
-# _empty_index_reason
+# _empty_index_reason — diagnostic string for the "no policies" log
 # ---------------------------------------------------------------------------
 
 
 def test_empty_index_reason_no_provider() -> None:
-    msg = _empty_index_reason()
+    msg = PolicyLoader(None)._empty_index_reason()
     assert "no policy provider" in msg
 
 
 def test_empty_index_reason_with_provider() -> None:
-    set_policy_provider(StubPolicyProvider(response=_ok_response()))
-    msg = _empty_index_reason()
+    msg = PolicyLoader(StubPolicyProvider(response=_ok_response()))._empty_index_reason()
     assert "provider returned no policies" in msg
 
 
 # ---------------------------------------------------------------------------
-# load_policy_index — public entry
+# load_policy_index — synchronous entry point
 # ---------------------------------------------------------------------------
 
 
 def test_load_policy_index_empty_when_no_provider() -> None:
-    """No provider registered → empty PolicyIndex."""
-    index = load_policy_index()
+    """No provider supplied → empty PolicyIndex."""
+    index = PolicyLoader(None).load_policy_index()
     assert isinstance(index, PolicyIndex)
     assert index.total_rules == 0
 
 
-def test_load_policy_index_uses_registered_provider() -> None:
+def test_load_policy_index_uses_provider() -> None:
     provider = StubPolicyProvider(response=_ok_response())
-    set_policy_provider(provider)
 
-    index = load_policy_index()
+    index = PolicyLoader(provider).load_policy_index()
 
     assert isinstance(index, PolicyIndex)
     assert "test-pack" in index.pack_names
@@ -109,52 +93,54 @@ def test_load_policy_index_uses_registered_provider() -> None:
 
 
 def test_load_policy_index_returns_empty_when_provider_raises() -> None:
-    set_policy_provider(StubPolicyProvider(raises=RuntimeError("boom")))
-    index = load_policy_index()
+    provider = StubPolicyProvider(raises=RuntimeError("boom"))
+    index = PolicyLoader(provider).load_policy_index()
     assert index.total_rules == 0
 
 
 # ---------------------------------------------------------------------------
-# get_policy_index — caching + FF gate
+# get_policy_index — caching
 # ---------------------------------------------------------------------------
 
 
 def test_get_policy_index_caches_after_first_call() -> None:
     """A second call returns the cached index without re-invoking the provider."""
     provider = StubPolicyProvider(response=_ok_response())
-    set_policy_provider(provider)
+    loader = PolicyLoader(provider)
 
-    a = get_policy_index()
-    b = get_policy_index()
+    a = loader.get_policy_index()
+    b = loader.get_policy_index()
 
     assert a is b
     assert len(provider.calls) == 1
 
 
-def test_get_policy_index_short_circuits_when_ff_off() -> None:
-    """FF off → return an empty index without invoking the provider."""
-    from uipath.core.feature_flags import FeatureFlags
-
-    FeatureFlags.configure_flags({"EnablePythonGovernanceChecker": False})
-    provider = StubPolicyProvider(response=_ok_response())
-    set_policy_provider(provider)
-
-    index = get_policy_index()
-
-    assert index.total_rules == 0
-    assert provider.calls == []
-
-
 def test_get_policy_index_sync_load_when_no_prefetch() -> None:
     """Without a prefetch in flight, get_policy_index synchronously loads."""
-    set_policy_provider(StubPolicyProvider(response=_ok_response()))
-    index = get_policy_index()
+    loader = PolicyLoader(StubPolicyProvider(response=_ok_response()))
+    index = loader.get_policy_index()
     assert index.total_rules == 1
+
+
+def test_get_policy_index_empty_with_no_provider() -> None:
+    """No provider supplied → cached empty index, provider never invoked."""
+    loader = PolicyLoader(None)
+    a = loader.get_policy_index()
+    b = loader.get_policy_index()
+    assert a is b
+    assert a.total_rules == 0
 
 
 # ---------------------------------------------------------------------------
 # Prefetch — idempotency + completion + timeout
 # ---------------------------------------------------------------------------
+
+
+def test_prefetch_no_op_when_provider_is_none() -> None:
+    """No provider → prefetch is a no-op (no thread, no event)."""
+    loader = PolicyLoader(None)
+    loader.prefetch()
+    assert loader._prefetch_event is None
 
 
 def test_prefetch_is_idempotent() -> None:
@@ -166,38 +152,24 @@ def test_prefetch_is_idempotent() -> None:
         return _ok_response()
 
     provider: Any = type("P", (), {"get_policy": staticmethod(_slow_get)})()
-    set_policy_provider(provider)
+    loader = PolicyLoader(provider)
 
-    prefetch_policy_index()
+    loader.prefetch()
     first_event = loader._prefetch_event
-    prefetch_policy_index()
+    loader.prefetch()
     assert loader._prefetch_event is first_event
     block.set()
     if first_event is not None:
         first_event.wait(timeout=2.0)
 
 
-def test_prefetch_skipped_when_ff_off() -> None:
-    """FF off → no prefetch thread started."""
-    from uipath.core.feature_flags import FeatureFlags
-
-    FeatureFlags.configure_flags({"EnablePythonGovernanceChecker": False})
-    provider = StubPolicyProvider(response=_ok_response())
-    set_policy_provider(provider)
-
-    prefetch_policy_index()
-
-    assert provider.calls == []
-    assert loader._prefetch_event is None
-
-
 def test_prefetch_no_op_when_index_already_loaded() -> None:
     """If the index is already cached, prefetch is a no-op."""
     provider = StubPolicyProvider(response=_ok_response())
-    set_policy_provider(provider)
-    get_policy_index()  # populate the cache
+    loader = PolicyLoader(provider)
+    loader.get_policy_index()  # populate the cache
 
-    prefetch_policy_index()
+    loader.prefetch()
 
     assert len(provider.calls) == 1
 
@@ -213,27 +185,32 @@ def test_get_policy_index_waits_for_prefetch_then_returns() -> None:
         return _ok_response()
 
     provider: Any = type("P", (), {"get_policy": staticmethod(_fetch)})()
-    set_policy_provider(provider)
+    loader = PolicyLoader(provider)
 
-    prefetch_policy_index()
+    loader.prefetch()
     assert started.wait(timeout=2.0)
     threading.Thread(
         target=lambda: (time.sleep(0.05), release.set()), daemon=True
     ).start()
-    index = get_policy_index()
+    index = loader.get_policy_index()
     assert index.total_rules == 1
 
 
-def test_get_policy_index_logs_when_prefetch_completes_with_empty_index(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The 'completed but produced no PolicyIndex' branch fires on provider failure."""
+def test_get_policy_index_logs_when_prefetch_completes_with_empty_index() -> None:
+    """The 'completed but produced no PolicyIndex' branch fires on provider failure.
+
+    Manually wire a completed event without populating ``_policy_index`` —
+    simulates a prefetch worker that hit an unexpected error after the
+    event was claimed but before the index was set.
+    """
+    loader = PolicyLoader(StubPolicyProvider(response=_ok_response()))
     event = threading.Event()
-    event.set()  # prefetch already completed
-    monkeypatch.setattr(loader, "_prefetch_event", event)
-    # _policy_index stays None — simulating "prefetch completed but produced nothing"
-    with patch.object(loader.logger, "warning") as mock_warning:
-        index = get_policy_index()
+    event.set()
+    loader._prefetch_event = event
+
+    with patch.object(loader_mod.logger, "warning") as mock_warning:
+        index = loader.get_policy_index()
+
     assert index.total_rules == 0
     assert any(
         "completed but produced no PolicyIndex" in str(call.args[0])
@@ -242,28 +219,95 @@ def test_get_policy_index_logs_when_prefetch_completes_with_empty_index(
 
 
 # ---------------------------------------------------------------------------
-# get_available_packs / clear_policy_cache
+# available_packs / clear_cache
 # ---------------------------------------------------------------------------
 
 
-def test_get_available_packs_before_load_returns_empty() -> None:
-    assert get_available_packs() == []
+def test_available_packs_before_load_returns_empty() -> None:
+    assert PolicyLoader(None).available_packs == []
 
 
-def test_get_available_packs_after_load() -> None:
-    set_policy_provider(StubPolicyProvider(response=_ok_response()))
-    get_policy_index()
-    assert "test-pack" in get_available_packs()
+def test_available_packs_after_load() -> None:
+    loader = PolicyLoader(StubPolicyProvider(response=_ok_response()))
+    loader.get_policy_index()
+    assert "test-pack" in loader.available_packs
 
 
-def test_clear_policy_cache_forces_refetch() -> None:
+def test_clear_cache_forces_refetch() -> None:
     provider = StubPolicyProvider(response=_ok_response())
-    set_policy_provider(provider)
+    loader = PolicyLoader(provider)
 
-    get_policy_index()
-    clear_policy_cache()
-    get_policy_index()
+    loader.get_policy_index()
+    loader.clear_cache()
+    loader.get_policy_index()
 
     assert len(provider.calls) == 2
 
 
+def test_clear_cache_drops_in_flight_worker_result() -> None:
+    """A worker spawned before ``clear_cache`` must not clobber state after it.
+
+    The race: ``prefetch()`` starts a worker, ``clear_cache()`` retires
+    the prefetch event, then the worker finishes and (incorrectly,
+    before the fix) writes its loaded index back over the cleared
+    cache. With the fix the worker checks ``_prefetch_event is event``
+    before publishing and discards its result when orphaned.
+    """
+    block = threading.Event()
+
+    def _slow_get(context: PolicyContext) -> PolicyResponse:
+        block.wait(timeout=2.0)
+        return _ok_response()
+
+    provider: Any = type("P", (), {"get_policy": staticmethod(_slow_get)})()
+    loader = PolicyLoader(provider)
+
+    loader.prefetch()
+    captured_event = loader._prefetch_event
+    assert captured_event is not None  # prefetch actually started
+
+    # Retire the in-flight worker.
+    loader.clear_cache()
+    assert loader._policy_index is None
+    assert loader._prefetch_event is None
+
+    # Release the worker; let it finish and try to publish.
+    block.set()
+    assert captured_event.wait(timeout=2.0)
+
+    # The orphan worker's result must NOT land in the cache.
+    assert loader._policy_index is None
+
+
+# ---------------------------------------------------------------------------
+# Cross-instance isolation — the whole point of instance-scoped state
+# ---------------------------------------------------------------------------
+
+
+def test_two_loaders_do_not_share_cache() -> None:
+    """Concurrent loaders maintain independent caches.
+
+    ``uipath eval`` runs multiple runtimes in parallel; each gets its
+    own loader and must not leak its cached PolicyIndex into the next.
+    """
+    p1 = StubPolicyProvider(response=_ok_response())
+    p2 = StubPolicyProvider(response=_ok_response())
+    l1 = PolicyLoader(p1)
+    l2 = PolicyLoader(p2)
+
+    l1.get_policy_index()
+    l2.get_policy_index()
+
+    assert len(p1.calls) == 1
+    assert len(p2.calls) == 1
+
+
+def test_two_loaders_carry_independent_conversational_selectors() -> None:
+    """Each loader threads its own selector into PolicyContext."""
+    p1 = StubPolicyProvider(response=_ok_response())
+    p2 = StubPolicyProvider(response=_ok_response())
+    PolicyLoader(p1, is_conversational=True).load_policy_index()
+    PolicyLoader(p2, is_conversational=False).load_policy_index()
+
+    assert p1.calls[0].is_conversational is True
+    assert p2.calls[0].is_conversational is False
