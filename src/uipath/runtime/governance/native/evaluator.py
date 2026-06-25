@@ -298,8 +298,9 @@ class GovernanceEvaluator:
             enforcement_mode: Mode the evaluator applies. Defaults to
                 ``AUDIT`` — the safe default for callers that don't
                 explicitly opt in to ENFORCE. The wiring layer should
-                pass ``runtime.enforcement_mode`` here so the
-                evaluator and loader agree on a single source of truth.
+                pass ``runtime.enforcement_mode`` here so the evaluator
+                and the wrapping :class:`GovernanceRuntime` agree on a
+                single source of truth.
             audit_manager: Per-runtime :class:`AuditManager`. When
                 ``None`` the evaluator runs silently (no audit events
                 emitted). Tests that don't care about emission can

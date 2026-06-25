@@ -538,7 +538,7 @@ class AuditManager:
         """Convenience method to emit a rule evaluation event.
 
         ``enforcement_mode`` travels on the event so sinks don't have to
-        read a process-global. With instance-scoped loaders the global
+        read a process-global. With instance-scoped runtimes the global
         wouldn't be authoritative anyway — parallel runtimes can run in
         different modes simultaneously.
         """
@@ -599,7 +599,7 @@ class AuditManager:
 
         Same ``enforcement_mode: EnforcementMode`` contract as
         :meth:`emit_rule_evaluation` and :meth:`emit_hook_summary`
-        — every governance event carries the per-loader mode so sinks
+        — every governance event carries the per-runtime mode so sinks
         don't depend on a process-global.
         """
         self.emit(

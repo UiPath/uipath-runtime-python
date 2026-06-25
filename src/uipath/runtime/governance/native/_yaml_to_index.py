@@ -1,10 +1,11 @@
 """Runtime YAML → PolicyIndex parser.
 
-Mirrors the shape produced by ``packs/compile_packs.py`` but builds the
-PolicyIndex directly from parsed YAML data rather than generating Python
-source. Used by :mod:`uipath.runtime.governance.native.loader` to
-compile the YAML body returned by the registered policy provider into
-an in-memory index at startup.
+Mirrors the shape produced by ``packs/compile_packs.py`` but builds
+the :class:`PolicyIndex` directly from parsed YAML data rather than
+generating Python source. The platform host calls this to compile the
+YAML body returned by :meth:`GovernancePolicyProvider.get_policy_async`
+into an in-memory index, then hands the index to
+:class:`GovernanceRuntime`.
 
 Accepts either a single YAML document (one pack) or a multi-document
 stream (``---``-separated packs). Unknown check types and malformed

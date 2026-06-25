@@ -73,9 +73,10 @@ def _resolve_mode(event: AuditEvent) -> EnforcementMode:
     """Read the enforcement mode the evaluator stamped on the event.
 
     Mode travels with the event (set by :meth:`AuditManager.emit_rule_evaluation`
-    / :meth:`emit_hook_summary` from the loader's per-instance mode) so
-    the sink doesn't read a process-global that wouldn't be authoritative
-    in a parallel-runtime setup.
+    / :meth:`emit_hook_summary` from the per-runtime
+    :attr:`GovernanceRuntime.enforcement_mode`) so the sink doesn't
+    read a process-global that wouldn't be authoritative in a
+    parallel-runtime setup.
 
     Falls back to ``AUDIT`` only when the field is missing — that's a
     contract violation by the emitter (every governance event must carry
@@ -212,7 +213,7 @@ class TracesAuditSink(AuditSink):
                 # multiple SDKs / governance backends co-exist.
                 span.set_attribute(f"{NS}.source", GOVERNANCE_SOURCE)
                 # Hook summary attributes. Mode comes from the event — the
-                # evaluator stamps it from the per-loader instance, so the
+                # evaluator stamps it from the per-runtime instance, so the
                 # sink is correct for parallel runtimes running different
                 # modes.
                 mode = _resolve_mode(event)
@@ -272,7 +273,7 @@ class TracesAuditSink(AuditSink):
 
                 # Derive the spec-vocabulary verdict pair from the raw
                 # (matched, configured action, mode) tuple. Mode comes
-                # from the event (per-loader instance) so parallel
+                # from the event (per-runtime instance) so parallel
                 # runtimes running different modes don't cross-contaminate.
                 # Single source of truth for the emitted attributes below
                 # AND the verbosityLevel/Status decision further down.
