@@ -1,28 +1,30 @@
 """Governance runtime wrapper.
 
-Wraps a :class:`UiPathRuntimeProtocol` delegate so policy data is sourced
-through a :class:`GovernancePolicyProvider`. The provider owns the wire
-/ transport (auth, retries, telemetry); the runtime only consumes the
-parsed :class:`PolicyResponse`. There is no direct backend fallback —
-when ``policy_provider`` is ``None`` the agent runs without any
-governance policies.
+Wraps a :class:`UiPathRuntimeProtocol` delegate. The wrapper is
+**pure** — it holds an already-resolved :class:`PolicyIndex` and
+:class:`EnforcementMode` passed in by the host. No I/O happens at
+construction, no background thread is spun up, no provider is held.
 
-The wiring layer (uipath CLI) decides whether to construct
-``GovernanceRuntime`` at all (feature flag, project config, etc.) and
-passes ``is_conversational`` and ``trace_id`` explicitly. The runtime
-layer does not introspect the delegate's private attributes nor read
-env vars to discover those.
+Why: per the architecture-review §2.4 prescription, the policy fetch
+belongs to the async host (uipath CLI), which does
+``await provider.get_policy_async(PolicyContext(is_conversational=...))``
+itself, compiles the response YAML via
+:func:`build_policy_index_from_yaml`, and hands the resolved
+``PolicyIndex`` + mode into this constructor. The runtime layer
+becomes a passive consumer of a snapshot; the host owns lifecycle
+(refetch, refresh, dispose).
 
-**Staging caveat — policy loading only, no enforcement yet.** This
-module is the policy-loading scaffold: ``__init__`` constructs an
-instance-scoped :class:`PolicyLoader` and kicks off a background
-prefetch. ``execute`` / ``stream`` / ``get_schema`` / ``dispose`` are
-pure passthroughs — no per-hook policy evaluation runs. The evaluator
-and framework adapter wiring that consumes the loader's policy index
-and the ``trace_id`` lands in a follow-up slice. Customers constructing
-:class:`GovernanceRuntime` today get policy loading without policy
-enforcement; this is intentional and will change when the evaluator
-slice merges.
+Agent-type selection (``is_conversational``) lives in the host's
+:class:`PolicyContext` construction, not on this wrapper. The
+generic runtime layer no longer carries that selector.
+
+**Staging caveat — policy data only, no enforcement yet.** ``execute``
+/ ``stream`` / ``get_schema`` / ``dispose`` are pure passthroughs;
+per-hook policy evaluation lands in a follow-up slice that wires the
+evaluator into the host's decorator chain. Constructing
+:class:`GovernanceRuntime` today gives you the resolved policy
+snapshot exposed via :attr:`policy_index` and :attr:`enforcement_mode`
+for the evaluator to pick up.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from __future__ import annotations
 import logging
 from typing import Any, AsyncGenerator
 
-from uipath.core.governance import GovernancePolicyProvider
+from uipath.core.governance import EnforcementMode
 
 from uipath.runtime.base import (
     UiPathExecuteOptions,
@@ -38,7 +40,7 @@ from uipath.runtime.base import (
     UiPathStreamOptions,
 )
 from uipath.runtime.events import UiPathRuntimeEvent
-from uipath.runtime.governance.native.loader import PolicyLoader
+from uipath.runtime.governance.native.models import PolicyIndex
 from uipath.runtime.result import UiPathRuntimeResult
 from uipath.runtime.schema import UiPathRuntimeSchema
 
@@ -48,67 +50,67 @@ logger = logging.getLogger(__name__)
 class GovernanceRuntime:
     """Governance wrapper over a :class:`UiPathRuntimeProtocol` delegate.
 
-    Constructs an instance-scoped :class:`PolicyLoader` bound to the
-    supplied provider and kicks off a non-blocking prefetch so the
-    policy pack overlaps with the rest of agent setup. When
-    ``policy_provider`` is ``None``, the loader yields an empty
-    PolicyIndex and the agent runs without any governance policies for
-    the lifetime of this instance.
+    The constructor takes a **resolved** :class:`PolicyIndex` and
+    :class:`EnforcementMode` — the host has already done the async
+    fetch via the policy provider and compiled the YAML. The runtime
+    holds the snapshot for the lifetime of the wrapping instance.
 
-    **Policy loading only — no enforcement yet.** ``execute`` / ``stream``
-    / ``get_schema`` / ``dispose`` are passthroughs to the delegate; no
-    per-hook policy evaluation runs in this slice. The evaluator and
-    framework adapter wiring that consumes the loader's policy index is
-    staged separately.
+    **Policy data only — no enforcement yet.** ``execute`` / ``stream``
+    / ``get_schema`` / ``dispose`` are passthroughs to the delegate;
+    the evaluator + framework adapter that consume
+    :attr:`policy_index` / :attr:`enforcement_mode` are staged
+    separately.
     """
 
     def __init__(
         self,
         delegate: UiPathRuntimeProtocol,
-        policy_provider: GovernancePolicyProvider | None,
+        policy_index: PolicyIndex,
+        enforcement_mode: EnforcementMode,
         *,
-        is_conversational: bool | None = None,
         trace_id: str | None = None,
     ):
-        """Initialize the governance runtime.
+        """Initialize the governance runtime with a resolved policy snapshot.
 
         Args:
             delegate: The wrapped runtime to forward execution to.
-            policy_provider: Source of the policy pack. ``None`` means
-                no policies will be loaded — the agent runs without
-                governance for the lifetime of this instance.
-            is_conversational: Whether the hosted agent is
-                conversational. Forwarded into the provider's
-                :class:`PolicyContext` so it can pick the right policy
-                view (conversational vs autonomous). ``None`` (default)
-                leaves the selector unset — the provider applies its
-                default. The wiring layer (uipath CLI) is expected to
-                pass the concrete value when it knows the agent type.
-            trace_id: Trace identifier the platform host has bound to
-                this run (typically read from ``UIPATH_TRACE_ID`` by
-                the wiring layer). The evaluator slice forwards this
-                into the :class:`GuardrailCompensator` so server-written
-                compensation records land on the agent's run trace
-                instead of a detached id. ``None`` (default) leaves
+            policy_index: Resolved :class:`PolicyIndex` the host built
+                from the provider's :class:`PolicyResponse`. Pass an
+                empty ``PolicyIndex()`` to attach the wrapper without
+                any rules (useful when the wrapper exists for audit
+                emission only).
+            enforcement_mode: Resolved :class:`EnforcementMode` from
+                the provider's :class:`PolicyResponse`. The host is
+                expected to skip wrapping entirely when the response
+                mode is :attr:`EnforcementMode.DISABLED`; this
+                constructor doesn't check.
+            trace_id: Trace identifier the platform host bound to this
+                run (typically read from ``UIPATH_TRACE_ID`` by the
+                wiring layer). Forwarded to the
+                :class:`GuardrailCompensator` by the evaluator slice
+                so server-written compensation records land on the
+                agent's run trace. ``None`` (default) leaves
                 downstream consumers to fall back to the live OTel
                 span / caller-supplied value.
         """
         self._delegate = delegate
+        self._policy_index = policy_index
+        self._enforcement_mode = enforcement_mode
         self._trace_id = trace_id
-        self._loader = PolicyLoader(
-            policy_provider,
-            is_conversational=is_conversational,
-        )
-        self._loader.prefetch()
 
     @property
-    def loader(self) -> PolicyLoader:
-        """The instance-scoped policy loader.
+    def policy_index(self) -> PolicyIndex:
+        """The resolved policy snapshot this runtime evaluates against.
 
-        Exposed so adapters / evaluators wired into this runtime can
-        call :meth:`PolicyLoader.get_policy_index` at hook time.
+        Exposed so the evaluator slice can pick it up when it wires
+        per-hook evaluation into ``execute`` / ``stream``.
         """
-        return self._loader
+        return self._policy_index
+
+    @property
+    def enforcement_mode(self) -> EnforcementMode:
+        """The enforcement mode the host supplied at construction."""
+        return self._enforcement_mode
 
     @property
     def trace_id(self) -> str | None:

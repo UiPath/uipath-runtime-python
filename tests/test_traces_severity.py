@@ -6,9 +6,10 @@ cross-product unification doc — verdict is split into ``evaluator_result``
 (what the rule decided, mode-independent) and ``action_applied`` (what
 actually happened, derived from evaluator_result + mode).
 
-Mode travels with the event (set by the evaluator from the per-loader
-:class:`PolicyLoader.enforcement_mode`) so parallel runtimes running
-different modes don't cross-contaminate the sink's view.
+Mode travels with the event (set by the evaluator from the per-runtime
+:attr:`GovernanceRuntime.enforcement_mode` the host supplied) so
+parallel runtimes running different modes don't cross-contaminate the
+sink's view.
 
 - ``verbosityLevel = 4`` (Error) and ``StatusCode.ERROR`` fire **only**
   when ``action_applied = DENY`` — i.e. the runtime actually blocked

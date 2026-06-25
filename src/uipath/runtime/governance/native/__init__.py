@@ -1,14 +1,17 @@
 """Native UiPath governance policy evaluator.
 
 YAML-defined rules evaluated in-process at each agent lifecycle hook.
-Reads policies through a :class:`GovernancePolicyProvider` (the provider
-owns the wire transport) and runs the deterministic detectors backing
-ISO 42001 controls.
+The host fetches the policy pack via the
+:class:`GovernancePolicyProvider` protocol and compiles it into a
+:class:`PolicyIndex` with :func:`build_policy_index_from_yaml` *before*
+constructing :class:`GovernanceRuntime` — so the runtime layer never
+performs I/O at construction time.
 
 This subpackage owns:
 
 - :class:`GovernanceEvaluator` – the evaluator implementation.
-- :class:`PolicyLoader` – the instance-scoped policy cache + prefetch.
+- :func:`build_policy_index_from_yaml` – pure YAML → :class:`PolicyIndex`
+  compiler.
 - The native policy model: :class:`Rule`, :class:`Check`,
   :class:`Condition`, :class:`PolicyIndex`.
 
@@ -16,8 +19,8 @@ Shared output types (``Action``, ``AuditRecord``, …) live in
 :mod:`uipath.core.governance`.
 """
 
+from ._yaml_to_index import build_policy_index_from_yaml
 from .evaluator import GovernanceEvaluator
-from .loader import PolicyLoader
 from .models import (
     Check,
     CheckContext,
@@ -30,7 +33,7 @@ from .models import (
 
 __all__ = [
     "GovernanceEvaluator",
-    "PolicyLoader",
+    "build_policy_index_from_yaml",
     # Native policy model
     "Check",
     "CheckContext",

@@ -1,23 +1,21 @@
-"""Tests for the GovernanceRuntime wrapper and the provider loader path.
+"""Tests for :class:`GovernanceRuntime` — pure resolved-policy wrapper.
 
-The runtime no longer introspects the delegate's private attributes to
-discover the conversational flag — the wiring layer passes it
-explicitly. The runtime also no longer reads the governance feature
-flag: the wiring layer decides whether to construct
-:class:`GovernanceRuntime` at all.
+The runtime takes an already-resolved :class:`PolicyIndex` +
+:class:`EnforcementMode` at construction (the host fetched the policy
+asynchronously via the :class:`GovernancePolicyProvider` and compiled
+the YAML). Tests here confirm the wrapper holds the snapshot and
+passes execution straight through to the delegate.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from uipath.core.governance import (
-    EnforcementMode,
-    PolicyResponse,
-)
+from uipath.core.governance import EnforcementMode
 
-from tests._helpers import StubPolicyProvider
-from uipath.runtime.governance.native.loader import PolicyLoader
+from uipath.runtime.governance.native import (
+    build_policy_index_from_yaml,
+)
 from uipath.runtime.governance.native.models import PolicyIndex
 from uipath.runtime.governance.runtime import GovernanceRuntime
 
@@ -33,107 +31,28 @@ rules:
 """
 
 
-# Each test constructs a fresh ``PolicyLoader`` / ``GovernanceRuntime``
-# — no module-level state to reset.
-
-
 # ---------------------------------------------------------------------------
-# PolicyLoader — provider plumbing (mode application, context, errors)
+# build_policy_index_from_yaml — host-side compile path
 # ---------------------------------------------------------------------------
 
 
-def test_loader_builds_index_and_applies_mode() -> None:
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.ENFORCE, policies=SIMPLE_POLICY_YAML)
-    )
-
-    loader = PolicyLoader(provider)
-    index = loader.load_policy_index()
-
+def test_build_policy_index_from_yaml_compiles_pack() -> None:
+    """The host uses this to turn the provider's YAML response into the snapshot."""
+    index = build_policy_index_from_yaml(SIMPLE_POLICY_YAML)
     assert isinstance(index, PolicyIndex)
     assert index.total_rules == 1
     assert "provider-pack" in index.pack_names
-    assert loader.enforcement_mode == EnforcementMode.ENFORCE
 
 
-def test_loader_passes_is_conversational_in_context() -> None:
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
-    )
-
-    PolicyLoader(provider, is_conversational=True).load_policy_index()
-
-    assert len(provider.calls) == 1
-    assert provider.calls[0].is_conversational is True
-
-
-def test_loader_omits_is_conversational_when_unset() -> None:
-    """``is_conversational=None`` (the default) leaves the selector unset."""
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
-    )
-
-    PolicyLoader(provider).load_policy_index()
-
-    assert len(provider.calls) == 1
-    assert provider.calls[0].is_conversational is None
-
-
-def test_loader_returns_empty_when_provider_raises() -> None:
-    provider = StubPolicyProvider(raises=RuntimeError("boom"))
-    index = PolicyLoader(provider).load_policy_index()
+def test_build_policy_index_from_yaml_empty_yields_empty_index() -> None:
+    """Empty YAML compiles to an empty PolicyIndex — host can pass straight through."""
+    index = build_policy_index_from_yaml("")
+    assert isinstance(index, PolicyIndex)
     assert index.total_rules == 0
-
-
-def test_loader_returns_empty_on_empty_policies() -> None:
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies="")
-    )
-    index = PolicyLoader(provider).load_policy_index()
-    assert index.total_rules == 0
-
-
-def test_loader_returns_empty_on_zero_rules() -> None:
-    empty_pack_yaml = "standard: empty\nrules: []\n"
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=empty_pack_yaml)
-    )
-    index = PolicyLoader(provider).load_policy_index()
-    assert index.total_rules == 0
-
-
-def test_loader_returns_empty_on_malformed_yaml() -> None:
-    provider = StubPolicyProvider(
-        response=PolicyResponse(
-            mode=EnforcementMode.AUDIT, policies="key: : invalid: : yaml"
-        )
-    )
-    index = PolicyLoader(provider).load_policy_index()
-    assert index.total_rules == 0
-
-
-def test_loader_does_not_change_mode_when_response_mode_is_none() -> None:
-    """Provider returning ``mode=None`` doesn't clobber a previously-set mode."""
-    p1 = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.ENFORCE, policies=SIMPLE_POLICY_YAML)
-    )
-    loader = PolicyLoader(p1)
-    loader.load_policy_index()
-    assert loader.enforcement_mode == EnforcementMode.ENFORCE
-
-    # Next load via a different provider that returns mode=None must not
-    # demote the loader's mode back to AUDIT.
-    loader._provider = StubPolicyProvider(
-        response=PolicyResponse(mode=None, policies=SIMPLE_POLICY_YAML)
-    )
-    loader.clear_cache()
-    loader.load_policy_index()
-
-    assert loader.enforcement_mode == EnforcementMode.ENFORCE
 
 
 # ---------------------------------------------------------------------------
-# GovernanceRuntime — passthroughs + loader wiring
+# GovernanceRuntime — passthroughs + snapshot exposure
 # ---------------------------------------------------------------------------
 
 
@@ -163,52 +82,46 @@ class _StubDelegate:
         self.disposed = True
 
 
-def test_governance_runtime_exposes_loader_bound_to_provider() -> None:
-    """The wrapper builds an instance-scoped PolicyLoader carrying the provider."""
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
+def _make_runtime(
+    delegate: _StubDelegate | None = None,
+    *,
+    policy_index: PolicyIndex | None = None,
+    enforcement_mode: EnforcementMode = EnforcementMode.AUDIT,
+    trace_id: str | None = None,
+) -> GovernanceRuntime:
+    """Build a runtime with sensible test defaults."""
+    return GovernanceRuntime(
+        delegate or _StubDelegate(),
+        policy_index if policy_index is not None else PolicyIndex(),
+        enforcement_mode,
+        trace_id=trace_id,
     )
 
-    runtime = GovernanceRuntime(_StubDelegate(), policy_provider=provider)
 
-    assert isinstance(runtime.loader, PolicyLoader)
-    assert runtime.loader._provider is provider
-
-
-def test_governance_runtime_forwards_is_conversational_to_loader() -> None:
-    """The constructor's explicit ``is_conversational`` reaches PolicyContext."""
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
-    )
-
-    runtime = GovernanceRuntime(
-        _StubDelegate(), policy_provider=provider, is_conversational=True
-    )
-    # Force the prefetch to land — load synchronously so we can read calls[0].
-    runtime.loader.get_policy_index()
-
-    assert provider.calls, "provider.get_policy was never invoked"
-    assert provider.calls[0].is_conversational is True
+# ---------------------------------------------------------------------------
+# Snapshot exposure — the host hands resolved values in, runtime reads them back
+# ---------------------------------------------------------------------------
 
 
-def test_governance_runtime_loader_default_selector_is_none() -> None:
-    """Omitting ``is_conversational`` leaves the selector unset on PolicyContext."""
-    provider = StubPolicyProvider(
-        response=PolicyResponse(mode=EnforcementMode.AUDIT, policies=SIMPLE_POLICY_YAML)
-    )
-
-    runtime = GovernanceRuntime(_StubDelegate(), policy_provider=provider)
-    runtime.loader.get_policy_index()
-
-    assert provider.calls[0].is_conversational is None
+def test_governance_runtime_exposes_resolved_policy_index() -> None:
+    """The ``policy_index`` constructor arg is reachable via the property."""
+    index = build_policy_index_from_yaml(SIMPLE_POLICY_YAML)
+    runtime = _make_runtime(policy_index=index)
+    assert runtime.policy_index is index
+    assert runtime.policy_index.total_rules == 1
+    assert "provider-pack" in runtime.policy_index.pack_names
 
 
-def test_governance_runtime_with_none_provider_yields_empty_index() -> None:
-    """No provider → loader yields an empty PolicyIndex, no provider invocation."""
-    runtime = GovernanceRuntime(_StubDelegate(), policy_provider=None)
+def test_governance_runtime_exposes_enforcement_mode() -> None:
+    """The ``enforcement_mode`` constructor arg is reachable via the property."""
+    runtime = _make_runtime(enforcement_mode=EnforcementMode.ENFORCE)
+    assert runtime.enforcement_mode is EnforcementMode.ENFORCE
 
-    index = runtime.loader.get_policy_index()
-    assert index.total_rules == 0
+
+def test_governance_runtime_with_empty_index_carries_no_rules() -> None:
+    """Empty ``PolicyIndex()`` is a valid snapshot — wrapper attaches with no rules."""
+    runtime = _make_runtime(policy_index=PolicyIndex())
+    assert runtime.policy_index.total_rules == 0
 
 
 def test_governance_runtime_stashes_trace_id() -> None:
@@ -220,23 +133,24 @@ def test_governance_runtime_stashes_trace_id() -> None:
     forwards it into the :class:`GuardrailCompensator` constructor so
     compensation records land on the agent's run trace.
     """
-    runtime = GovernanceRuntime(
-        _StubDelegate(),
-        policy_provider=None,
-        trace_id="wired-trace-0001",
-    )
+    runtime = _make_runtime(trace_id="wired-trace-0001")
     assert runtime.trace_id == "wired-trace-0001"
 
 
 def test_governance_runtime_default_trace_id_is_none() -> None:
     """Omitting ``trace_id`` leaves the property as ``None``."""
-    runtime = GovernanceRuntime(_StubDelegate(), policy_provider=None)
+    runtime = _make_runtime()
     assert runtime.trace_id is None
+
+
+# ---------------------------------------------------------------------------
+# Passthrough behavior
+# ---------------------------------------------------------------------------
 
 
 async def test_governance_runtime_execute_delegates() -> None:
     delegate = _StubDelegate()
-    runtime = GovernanceRuntime(delegate, policy_provider=None)
+    runtime = _make_runtime(delegate)
 
     result = await runtime.execute({"x": 1})
 
@@ -246,7 +160,7 @@ async def test_governance_runtime_execute_delegates() -> None:
 
 async def test_governance_runtime_stream_delegates() -> None:
     delegate = _StubDelegate()
-    runtime = GovernanceRuntime(delegate, policy_provider=None)
+    runtime = _make_runtime(delegate)
 
     events = [e async for e in runtime.stream({"x": 1})]
 
@@ -256,7 +170,7 @@ async def test_governance_runtime_stream_delegates() -> None:
 
 async def test_governance_runtime_schema_and_dispose_delegate() -> None:
     delegate = _StubDelegate()
-    runtime = GovernanceRuntime(delegate, policy_provider=None)
+    runtime = _make_runtime(delegate)
 
     assert await runtime.get_schema() == "schema"
     await runtime.dispose()

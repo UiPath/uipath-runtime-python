@@ -19,7 +19,7 @@ def temp_dir() -> Generator[str, None, None]:
         yield tmp_dir
 
 
-# Governance state — provider, conversational selector, policy cache,
-# enforcement mode — is owned by each :class:`PolicyLoader` instance,
-# so no autouse cross-test reset is needed. Tests that want a clean
-# slate just construct a fresh loader.
+# Governance state is held inline on the :class:`GovernanceRuntime`
+# instance — the host passes a resolved :class:`PolicyIndex` +
+# :class:`EnforcementMode` into the constructor, no module-level
+# state, no cross-test reset needed.

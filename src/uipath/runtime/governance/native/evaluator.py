@@ -291,12 +291,14 @@ class GovernanceEvaluator:
 
         Args:
             policy_index: The compiled :class:`PolicyIndex` to evaluate.
-                Typically sourced from the owning runtime's
-                :class:`PolicyLoader`.
+                Typically read from :attr:`GovernanceRuntime.policy_index`
+                — the host built it from the provider's
+                :class:`PolicyResponse` via
+                :func:`build_policy_index_from_yaml`.
             enforcement_mode: Mode the evaluator applies. Defaults to
                 ``AUDIT`` — the safe default for callers that don't
                 explicitly opt in to ENFORCE. The wiring layer should
-                pass ``policy_loader.enforcement_mode`` here so the
+                pass ``runtime.enforcement_mode`` here so the
                 evaluator and loader agree on a single source of truth.
             audit_manager: Per-runtime :class:`AuditManager`. When
                 ``None`` the evaluator runs silently (no audit events
