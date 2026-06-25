@@ -43,10 +43,6 @@ from uipath.runtime.resumable.runtime import (
 )
 from uipath.runtime.schema import UiPathRuntimeSchema
 from uipath.runtime.storage import UiPathRuntimeStorageProtocol
-from uipath.runtime.wrapper import (
-    GOVERNANCE_FEATURE_FLAG,
-    apply_governance_wrapper,
-)
 
 __all__ = [
     "UiPathExecuteOptions",
@@ -77,7 +73,4 @@ __all__ = [
     "UiPathResumeTriggerName",
     "UiPathChatProtocol",
     "UiPathChatRuntime",
-    # Governance integration (direct, FF-gated, lazy import)
-    "GOVERNANCE_FEATURE_FLAG",
-    "apply_governance_wrapper",
 ]
