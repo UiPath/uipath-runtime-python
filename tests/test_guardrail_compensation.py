@@ -215,6 +215,37 @@ def test_submit_invokes_provider_with_govern_request() -> None:
     assert request.process_key is None
     assert request.reference_id is None
     assert request.agent_version is None
+    # Runtime-identity fields are unset without metadata (server defaults them).
+    assert request.agent_framework is None
+    assert request.agent_type is None
+    assert request.runtime_version is None
+
+
+def test_submit_stamps_runtime_metadata() -> None:
+    """When runtime_metadata is supplied, its identity fields ride the request."""
+    from uipath.runtime.governance._audit.metadata import GovernanceRuntimeMetadata
+
+    meta = GovernanceRuntimeMetadata(
+        agent_type="uipath_coded",
+        agent_framework="langchain",
+        runtime_version="0.11.4",
+    )
+    provider = _provider()
+    compensator = GuardrailCompensator(provider, runtime_metadata=meta)
+
+    compensator.submit(
+        _rules("pii_detection"),
+        {"content": "x"},
+        "before_model",
+        "2026-06-06T00:00:00Z",
+        "langchain",
+        "patch-langchain",
+    )
+
+    (request,) = provider.compensate.call_args.args
+    assert request.agent_framework == "langchain"
+    assert request.agent_type == "uipath_coded"
+    assert request.runtime_version == "0.11.4"
 
 
 def test_submit_dedupes_validators() -> None:

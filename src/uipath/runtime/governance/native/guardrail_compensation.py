@@ -25,6 +25,8 @@ from uipath.core.governance import (
     GovernRequest,
 )
 
+from .._audit.metadata import GovernanceRuntimeMetadata
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,15 +111,26 @@ class GuardrailCompensator:
     never breaks the agent hook.
     """
 
-    def __init__(self, provider: GovernanceCompensationProvider) -> None:
+    def __init__(
+        self,
+        provider: GovernanceCompensationProvider,
+        *,
+        runtime_metadata: GovernanceRuntimeMetadata | None = None,
+    ) -> None:
         """Construct a compensator bound to one provider.
 
         Args:
             provider: Host-supplied
                 :class:`GovernanceCompensationProvider`. ``compensate``
                 is invoked synchronously on the agent's hook thread.
+            runtime_metadata: Per-run identity (agent framework / type /
+                runtime version) stamped onto the ``/runtime/govern`` call
+                so the server can attach it to the rule-denied telemetry it
+                emits. ``None`` leaves the fields unset (server defaults
+                them to ``unknown``).
         """
         self._provider = provider
+        self._runtime_metadata = runtime_metadata
 
     def submit(
         self,
@@ -139,6 +152,7 @@ class GuardrailCompensator:
         if not validators:
             return
 
+        meta = self._runtime_metadata
         request = GovernRequest(
             validators=validators,
             rules=rules,
@@ -147,6 +161,9 @@ class GuardrailCompensator:
             src_timestamp=src_timestamp,
             agent_name=agent_name,
             runtime_id=runtime_id,
+            agent_framework=meta.agent_framework if meta else None,
+            agent_type=meta.agent_type if meta else None,
+            runtime_version=meta.runtime_version if meta else None,
         )
 
         try:

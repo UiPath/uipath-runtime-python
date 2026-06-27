@@ -24,17 +24,28 @@ duplicate boundary evaluations; the runtime layer is the unambiguous
 hooks (BEFORE_MODEL, AFTER_MODEL, TOOL_CALL, AFTER_TOOL) are fired by
 adapters that observe per-step events.
 
-Trace-id is intentionally **not** carried on this wrapper. The
-governance compensator dispatches synchronously on the caller's
-thread; the injected provider resolves the canonical trace id at
-call time. The runtime layer is fully env-free for this path.
+Trace correlation: :meth:`UiPathGovernedRuntime.execute` and
+:meth:`UiPathGovernedRuntime.stream` open a single OTel span that
+wraps BEFORE_AGENT, the delegate's run (including any framework
+adapter spans), and AFTER_AGENT. The span inherits the host's
+ambient context when one is set, or opens a new root trace
+otherwise. Every governance event emitted under that span shares
+its ``trace_id``, so runtime-layer telemetry and framework-layer
+OTel spans correlate end-to-end. Downstream consumers map that
+``trace_id`` to whatever correlation field they use.
+
+The governance compensator dispatches synchronously on the caller's
+thread; the injected compensation provider resolves the canonical
+trace id at call time. The runtime layer remains env-free for that
+path.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncGenerator
+from contextlib import contextmanager
+from typing import Any, AsyncGenerator, Callable, Iterator
 
 from uipath.core.governance import EnforcementMode
 from uipath.core.governance.exceptions import GovernanceBlockException
@@ -52,6 +63,60 @@ from uipath.runtime.result import UiPathRuntimeResult
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _governance_root_span(agent_name: str, runtime_id: str) -> Iterator[None]:
+    """Open the governance run's root OTel span if OTel is available.
+
+    Every governance event and every framework OTel span emitted
+    inside this block inherits the span's ``trace_id``. The result
+    is one trace per agent run that correlates BEFORE_AGENT,
+    BEFORE_MODEL / AFTER_MODEL, AFTER_AGENT, and any per-rule
+    governance events.
+
+    Behavior matrix:
+
+    - **OTel installed + host opened a parent span**: this becomes a
+      child of the host's span and inherits its ``trace_id`` — the
+      host's outer correlation context is preserved end-to-end.
+    - **OTel installed + no parent span**: this becomes the root
+      span of a fresh trace; everything below it shares the new
+      ``trace_id``.
+    - **OTel not installed**: no-op context manager — the wrapper
+      degrades gracefully (no spans, no correlation, but the
+      runtime still functions).
+
+    Lazy import mirrors
+    :func:`uipath.runtime.governance._audit.track_events._resolve_operation_id`:
+    OTel is a transitive runtime dependency, but the wrapper must
+    not crash if a downstream host strips it.
+    """
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        yield
+        return
+
+    tracer = trace.get_tracer("uipath.runtime.governance")
+    # No explicit ``context=`` → OTel picks up the ambient context.
+    # If the host wrapped this call in its own span, we become its
+    # child (same trace_id). Otherwise we open a root span (new
+    # trace_id).
+    with tracer.start_as_current_span("uipath.governance.run") as span:
+        # Span attributes for downstream consumers. ``agent_name``
+        # and ``runtime_id`` are the primary keys an operator
+        # filters on; ``source`` identifies which producer emitted
+        # the span (mirrors the constant used by
+        # :class:`TracesAuditSink` so consumers stay consistent).
+        if agent_name:
+            span.set_attribute("uipath_governance.agent_name", agent_name)
+        if runtime_id:
+            span.set_attribute("uipath_governance.runtime_id", runtime_id)
+        span.set_attribute(
+            "uipath_governance.source", "governance-runtime-python"
+        )
+        yield
 
 
 def _serialize_payload(payload: Any) -> str:
@@ -98,6 +163,7 @@ class UiPathGovernedRuntime:
         evaluator: GovernanceEvaluator | None = None,
         agent_name: str = "",
         runtime_id: str = "",
+        on_dispose: Callable[[], None] | None = None,
     ):
         """Initialize the governance runtime with a resolved policy snapshot.
 
@@ -123,6 +189,16 @@ class UiPathGovernedRuntime:
             runtime_id: Runtime-instance id (conversation id, job id,
                 or a synthetic per-run id). Passed through so
                 per-runtime state routes cleanly.
+            on_dispose: Optional host-supplied cleanup callback invoked
+                from :meth:`dispose` after the delegate has been
+                disposed. Called in a ``finally`` so it runs even when
+                the delegate raises. Lets the host attach any
+                per-runtime teardown (flushing a telemetry dispatcher,
+                closing a session, etc.) to the same lifecycle path
+                the runtime already owns — so callers on every CLI
+                path don't have to remember to run it themselves. The
+                runtime treats it as an opaque ``Callable[[], None]``
+                and does not touch the host's underlying object.
         """
         self._delegate = delegate
         self._policy_index = policy_index
@@ -130,6 +206,7 @@ class UiPathGovernedRuntime:
         self._evaluator = evaluator
         self._agent_name = agent_name
         self._runtime_id = runtime_id
+        self._on_dispose = on_dispose
 
     def _fire_before_agent(self, input: Any) -> None:
         """Fire BEFORE_AGENT when an evaluator is wired; otherwise no-op.
@@ -176,13 +253,20 @@ class UiPathGovernedRuntime:
     ) -> UiPathRuntimeResult:
         """Execute the delegate, firing BEFORE_AGENT / AFTER_AGENT around it.
 
+        Wraps the entire invocation — BEFORE_AGENT, delegate execution
+        (which may itself open framework spans), and AFTER_AGENT — in
+        a single OTel span. The shared ``trace_id`` unifies the
+        runtime-side governance events with any framework-side OTel
+        spans the delegate emits.
+
         AFTER_AGENT fires only on successful return — if the delegate
         raises, there's no output to evaluate.
         """
-        self._fire_before_agent(input)
-        result = await self._delegate.execute(input, options=options)
-        self._fire_after_agent(result)
-        return result
+        with _governance_root_span(self._agent_name, self._runtime_id):
+            self._fire_before_agent(input)
+            result = await self._delegate.execute(input, options=options)
+            self._fire_after_agent(result)
+            return result
 
     async def stream(
         self,
@@ -191,21 +275,37 @@ class UiPathGovernedRuntime:
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Stream events from the delegate, firing BEFORE_AGENT first.
 
+        Same root-span wrap as :meth:`execute`. Holding the span
+        across ``async for`` is safe — Python asyncio propagates
+        contextvars (including the OTel current-span pointer) across
+        ``await`` suspensions.
+
         AFTER_AGENT fires once a :class:`UiPathRuntimeResult` event is
         observed in the stream — that's the runtime's contract for
         signalling a completed invocation. Intermediate state events
         pass through untouched.
         """
-        self._fire_before_agent(input)
-        async for event in self._delegate.stream(input, options=options):
-            if isinstance(event, UiPathRuntimeResult):
-                self._fire_after_agent(event)
-            yield event
+        with _governance_root_span(self._agent_name, self._runtime_id):
+            self._fire_before_agent(input)
+            async for event in self._delegate.stream(input, options=options):
+                if isinstance(event, UiPathRuntimeResult):
+                    self._fire_after_agent(event)
+                yield event
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Forward schema lookup to the delegate."""
         return await self._delegate.get_schema()
 
     async def dispose(self) -> None:
-        """Forward disposal to the delegate."""
-        await self._delegate.dispose()
+        """Dispose the delegate, then run the caller's cleanup hook.
+
+        Runs ``on_dispose`` (if supplied at construction) in a
+        ``finally`` so host-owned teardown — e.g. flushing a telemetry
+        dispatcher — happens even when the delegate raises. The runtime
+        does not inspect what the hook does; it's an opaque callable.
+        """
+        try:
+            await self._delegate.dispose()
+        finally:
+            if self._on_dispose is not None:
+                self._on_dispose()

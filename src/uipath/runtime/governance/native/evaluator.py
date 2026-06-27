@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from functools import cache, lru_cache
@@ -361,14 +362,27 @@ class GovernanceEvaluator:
         rules = self._policy_index.get_rules_for_hook(context.hook)
 
         evaluations: list[RuleEvaluation] = []
+        # Per-rule wall time (ms), keyed by rule_id. Forwarded to the
+        # telemetry sink via emit_rule_evaluation(duration_ms=...) so
+        # operators can see which rules are slow.
+        rule_durations: dict[str, float] = {}
+        # Disabled rules — never evaluated, surfaced in the hook
+        # summary's skipped_policy_names so dashboards can spot which
+        # policies a tenant turned off.
+        skipped_policy_ids: list[str] = []
         raw_action = Action.ALLOW  # The action before mode adjustment
         deny_would_fire = False  # Track if DENY would have fired
 
+        hook_start = time.monotonic()
+
         for rule in rules:
             if not rule.enabled:
+                skipped_policy_ids.append(rule.rule_id)
                 continue
 
+            rule_start = time.monotonic()
             evaluation = self._evaluate_rule(rule, context)
+            rule_durations[rule.rule_id] = (time.monotonic() - rule_start) * 1000.0
             evaluations.append(evaluation)
 
             if evaluation.matched:
@@ -383,6 +397,8 @@ class GovernanceEvaluator:
                     raw_action = Action.ESCALATE
                 elif eval_action == Action.AUDIT and raw_action == Action.ALLOW:
                     raw_action = Action.AUDIT
+
+        hook_duration_ms = (time.monotonic() - hook_start) * 1000.0
 
         # Apply enforcement mode
         final_action = self._apply_enforcement_mode(raw_action)
@@ -403,7 +419,13 @@ class GovernanceEvaluator:
             metadata=record_metadata,
         )
 
-        self._emit_audit(audit, mode)
+        self._emit_audit(
+            audit,
+            mode,
+            rule_durations=rule_durations,
+            skipped_policy_ids=skipped_policy_ids,
+            hook_duration_ms=hook_duration_ms,
+        )
 
         # For any guardrail mapped to UiPath but currently disabled,
         # dispatch a compensating-governance call via the injected
@@ -469,29 +491,59 @@ class GovernanceEvaluator:
                 "Failed to dispatch compensating governance call: %s", exc
             )
 
-    def _emit_audit(self, audit: AuditRecord, mode: EnforcementMode) -> None:
+    def _emit_audit(
+        self,
+        audit: AuditRecord,
+        mode: EnforcementMode,
+        *,
+        rule_durations: dict[str, float] | None = None,
+        skipped_policy_ids: list[str] | None = None,
+        hook_duration_ms: float = 0.0,
+    ) -> None:
         """Emit per-rule and hook-summary events to the injected audit manager.
 
         No-op when no audit manager was supplied at construction. The
         per-runtime :class:`AuditManager` handles sink-level circuit
         breaking; emission errors stay there and never break evaluation.
+
+        Args:
+            audit: Resolved :class:`AuditRecord` produced by
+                :meth:`evaluate`.
+            mode: Active :class:`EnforcementMode`.
+            rule_durations: Per-rule wall time in ms, keyed by
+                ``rule_id``. Looked up when emitting individual
+                rule-evaluation events; unknown ids default to 0.
+            skipped_policy_ids: Ids of rules that were disabled and
+                therefore not evaluated. Folded into the hook
+                summary's ``skipped_policy_names``.
+            hook_duration_ms: Total wall time spent evaluating this
+                hook. Folded into the hook summary's ``duration_ms``.
         """
         manager = self._audit_manager
         if manager is None:
             return
 
         hook_name = audit.hook.name
+        durations = rule_durations or {}
 
         # ``guardrail_fallback`` rules are traced by the compensating
         # path (see :meth:`_dispatch_compensation`), which carries the
         # actual validator verdict. Emitting a Python-side
         # ``rule_evaluation`` event here would produce a duplicate
         # trace carrying no verdict, so filter these rules out of every
-        # event the evaluator emits (per-rule AND the hook summary).
+        # per-rule event the evaluator emits AND out of the hook
+        # summary's passed/denied counts. The summary keeps a separate
+        # ``guardrail_dispatched_count`` so the mapped-vs-unmapped
+        # dimension is still queryable.
         emittable = [
             ev for ev in audit.evaluations
             if not self._is_guardrail_fallback_rule(ev.rule_id)
         ]
+        guardrail_dispatched_count = sum(
+            1
+            for ev in audit.evaluations
+            if ev.matched and self._is_guardrail_fallback_rule(ev.rule_id)
+        )
 
         # No emittable rules means every match this hook was a
         # guardrail-fallback already traced by the compensation path.
@@ -513,12 +565,30 @@ class GovernanceEvaluator:
                 detail=evaluation.detail,
                 agent_name=audit.agent_name,
                 description=evaluation.description,
+                duration_ms=durations.get(evaluation.rule_id, 0.0),
+                # Per-rule events the evaluator emits are never for
+                # UiPath-mapped guardrails (those are filtered out of
+                # ``emittable`` above and traced by the compensating
+                # path). Stamping ``False`` keeps the schema stable
+                # for sinks.
+                mapped_to_uipath=False,
             )
 
-        # Derive the summary's final action from the emittable subset
-        # only. ``audit.final_action`` folded in fallback rules whose
-        # verdict travels on the compensation path; including them
-        # here would mix the two trace paths' verdicts.
+        # All summary metrics derive from ``emittable`` only —
+        # ``audit.final_action`` folded in fallback rules whose
+        # verdict travels on the compensation path, so using it here
+        # would mix the two trace paths' verdicts.
+        #
+        # ``matched_rules`` keeps the historical "any check matched"
+        # semantic (used by the legacy traces sink). ``denied_count``
+        # is the precise spec verdict — only rules whose configured
+        # action would actually act (not ``allow``). A matched rule
+        # configured as ``allow`` is an explicit positive match and
+        # rolls into ``passed_count`` via the manager's arithmetic.
+        matched_rules = sum(1 for ev in emittable if ev.matched)
+        denied_count = sum(
+            1 for ev in emittable if ev.matched and ev.action != Action.ALLOW
+        )
         summary_final_action = self._apply_enforcement_mode(
             self._most_restrictive_matched_action(emittable)
         )
@@ -527,9 +597,13 @@ class GovernanceEvaluator:
             hook=hook_name,
             agent_name=audit.agent_name,
             total_rules=len(emittable),
-            matched_rules=sum(1 for ev in emittable if ev.matched),
+            matched_rules=matched_rules,
             final_action=summary_final_action.value,
             enforcement_mode=mode,
+            duration_ms=hook_duration_ms,
+            skipped_policy_names=list(skipped_policy_ids or []),
+            guardrail_dispatched_count=guardrail_dispatched_count,
+            denied_count=denied_count,
         )
 
     @staticmethod
