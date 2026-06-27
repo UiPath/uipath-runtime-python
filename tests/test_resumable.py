@@ -549,6 +549,47 @@ class TestResumableRuntime:
         assert runtime_impl.execution_count == 1
 
     @pytest.mark.asyncio
+    async def test_resumable_skips_timer_triggers_on_auto_resume_check(self) -> None:
+        """Timer triggers should be skipped when checking for auto-resume."""
+
+        runtime_impl = MultiTriggerMockRuntime()
+        storage = StatefulStorageMock()
+        trigger_manager = make_trigger_manager_mock()
+
+        def create_timer_trigger(data: dict[str, Any]) -> UiPathResumeTrigger:
+            return UiPathResumeTrigger(
+                interrupt_id="",  # Will be set by resumable runtime
+                trigger_type=UiPathResumeTriggerType.TIMER,
+                payload=data,
+            )
+
+        trigger_manager.create_trigger = AsyncMock(side_effect=create_timer_trigger)  # type: ignore[method-assign]
+        read_trigger_guard = AsyncMock(
+            side_effect=AssertionError(
+                "read_trigger must not be called for Timer triggers pre-resume"
+            )
+        )
+        trigger_manager.read_trigger = read_trigger_guard  # type: ignore[method-assign]
+
+        resumable = UiPathResumableRuntime(
+            delegate=runtime_impl,
+            storage=storage,
+            trigger_manager=trigger_manager,
+            runtime_id="runtime-1",
+        )
+
+        result = await resumable.execute({})
+
+        assert result.status == UiPathRuntimeStatus.SUSPENDED
+        assert result.triggers is not None
+        assert len(result.triggers) == 2
+        assert all(
+            t.trigger_type == UiPathResumeTriggerType.TIMER for t in result.triggers
+        )
+        trigger_manager.read_trigger.assert_not_called()
+        assert runtime_impl.execution_count == 1
+
+    @pytest.mark.asyncio
     async def test_resumable_auto_resumes_task_triggers_but_not_api_triggers(
         self,
     ) -> None:
