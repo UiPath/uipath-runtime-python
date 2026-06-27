@@ -134,6 +134,11 @@ def make_trigger_manager_mock() -> UiPathResumeTriggerProtocol:
         raise UiPathPendingTriggerError(ErrorCategory.USER, "Trigger not fired yet")
 
     manager.create_trigger = AsyncMock(side_effect=create_trigger_impl)
+
+    async def create_triggers_impl(data: dict[str, Any]) -> list[UiPathResumeTrigger]:
+        return [await manager.create_trigger(data)]
+
+    manager.create_triggers = AsyncMock(side_effect=create_triggers_impl)
     manager.read_trigger = AsyncMock(side_effect=read_trigger_default)
 
     return cast(UiPathResumeTriggerProtocol, manager)

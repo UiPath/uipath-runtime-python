@@ -68,6 +68,24 @@ class UiPathResumeTriggerCreatorProtocol(Protocol):
         """
         ...
 
+    async def create_triggers(self, suspend_value: Any) -> list[UiPathResumeTrigger]:
+        """Create resume triggers from a suspend value.
+
+        Most suspend values produce one trigger. Values with alternative resume
+        conditions, such as operation timeouts, may produce multiple triggers for
+        the same interrupt.
+
+        Args:
+            suspend_value: The value that caused the suspension.
+
+        Returns:
+            UiPathResumeTrigger objects ready to be persisted.
+
+        Raises:
+            UiPathRuntimeError: If trigger creation fails
+        """
+        ...
+
 
 class UiPathResumeTriggerReaderProtocol(Protocol):
     """Protocol for reading resume triggers and converting them to runtime input."""

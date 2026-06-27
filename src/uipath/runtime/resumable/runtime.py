@@ -225,11 +225,14 @@ class UiPathResumableRuntime:
         """
         resume_map: dict[str, Any] = {}
         for trigger in triggers:
+            assert trigger.interrupt_id is not None, (
+                "Trigger interrupt_id cannot be None"
+            )
+            if trigger.interrupt_id in resume_map:
+                continue
+
             try:
                 data = await self.trigger_manager.read_trigger(trigger)
-                assert trigger.interrupt_id is not None, (
-                    "Trigger interrupt_id cannot be None"
-                )
                 resume_map[trigger.interrupt_id] = data
                 await self.storage.delete_trigger(self.runtime_id, trigger)
             except UiPathPendingTriggerError:
@@ -273,11 +276,12 @@ class UiPathResumableRuntime:
 
         # Create triggers only for new interrupts
         for interrupt_id in new_ids:
-            trigger = await self.trigger_manager.create_trigger(
+            triggers = await self.trigger_manager.create_triggers(
                 current_interrupts[interrupt_id]
             )
-            trigger.interrupt_id = interrupt_id
-            suspended_result.triggers.append(trigger)
+            for trigger in triggers:
+                trigger.interrupt_id = interrupt_id
+                suspended_result.triggers.append(trigger)
 
         if suspended_result.triggers:
             await self.storage.save_triggers(self.runtime_id, suspended_result.triggers)
