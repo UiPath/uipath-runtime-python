@@ -74,12 +74,17 @@ class Rule:
 
 @dataclass
 class CheckContext:
-    """Context passed to rule evaluation."""
+    """Context passed to rule evaluation.
+
+    Trace correlation is intentionally absent — the wire-side provider
+    resolves the canonical agent trace id at HTTP-call time, and
+    OTel-backed sinks propagate the live span via ``contextvars``. The
+    evaluation context doesn't carry one.
+    """
 
     hook: LifecycleHook
     agent_name: str
     runtime_id: str
-    trace_id: str
 
     # Content fields (populated based on hook)
     agent_input: str = ""
