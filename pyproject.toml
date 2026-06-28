@@ -126,6 +126,9 @@ exclude-newer = "2 days"
 [tool.uv.exclude-newer-package]
 uipath-core = false
 
+[tool.uv.sources]
+uipath-core = { index = "testpypi" }
+
 [[tool.uv.index]]
 name = "testpypi"
 url = "https://test.pypi.org/simple/"
