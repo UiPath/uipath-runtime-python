@@ -9,6 +9,9 @@ exclude-newer-span = "P2D"
 [options.exclude-newer-package]
 uipath-core = false
 
+[manifest]
+overrides = [{ name = "uipath-core", specifier = "==0.5.24.dev1017616976", index = "https://test.pypi.org/simple/" }]
+
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
@@ -1191,7 +1194,7 @@ dev = [
 requires-dist = [
     { name = "chardet", specifier = ">=5.2.0,<8.0" },
     { name = "pyyaml", specifier = ">=6.0,<7.0" },
-    { name = "uipath-core", specifier = ">=0.5.24.dev1017610000,<0.5.24.dev1017620000", index = "https://test.pypi.org/simple/" },
+    { name = "uipath-core", specifier = ">=0.5.22,<0.6.0", index = "https://test.pypi.org/simple/" },
     { name = "vadersentiment", specifier = ">=3.3.2,<4.0" },
 ]
 

@@ -122,6 +122,12 @@ exclude_lines = [
 
 [tool.uv]
 exclude-newer = "2 days"
+# Pin to the testpypi dev builds from uipath-python PR #1761
+# (refactor: drop AdapterRegistry + BaseAdapter; keep EvaluatorProtocol).
+# Local-only — does not affect the published wheel's Requires-Dist.
+override-dependencies = [
+  "uipath-core==0.5.24.dev1017616976"
+]
 
 [tool.uv.exclude-newer-package]
 uipath-core = false
