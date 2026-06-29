@@ -166,20 +166,15 @@ class TracesAuditSink(AuditSink):
             return
 
         try:
-            from opentelemetry import context
-
             data = event.data
             hook = event.hook or "unknown"
             span_name = f"governance.{hook.lower()}"
 
-            # Use the current OTel context. The audit manager runs the
-            # sink inside the caller's captured ``contextvars`` context
-            # (see :meth:`AuditManager.emit`), so the agent's live span
-            # is visible here even on the audit worker thread — the
-            # governance span attaches as a child instead of orphan root.
-            ctx = context.get_current()
-
-            with tracer.start_as_current_span(span_name, context=ctx) as span:
+            # Sink dispatch runs on the caller's thread (see
+            # :meth:`AuditManager.emit`), so the current OTel context
+            # is the agent's live span — the governance span attaches
+            # as its child without any cross-thread plumbing.
+            with tracer.start_as_current_span(span_name) as span:
                 span.set_attribute("type", SPAN_TYPE_AGENT_RUN)
                 span.set_attribute("span_type", SPAN_TYPE_AGENT_RUN)
                 span.set_attribute("uipath.custom_instrumentation", True)
@@ -215,18 +210,14 @@ class TracesAuditSink(AuditSink):
             return
 
         try:
-            from opentelemetry import context
-
             data = event.data
             policy_id = data.get("policy_id", "unknown")
             span_name = f"{NS}.rule.{policy_id}"
 
-            # See _emit_hook_span: the contextvars-captured caller
-            # context means the current OTel context is the agent's
+            # See _emit_hook_span: sync dispatch on the caller's
+            # thread means the current OTel context is the agent's
             # live span, so this rule span attaches as its child.
-            ctx = context.get_current()
-
-            with tracer.start_as_current_span(span_name, context=ctx) as span:
+            with tracer.start_as_current_span(span_name) as span:
                 span.set_attribute("type", SPAN_TYPE_AGENT_RUN)
                 span.set_attribute("span_type", SPAN_TYPE_AGENT_RUN)
                 span.set_attribute("uipath.custom_instrumentation", True)

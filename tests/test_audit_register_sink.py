@@ -42,13 +42,13 @@ def _event() -> AuditEvent:
 
 @pytest.fixture
 def manager() -> Any:
-    """Build a fresh, sync-mode AuditManager with no default sinks.
+    """Build a fresh AuditManager with no default sinks.
 
-    ``register_default_sinks=False`` keeps the traces sink (and the
-    per-instance atexit hook) out of the test, so assertions about
-    registered sinks see only what the test puts there.
+    ``register_default_sinks=False`` keeps the traces sink out of the
+    test, so assertions about registered sinks see only what the test
+    puts there.
     """
-    return AuditManager(async_mode=False, register_default_sinks=False)
+    return AuditManager(register_default_sinks=False)
 
 
 def test_register_clears_stale_failure_counter(manager: AuditManager) -> None:

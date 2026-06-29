@@ -6,20 +6,17 @@ This module provides the core abstractions for the governance audit system:
 - AuditSink: Abstract base class for sink implementations
 - AuditManager: Central hub for routing events to sinks
 
-The AuditManager uses a background thread to process events asynchronously,
-avoiding blocking the main agent execution path during audit trace HTTP calls.
+Sink dispatch is synchronous on the caller's thread. Sinks that need
+async export (HTTP, batched I/O) own that concern internally — the
+OTel traces sink rides on opentelemetry-sdk's BatchSpanProcessor,
+which handles export off the caller's thread.
 """
 
 from __future__ import annotations
 
-import atexit
-import contextvars
 import json
 import logging
-import os
-import queue
 import threading
-import weakref
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -28,68 +25,6 @@ from typing import Any
 from uipath.core.governance import EnforcementMode
 
 logger = logging.getLogger(__name__)
-
-
-class _AuditManagerCleanupRegistry:
-    """Process-wide cleanup machinery for :class:`AuditManager` instances.
-
-    A single ``atexit`` hook walks a ``WeakSet`` of live managers on
-    exit and flushes/closes each one. Two important properties:
-
-    1. **Bounded atexit registrations.** Per-instance ``atexit.register``
-       grows the interpreter's atexit list without bound — N runtimes
-       → N hooks → N × shutdown-timeout total exit delay. One
-       process-level hook is constant work regardless of how many
-       managers were constructed.
-
-    2. **No strong reference to the manager.** ``WeakSet`` lets a
-       disposed manager get garbage-collected; if it's already gone by
-       exit time, we just skip it. Long-running ``uipath eval`` runs
-       that build many runtimes serially can therefore release each
-       one's memory as soon as nothing references it, instead of
-       pinning all of them until process exit.
-
-    Encapsulated in a class (rather than three loose module-level
-    names + a ``global`` mutation) so the state is named, swappable in
-    tests, and the registration path doesn't reach across the module
-    scope to assign.
-    """
-
-    def __init__(self) -> None:
-        self.live_managers: weakref.WeakSet[AuditManager] = weakref.WeakSet()
-        self.atexit_registered = False
-        self.lock = threading.Lock()
-
-    def register(self, manager: AuditManager) -> None:
-        """Add ``manager`` to the cleanup set + wire process atexit once.
-
-        Double-checked under ``lock`` so two concurrent first-time
-        constructions don't both register the process atexit handler.
-        """
-        self.live_managers.add(manager)
-        if self.atexit_registered:
-            return
-        with self.lock:
-            if not self.atexit_registered:
-                atexit.register(self.process_cleanup)
-                self.atexit_registered = True
-
-    def process_cleanup(self) -> None:
-        """Process-exit handler: flush + close every live AuditManager.
-
-        Iteration over a snapshot — the WeakSet may mutate during
-        cleanup (close() touches sinks_lock, GC may fire). Bounded by
-        each manager's own flush / close timeouts.
-        """
-        for manager in list(self.live_managers):
-            try:
-                manager.flush(timeout=2.0)
-                manager.close()
-            except Exception as exc:  # noqa: BLE001 - exit cleanup must not raise
-                logger.debug("Audit manager process cleanup error: %s", exc)
-
-
-_cleanup_registry = _AuditManagerCleanupRegistry()
 
 
 # =============================================================================
@@ -103,11 +38,11 @@ class AuditEvent:
 
     Trace correlation is intentionally absent from this dataclass.
     Sinks that need a trace id resolve one at their own boundary:
-    OTel-backed sinks let the SDK / exporter handle it (the audit
-    manager runs sink dispatch inside the caller's captured
-    contextvars snapshot, so the live OTel span is visible on the
-    worker), and HTTP sinks defer to their injected provider, which
-    resolves at HTTP-call time.
+    OTel-backed sinks read the live span from the caller's
+    ``contextvars`` directly (sink dispatch runs synchronously on the
+    caller's thread, so ``trace.get_current_span()`` resolves to the
+    agent's live span), and HTTP sinks defer to their injected
+    provider, which resolves at HTTP-call time.
 
     Attributes:
         event_type: Type of event (e.g., "rule_evaluation", "hook_summary")
@@ -160,23 +95,61 @@ class AuditSink(ABC):
     Subclass this to create custom audit sinks. Each sink receives
     all audit events and decides how to handle them.
 
+    Sinks that perform network I/O should batch internally — :meth:`emit`
+    runs on the caller's thread (typically an agent hook), so a slow
+    synchronous sink blocks the agent. The standard pattern is the one
+    opentelemetry-sdk uses for its trace exporter: enqueue in-process,
+    drain on a sink-owned background thread.
+
     Example:
+        A Slack sink that posts on rule denials. ``emit`` enqueues onto
+        an in-process queue; a daemon thread the sink owns drains the
+        queue and runs the HTTP POST off the caller's thread.
+
         class SlackAuditSink(AuditSink):
             def __init__(self, webhook_url: str):
                 self.webhook_url = webhook_url
                 self._name = "slack"
+                self._queue: queue.Queue[AuditEvent | None] = queue.Queue()
+                self._worker = threading.Thread(
+                    target=self._drain, name="slack-audit", daemon=True
+                )
+                self._worker.start()
 
             @property
             def name(self) -> str:
                 return self._name
 
+            def accepts(self, event: AuditEvent) -> bool:
+                # Only ship denials — drops irrelevant events at the
+                # boundary instead of forwarding them to the queue.
+                return (
+                    event.data.get("matched")
+                    and event.data.get("action") == "deny"
+                )
+
             def emit(self, event: AuditEvent) -> None:
-                if event.data.get("matched") and event.data.get("action") == "deny":
-                    # Send to Slack on violations
-                    requests.post(self.webhook_url, json=event.to_dict())
+                # Non-blocking — runs on the caller's hook thread.
+                self._queue.put_nowait(event)
+
+            def _drain(self) -> None:
+                while True:
+                    event = self._queue.get()
+                    if event is None:
+                        return  # close() sentinel
+                    try:
+                        requests.post(self.webhook_url, json=event.to_dict())
+                    except Exception:
+                        pass  # log/retry per sink's own policy
+                    finally:
+                        self._queue.task_done()
 
             def flush(self) -> None:
-                pass
+                self._queue.join()
+
+            def close(self) -> None:
+                self._queue.put_nowait(None)
+                self._worker.join(timeout=2.0)
     """
 
     @property
@@ -235,8 +208,8 @@ class AuditManager:
     """Manages multiple audit sinks and routes events to them.
 
     Instance-scoped: each :class:`GovernanceRuntime` owns its own
-    manager. Parallel runtimes (``uipath eval``) don't share sinks,
-    workers, or per-sink failure state.
+    manager. Parallel runtimes (``uipath eval``) don't share sinks or
+    per-sink failure state.
 
     Constructor automatically registers the always-on ``traces`` sink,
     which carries the governance audit trail and cannot be disabled by
@@ -244,72 +217,35 @@ class AuditManager:
     :meth:`register_sink`.
 
     Thread Safety:
-        Events are queued and processed by a background thread, making
-        :meth:`emit` non-blocking. This avoids blocking agent execution
-        while a sink is doing I/O.
+        :meth:`emit` dispatches synchronously on the caller's thread.
+        Sinks that need to avoid blocking the caller (HTTP exporters)
+        own their own batching — the OTel traces sink, for example,
+        rides on opentelemetry-sdk's BatchSpanProcessor.
     """
 
     # Trip a sink after this many consecutive emit failures (circuit-breaker).
     _SINK_FAILURE_THRESHOLD = 10
-    # Bound the async queue so a stuck sink can't grow memory without limit.
-    # Matches the order of magnitude of a long-running agent's per-session
-    # audit volume; on overflow the oldest event is dropped to make room.
-    _DEFAULT_QUEUE_MAXSIZE = 10_000
 
-    def __init__(
-        self,
-        async_mode: bool = True,
-        queue_maxsize: int = _DEFAULT_QUEUE_MAXSIZE,
-        register_default_sinks: bool = True,
-    ) -> None:
+    def __init__(self, register_default_sinks: bool = True) -> None:
         """Initialize the audit manager.
 
         Args:
-            async_mode: If True (default), events are processed in a background
-                       thread. If False, events are processed synchronously.
-            queue_maxsize: Max queued events in async mode. On overflow the
-                       oldest queued event is dropped to make room.
             register_default_sinks: If True (default), register the
-                       always-on ``traces`` sink and an atexit cleanup
-                       handler. Tests that want a bare manager can pass
-                       ``False`` and register sinks explicitly.
+                always-on ``traces`` sink. Tests that want a bare
+                manager can pass ``False`` and register sinks
+                explicitly.
         """
         self._sinks: list[AuditSink] = []
-        # Single lock guards _sinks, _sink_failures, _tripped_sinks — every
-        # collection mutated by both the worker thread and the emit caller.
+        # Guards _sinks, _sink_failures, _tripped_sinks — all read +
+        # mutated by emit() across threads when concurrent agent hooks
+        # share one manager.
         self._sinks_lock = threading.Lock()
         # Per-sink consecutive-failure counter, keyed by sink name.
         self._sink_failures: dict[str, int] = {}
         self._tripped_sinks: set[str] = set()
-        self._async_mode = async_mode
-        self._pid = os.getpid()
-
-        # Background processing.
-        #
-        # Queue items are ``(contextvars.Context, AuditEvent)`` tuples
-        # so the caller's contextvars context (which holds the live
-        # OTel span, request correlation ids, etc.) propagates across
-        # the worker-thread hop. Without this the worker would see an
-        # empty contextvars context — OTel-backed sinks would render
-        # governance spans as orphan roots instead of children of the
-        # agent's live span. ``None`` is the shutdown sentinel.
-        self._queue: queue.Queue[
-            tuple[contextvars.Context, AuditEvent] | None
-        ] = queue.Queue(maxsize=queue_maxsize)
-        self._worker_thread: threading.Thread | None = None
-        self._shutdown = threading.Event()
-
-        if self._async_mode:
-            self._start_worker()
 
         if register_default_sinks:
             self._register_traces_sink()
-            # Process-level atexit (one shared handler, weakref-tracked
-            # set) instead of per-instance ``atexit.register(self.method)``:
-            # avoids unbounded atexit list growth and the strong reference
-            # that would otherwise pin a disposed manager until process
-            # exit. See :class:`_AuditManagerCleanupRegistry`.
-            _cleanup_registry.register(self)
 
     def _register_traces_sink(self) -> None:
         """Register the always-on ``traces`` sink.
@@ -325,106 +261,6 @@ class AuditManager:
         if sink is not None:
             self.register_sink(sink)
             logger.info("Governance audit sink registered: traces")
-
-    def _start_worker(self) -> None:
-        """Start the background worker thread."""
-        if self._worker_thread is not None and self._worker_thread.is_alive():
-            return
-
-        self._shutdown.clear()
-        self._worker_thread = threading.Thread(
-            target=self._worker_loop,
-            name="governance-audit-worker",
-            daemon=True,
-        )
-        self._worker_thread.start()
-        logger.debug("Background audit worker started")
-
-    def _worker_loop(self) -> None:
-        """Background worker loop that processes queued events."""
-        while not self._shutdown.is_set():
-            # Wait for an item with a timeout so we can re-check shutdown.
-            try:
-                item = self._queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            # Every successful get() must be paired with exactly one
-            # task_done() — including the shutdown sentinel and the case
-            # where _emit_sync raises — otherwise unfinished_tasks never
-            # drains and flush()/join() hangs.
-            try:
-                if item is None:
-                    # Shutdown signal
-                    break
-                ctx, event = item
-                # Run sink dispatch inside the caller's captured
-                # contextvars context so OTel-backed sinks see the
-                # agent's live span via ``context.get_current()``.
-                ctx.run(self._emit_sync, event)
-            except Exception as e:
-                logger.warning("Audit worker error: %s", e)
-            finally:
-                self._queue.task_done()
-
-        # Drain remaining events on shutdown
-        self._drain_queue()
-
-    def _drain_queue(self) -> None:
-        """Process any remaining events in the queue."""
-        while True:
-            try:
-                item = self._queue.get_nowait()
-            except queue.Empty:
-                break
-            # As in _worker_loop: pair every get() with one task_done(),
-            # even when _emit_sync raises, so shutdown accounting is sound.
-            try:
-                if item is not None:
-                    ctx, event = item
-                    ctx.run(self._emit_sync, event)
-            except Exception as e:
-                logger.warning("Audit drain error: %s", e)
-            finally:
-                self._queue.task_done()
-
-    def _emit_sync(self, event: AuditEvent) -> None:
-        """Emit event synchronously to all sinks (called from worker thread)."""
-        with self._sinks_lock:
-            sinks = list(self._sinks)
-            tripped = set(self._tripped_sinks)
-        for sink in sinks:
-            if sink.name in tripped:
-                continue
-            try:
-                if sink.accepts(event):
-                    sink.emit(event)
-                # Success — reset failure counter for this sink.
-                with self._sinks_lock:
-                    if self._sink_failures.get(sink.name):
-                        self._sink_failures[sink.name] = 0
-            except Exception as e:
-                with self._sinks_lock:
-                    fails = self._sink_failures.get(sink.name, 0) + 1
-                    self._sink_failures[sink.name] = fails
-                    tripped_now = fails >= self._SINK_FAILURE_THRESHOLD
-                    if tripped_now:
-                        self._tripped_sinks.add(sink.name)
-                if tripped_now:
-                    logger.error(
-                        "Audit sink '%s' tripped after %d consecutive failures; "
-                        "will be skipped for the rest of this process. Last error: %s",
-                        sink.name,
-                        fails,
-                        e,
-                    )
-                else:
-                    logger.warning(
-                        "Audit sink '%s' failed to emit event (%d/%d): %s",
-                        sink.name,
-                        fails,
-                        self._SINK_FAILURE_THRESHOLD,
-                        e,
-                    )
 
     def register_sink(self, sink: AuditSink) -> None:
         """Register an audit sink.
@@ -490,76 +326,52 @@ class AuditManager:
             return [s.name for s in self._sinks]
 
     def emit(self, event: AuditEvent) -> None:
-        """Emit an audit event to all registered sinks.
+        """Dispatch ``event`` synchronously to every live sink.
 
-        In async mode (default), this queues the event for background
-        processing and returns immediately. This avoids blocking the
-        main agent execution path during audit trace HTTP calls.
-
-        On post-fork callers (worker process inheriting the parent's
-        manager), the queue is reinitialized and the worker thread
-        re-spawned before enqueue — otherwise events would silently
-        accumulate in a queue no one is draining.
+        Per-sink errors are caught and folded into the circuit breaker
+        — a sink that fails too many times in a row is skipped for the
+        rest of the manager's lifetime. The caller never sees a sink
+        exception.
 
         Args:
             event: The audit event to emit
         """
-        self._ensure_alive_after_fork()
-
-        if self._async_mode:
-            # Capture the caller's contextvars context now (while the
-            # OTel span and request correlation state are still live
-            # on this thread). The worker runs the sink dispatch
-            # inside this snapshot so cross-thread sinks see the same
-            # context the caller had. See queue type in __init__.
-            item = (contextvars.copy_context(), event)
-            # Non-blocking enqueue with drop-oldest backpressure: if the
-            # worker is wedged on a slow sink, this keeps memory bounded
-            # rather than growing without limit.
-            try:
-                self._queue.put_nowait(item)
-            except queue.Full:
-                try:
-                    self._queue.get_nowait()
-                    self._queue.task_done()
-                except queue.Empty:
-                    pass
-                try:
-                    self._queue.put_nowait(item)
-                except queue.Full:
-                    # Worker is so far behind that the queue refilled
-                    # between get_nowait and put_nowait — give up on
-                    # this event rather than block.
-                    pass
-        else:
-            # Synchronous processing — caller thread IS the worker, so
-            # the OTel context is already correct; no context snapshot
-            # or ctx.run() needed.
-            self._emit_sync(event)
-
-    def _ensure_alive_after_fork(self) -> None:
-        """Reset queue and respawn worker if we're in a forked child.
-
-        Double-checked under ``_sinks_lock``: a fresh-fork child where
-        multiple threads call :meth:`emit` concurrently could otherwise
-        each see the stale ``_pid`` and each rebuild ``_queue`` /
-        ``_shutdown`` / ``_worker_thread`` — one thread's writes would
-        clobber the other's, leaking the queue+worker pair.
-        """
-        if os.getpid() == self._pid:
-            return  # fast path: same process, no rebuild needed
         with self._sinks_lock:
-            current_pid = os.getpid()
-            if current_pid == self._pid:
-                return  # another thread won the rebuild race
-            # Child process inherited a dead worker_thread reference and
-            # a queue the parent owned. Rebuild both so child events drain.
-            self._pid = current_pid
-            self._queue = queue.Queue(maxsize=self._queue.maxsize)
-            self._shutdown = threading.Event()
-            self._worker_thread = None
-            if self._async_mode:
-                self._start_worker()
+            sinks = list(self._sinks)
+            tripped = set(self._tripped_sinks)
+        for sink in sinks:
+            if sink.name in tripped:
+                continue
+            try:
+                if sink.accepts(event):
+                    sink.emit(event)
+                # Success — reset failure counter for this sink.
+                with self._sinks_lock:
+                    if self._sink_failures.get(sink.name):
+                        self._sink_failures[sink.name] = 0
+            except Exception as e:
+                with self._sinks_lock:
+                    fails = self._sink_failures.get(sink.name, 0) + 1
+                    self._sink_failures[sink.name] = fails
+                    tripped_now = fails >= self._SINK_FAILURE_THRESHOLD
+                    if tripped_now:
+                        self._tripped_sinks.add(sink.name)
+                if tripped_now:
+                    logger.error(
+                        "Audit sink '%s' tripped after %d consecutive failures; "
+                        "will be skipped for the rest of this process. Last error: %s",
+                        sink.name,
+                        fails,
+                        e,
+                    )
+                else:
+                    logger.warning(
+                        "Audit sink '%s' failed to emit event (%d/%d): %s",
+                        sink.name,
+                        fails,
+                        self._SINK_FAILURE_THRESHOLD,
+                        e,
+                    )
 
     def emit_rule_evaluation(
         self,
@@ -675,44 +487,13 @@ class AuditManager:
             )
         )
 
-    def flush(self, timeout: float = 5.0) -> None:
-        """Flush all pending events and sinks.
+    def flush(self) -> None:
+        """Flush every registered sink.
 
-        In async mode, polls the queue until it drains or ``timeout``
-        seconds elapse, whichever comes first. ``queue.Queue.join`` has
-        no timeout argument — using it would block indefinitely on a
-        wedged sink, which defeats the bounded-shutdown contract that
-        :class:`_AuditManagerCleanupRegistry` relies on at process exit.
-
-        Args:
-            timeout: Maximum seconds to wait for queue to drain (default 5.0)
+        Per-sink — a sink that maintains its own buffer (OTel batched
+        export, HTTP batcher, etc.) gets a chance to drain. The
+        manager itself holds no queue.
         """
-        if self._async_mode:
-            import time
-
-            deadline = time.monotonic() + max(0.0, timeout)
-            poll_interval = min(0.05, timeout) if timeout > 0 else 0.0
-            while time.monotonic() < deadline:
-                try:
-                    if self._queue.unfinished_tasks == 0:
-                        break
-                except Exception:  # noqa: BLE001 - queue introspection is best-effort
-                    break
-                time.sleep(poll_interval)
-            else:
-                # Loop didn't break — drain timed out. Log so a wedged
-                # sink is surfaced rather than swallowed.
-                try:
-                    pending = self._queue.unfinished_tasks
-                except Exception:  # noqa: BLE001
-                    pending = -1
-                if pending:
-                    logger.warning(
-                        "Audit queue did not drain within %.2fs "
-                        "(unfinished tasks=%s); sink may be wedged",
-                        timeout, pending,
-                    )
-
         with self._sinks_lock:
             sinks = list(self._sinks)
         for sink in sinks:
@@ -724,32 +505,9 @@ class AuditManager:
     def close(self) -> None:
         """Close all sinks and release resources.
 
-        Stops the background worker thread and drains any remaining events.
-        Shutdown is bounded: ``_shutdown`` is the primary signal the
-        worker polls; the sentinel ``None`` enqueue is best-effort. If
-        the queue is full and the worker is wedged on a slow sink,
-        ``put_nowait`` fails fast rather than hanging process exit.
+        Idempotent — a manager that has already been closed has an
+        empty sink list, so a repeat call is a no-op.
         """
-        if self._async_mode and self._worker_thread is not None:
-            # Signal shutdown first so the worker's next queue.get() loop
-            # iteration exits even if we can't enqueue the sentinel.
-            self._shutdown.set()
-            try:
-                self._queue.put_nowait(None)  # Wake up worker
-            except queue.Full:
-                # Queue saturated by a stuck sink; the worker will see
-                # _shutdown on its next loop iteration once whatever it's
-                # blocked on completes (or the 2s join timeout fires).
-                logger.debug(
-                    "Audit queue full at shutdown; relying on _shutdown signal"
-                )
-
-            # Wait for worker to finish (with timeout)
-            if self._worker_thread.is_alive():
-                self._worker_thread.join(timeout=2.0)
-
-            logger.debug("Background audit worker stopped")
-
         with self._sinks_lock:
             sinks = list(self._sinks)
             self._sinks.clear()
@@ -760,5 +518,3 @@ class AuditManager:
                 sink.close()
             except Exception as e:
                 logger.warning("Audit sink '%s' failed to close: %s", sink.name, e)
-
-
