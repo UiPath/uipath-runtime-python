@@ -6,6 +6,7 @@ from typing import Any, AsyncGenerator, Sequence, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from uipath.core.triggers import UiPathResumeTrigger, UiPathResumeTriggerType
 
 from uipath.runtime import (
     UiPathBreakpointResult,
@@ -131,6 +132,48 @@ class StreamingMockRuntime:
         raise NotImplementedError()
 
 
+class SuspendedThenSuccessfulRuntime:
+    """Mock runtime that suspends once and completes after resume."""
+
+    def __init__(self, trigger: UiPathResumeTrigger) -> None:
+        self.trigger = trigger
+        self.inputs: list[dict[str, Any] | None] = []
+        self.options: list[UiPathStreamOptions | None] = []
+
+    async def dispose(self) -> None:
+        pass
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        raise NotImplementedError()
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        self.inputs.append(input)
+        self.options.append(options)
+
+        if options and options.resume:
+            yield UiPathRuntimeResult(
+                status=UiPathRuntimeStatus.SUCCESSFUL,
+                output={"resumed_with": input},
+            )
+            return
+
+        yield UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUSPENDED,
+            trigger=self.trigger,
+        )
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        raise NotImplementedError()
+
+
 @pytest.mark.asyncio
 async def test_debug_runtime_streams_and_handles_breakpoints_and_state():
     """UiPathDebugRuntime should stream events, handle breakpoints and state updates."""
@@ -167,6 +210,51 @@ async def test_debug_runtime_streams_and_handles_breakpoints_and_state():
     assert (
         cast(AsyncMock, bridge.wait_for_resume).await_count == 2
     )  # initial + after breakpoint
+
+
+@pytest.mark.asyncio
+async def test_debug_runtime_waits_for_timer_resume_without_polling():
+    """Timer triggers should wait for external resume in debug mode."""
+    trigger = UiPathResumeTrigger(
+        interrupt_id="timer-interrupt",
+        trigger_type=UiPathResumeTriggerType.TIMER,
+        payload={"kind": "timeout"},
+    )
+    runtime_impl = SuspendedThenSuccessfulRuntime(trigger)
+    bridge = make_debug_bridge_mock()
+    cast(AsyncMock, bridge.wait_for_resume).side_effect = [
+        None,
+        {"__uipath": {"kind": "timeout"}},
+    ]
+    cast(Mock, bridge.get_breakpoints).return_value = []
+
+    trigger_manager = Mock()
+    trigger_manager.read_trigger = AsyncMock(
+        side_effect=AssertionError("Timer triggers must not be polled")
+    )
+
+    debug_runtime = UiPathDebugRuntime(
+        delegate=runtime_impl,
+        debug_bridge=bridge,
+    )
+    debug_runtime.get_resumable_runtime = Mock(  # type: ignore[method-assign]
+        return_value=Mock(trigger_manager=trigger_manager)
+    )
+
+    result = await debug_runtime.execute({})
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert result.output == {
+        "resumed_with": {
+            "timer-interrupt": {"__uipath": {"kind": "timeout"}},
+        },
+    }
+    assert cast(AsyncMock, bridge.wait_for_resume).await_count == 2
+    cast(AsyncMock, bridge.emit_execution_suspended).assert_awaited_once()
+    cast(AsyncMock, bridge.emit_execution_resumed).assert_awaited_once_with(
+        {"timer-interrupt": {"__uipath": {"kind": "timeout"}}}
+    )
+    trigger_manager.read_trigger.assert_not_awaited()
 
 
 @pytest.mark.asyncio

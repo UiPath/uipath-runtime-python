@@ -194,9 +194,10 @@ class UiPathDebugRuntime:
                             resume_data: dict[str, Any] | None = None
                             try:
                                 trigger_data: dict[str, Any] | None = None
-                                if (
-                                    final_result.trigger.trigger_type
-                                    == UiPathResumeTriggerType.API
+                                if final_result.trigger.trigger_type in (
+                                    UiPathResumeTriggerType.API,
+                                    UiPathResumeTriggerType.INBOX,
+                                    UiPathResumeTriggerType.TIMER,
                                 ):
                                     trigger_data = (
                                         await self.debug_bridge.wait_for_resume()

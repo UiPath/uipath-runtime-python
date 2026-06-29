@@ -147,8 +147,9 @@ class UiPathResumableRuntime:
     async def _get_fired_triggers(self) -> dict[str, Any] | None:
         """Check stored triggers for any that have already fired.
 
-        Skips async-external triggers (API, Inbox) whose payloads only arrive
-        asynchronously and cannot be polled at suspend time.
+        Skips external triggers (API, Inbox, Timer) whose payloads only arrive
+        asynchronously or through Orchestrator resume and cannot be polled at
+        suspend time.
 
         Returns:
             A resume map of {interrupt_id: resume_data} for fired triggers, or None.
@@ -161,7 +162,11 @@ class UiPathResumableRuntime:
             t
             for t in triggers
             if t.trigger_type
-            not in (UiPathResumeTriggerType.API, UiPathResumeTriggerType.INBOX)
+            not in (
+                UiPathResumeTriggerType.API,
+                UiPathResumeTriggerType.INBOX,
+                UiPathResumeTriggerType.TIMER,
+            )
         ]
         return await self._build_resume_map(pollable_triggers)
 
