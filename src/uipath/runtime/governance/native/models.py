@@ -74,12 +74,16 @@ class Rule:
 
 @dataclass
 class CheckContext:
-    """Context passed to rule evaluation."""
+    """Context passed to rule evaluation.
+
+    Scoped to evaluator input data only. Trace correlation is
+    intentionally not carried here — that concern is owned by the
+    provider / platform layer, not by the evaluator input model.
+    """
 
     hook: LifecycleHook
     agent_name: str
     runtime_id: str
-    trace_id: str
 
     # Content fields (populated based on hook)
     agent_input: str = ""
