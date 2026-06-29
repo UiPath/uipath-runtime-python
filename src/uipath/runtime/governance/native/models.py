@@ -76,10 +76,9 @@ class Rule:
 class CheckContext:
     """Context passed to rule evaluation.
 
-    Trace correlation is intentionally absent — the wire-side provider
-    resolves the canonical agent trace id at HTTP-call time, and
-    OTel-backed sinks propagate the live span via ``contextvars``. The
-    evaluation context doesn't carry one.
+    Scoped to evaluator input data only. Trace correlation is
+    intentionally not carried here — that concern is owned by the
+    provider / platform layer, not by the evaluator input model.
     """
 
     hook: LifecycleHook

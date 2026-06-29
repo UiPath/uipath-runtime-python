@@ -1,14 +1,11 @@
-"""OpenTelemetry traces audit sink for Orchestrator integration.
+"""OpenTelemetry traces audit sink for governance events.
 
-This sink creates OpenTelemetry spans for governance events. UiPath's
-OTel exporter (``uipath.tracing._otel_exporters.LlmOpsHttpExporter`` via
-``_SpanUtils.otel_span_to_uipath_span``) is what ships them to the
-Orchestrator Traces UI and is also what reads ``UIPATH_TRACE_ID``,
-``UIPATH_ORGANIZATION_ID``, ``UIPATH_TENANT_ID``, ``UIPATH_FOLDER_KEY``
-and ``UIPATH_JOB_KEY`` from the process environment and stamps them onto
-the outgoing ``UiPathSpan``. We intentionally do **not** duplicate that
-env-reading here — the exporter is the single source of truth for the
-job-execution context.
+Emits an OpenTelemetry span per rule evaluation and per hook summary.
+This sink emits spans only — it does not resolve or stamp
+job-execution metadata (organization, tenant, folder, job, trace id)
+onto them. That resolution is owned by the platform-side OTel
+exporter that ships spans downstream, so the runtime governance
+contract stays scoped to span emission.
 """
 
 from __future__ import annotations
@@ -38,27 +35,23 @@ def _package_version() -> str:
 # package version doesn't change for the life of the process.
 SCHEMA_VERSION = _package_version()
 
-# Value for the ``type`` / ``span_type`` span attributes on every
-# governance span. Matches ``SpanType.AGENT_RUN`` in uipath-agents-python
-# — we use the string literal here (not a cross-package import) to keep
-# uipath-runtime free of a uipath-agents dependency. If the agents-side
-# registry adds new values, this constant is the single place to update.
+# Value of the ``type`` / ``span_type`` span attributes on every
+# governance span. Local to the runtime trace contract — kept as a
+# string literal (not a cross-package import) so the runtime stays
+# self-contained.
 SPAN_TYPE_AGENT_RUN = "agentRun"
 
-# Identifies this auditor on every governance span. Lets a downstream
-# consumer distinguish traces emitted by the Python in-runtime governance
-# checker from those produced by the governance-server (or any future
-# language-specific governance SDK). Set as the ``source`` span
-# attribute on every governance trace span.
+# Set as the ``source`` attribute on every governance span. Lets
+# consumers identify which producer emitted a given span when more
+# than one governance producer feeds the same trace backend.
 GOVERNANCE_SOURCE = "governance-checker-python"
 
-# Shared attribute namespace for every key in the unified governance trace
-# contract (§4 of the cross-product unification doc). Concatenated into
-# each ``span.set_attribute`` call so the prefix appears in one place and
-# a future rename (or alias) is a one-line change.
+# Shared attribute namespace for every governance span attribute.
+# Concatenated into each ``span.set_attribute`` call so the prefix
+# appears in one place and a future rename is a one-line change.
 NS = "uipath_governance"
 
-# Unified-contract enum values (UPPER_SNAKE per §3 of the spec).
+# Governance verdict / action vocabulary (UPPER_SNAKE).
 EVALUATOR_ALLOW = "ALLOW"
 EVALUATOR_DENY = "DENY"
 EVALUATOR_HITL = "HITL"
@@ -132,11 +125,7 @@ def _derive_results(
     return evaluator, ACTION_AUDIT
 
 class TracesAuditSink(AuditSink):
-    """Audit sink that creates OpenTelemetry spans.
-
-    Spans appear in UiPath Orchestrator Traces UI, providing structured
-    data for each governance evaluation.
-    """
+    """Audit sink that emits an OpenTelemetry span per governance event."""
 
     def __init__(self) -> None:
         """Initialize the sink with a deferred tracer and zero span count."""
@@ -157,12 +146,8 @@ class TracesAuditSink(AuditSink):
                 self._tracer = trace.get_tracer("uipath.governance")
                 logger.info("OpenTelemetry tracer initialized for governance traces")
             except ImportError:
-                # OpenTelemetry is supplied transitively by uipath-core; an
-                # ImportError here means the host install is broken or
-                # governance is running outside the UiPath SDK environment.
                 logger.warning(
-                    "OpenTelemetry not available - governance traces disabled. "
-                    "OTel is normally provided by uipath-core; reinstall the SDK."
+                    "OpenTelemetry not available — governance traces disabled."
                 )
                 self._tracer = False
         return self._tracer if self._tracer else None
@@ -190,30 +175,18 @@ class TracesAuditSink(AuditSink):
             # Use the current OTel context. The audit manager runs the
             # sink inside the caller's captured ``contextvars`` context
             # (see :meth:`AuditManager.emit`), so the agent's live span
-            # is still visible here even though we're on the audit
-            # worker thread — and the governance span attaches to it
-            # as a child instead of becoming an orphan root.
-            #
-            # We don't touch org/tenant/folder/job/trace ids here — the
-            # uipath OTel exporter resolves those at export time from the
-            # process env (see module docstring).
+            # is visible here even on the audit worker thread — the
+            # governance span attaches as a child instead of orphan root.
             ctx = context.get_current()
 
             with tracer.start_as_current_span(span_name, context=ctx) as span:
-                # Required for Orchestrator Traces
                 span.set_attribute("type", SPAN_TYPE_AGENT_RUN)
                 span.set_attribute("span_type", SPAN_TYPE_AGENT_RUN)
                 span.set_attribute("uipath.custom_instrumentation", True)
-
-                # Identifies which agent emitted this audit trace. Lets
-                # downstream consumers (Orchestrator Traces UI, audit
-                # dashboards) filter governance spans by producer when
-                # multiple SDKs / governance backends co-exist.
                 span.set_attribute(f"{NS}.source", GOVERNANCE_SOURCE)
-                # Hook summary attributes. Mode comes from the event —
-                # each emitter stamps its own per-instance mode, so the
-                # sink is correct for parallel runtimes running
-                # different modes.
+
+                # Mode travels on the event so parallel runtimes running
+                # different per-instance modes don't cross-contaminate.
                 mode = _resolve_mode(event)
                 final_action = data.get("final_action", "allow")
                 _, action_applied = _derive_results(
@@ -225,12 +198,10 @@ class TracesAuditSink(AuditSink):
                 span.set_attribute(f"{NS}.action_applied", action_applied)
                 span.set_attribute(f"{NS}.mode", mode.value.upper())
 
-                # Hook spans are summary containers — they're left at
-                # Status.UNSET regardless of final_action. Severity is
-                # carried by the per-rule spans (see _emit_rule_span);
-                # marking the hook span as ERROR would falsely paint
-                # the entire lifecycle phase as failed when only a
-                # specific rule fired underneath.
+                # Hook spans are summary containers — severity lives on
+                # the per-rule spans. Marking the hook ERROR would paint
+                # the whole lifecycle phase as failed when only one rule
+                # fired beneath it.
 
                 self._spans_created += 1
 
@@ -250,32 +221,21 @@ class TracesAuditSink(AuditSink):
             policy_id = data.get("policy_id", "unknown")
             span_name = f"{NS}.rule.{policy_id}"
 
-            # See note in _emit_hook_span: the audit manager runs the
-            # sink inside the caller's captured contextvars context,
-            # so the current OTel context here is the agent's live
-            # span. The uipath OTel exporter populates the
-            # job-execution context at export time.
+            # See _emit_hook_span: the contextvars-captured caller
+            # context means the current OTel context is the agent's
+            # live span, so this rule span attaches as its child.
             ctx = context.get_current()
 
             with tracer.start_as_current_span(span_name, context=ctx) as span:
-                # Required for Orchestrator Traces
                 span.set_attribute("type", SPAN_TYPE_AGENT_RUN)
                 span.set_attribute("span_type", SPAN_TYPE_AGENT_RUN)
                 span.set_attribute("uipath.custom_instrumentation", True)
-
-                # Identifies which agent emitted this audit trace. Lets
-                # downstream consumers (Orchestrator Traces UI, audit
-                # dashboards) filter governance spans by producer when
-                # multiple SDKs / governance backends co-exist.
                 span.set_attribute(f"{NS}.source", GOVERNANCE_SOURCE)
 
-                # Derive the spec-vocabulary verdict pair from the raw
-                # (matched, configured action, mode) tuple. Mode comes
-                # from the event (each emitter's per-instance value) so
-                # parallel runtimes running different modes don't
-                # cross-contaminate. Single source of truth for the
-                # emitted attributes below AND the verbosityLevel /
-                # Status decision further down.
+                # Single source of truth for the emitted attributes
+                # below AND the verbosityLevel / Status decision further
+                # down. Mode comes from the event (per-instance) so
+                # parallel runtimes don't cross-contaminate.
                 mode = _resolve_mode(event)
                 configured_action = data.get("action", "allow")
                 matched = bool(data.get("matched", False))
@@ -285,7 +245,6 @@ class TracesAuditSink(AuditSink):
                     mode=mode,
                 )
 
-                # Governance attributes
                 span.set_attribute(f"{NS}.policy_id", policy_id)
                 span.set_attribute(f"{NS}.rule_name", data.get("rule_name", ""))
                 span.set_attribute(f"{NS}.pack_name", data.get("pack_name", ""))
@@ -300,16 +259,12 @@ class TracesAuditSink(AuditSink):
                     span.set_attribute(f"{NS}.evidence", detail[:500])
 
                 # Severity is driven off the derived ``action_applied``:
-                #
-                # - ``DENY`` — runtime actually blocked the agent →
-                #   verbosityLevel=4 (Error) + Status.ERROR. The agent
-                #   span genuinely failed.
-                # - ``AUDIT`` / ``HITL`` — advisory only; runtime did NOT
-                #   block → verbosityLevel=3 (Warning), Status stays
-                #   UNSET. The agent's span shouldn't be marked failed
-                #   just because an advisory rule fired.
-                # - ``ALLOW`` / ``NONE`` — no verbosityLevel attribute
-                #   (Orchestrator default = 2, Information).
+                # - DENY — runtime blocked → verbosityLevel=4 +
+                #   Status.ERROR (agent span genuinely failed).
+                # - AUDIT / HITL — advisory, runtime did not block →
+                #   verbosityLevel=3, Status stays UNSET. Marking the
+                #   agent span failed for an advisory rule would mislead.
+                # - ALLOW / NONE — no verbosityLevel attribute set.
                 if action_applied == ACTION_DENY:
                     span.set_attribute("verbosityLevel", 4)
                     try:

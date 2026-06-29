@@ -238,15 +238,15 @@ class AuditManager:
     manager. Parallel runtimes (``uipath eval``) don't share sinks,
     workers, or per-sink failure state.
 
-    Constructor automatically registers the always-on ``traces`` sink
-    (OpenTelemetry → Orchestrator audit UI). This sink writes the
-    governance audit trail and cannot be disabled by application code.
-    Additional sinks can be added via :meth:`register_sink`.
+    Constructor automatically registers the always-on ``traces`` sink,
+    which carries the governance audit trail and cannot be disabled by
+    application code. Additional sinks can be added via
+    :meth:`register_sink`.
 
     Thread Safety:
         Events are queued and processed by a background thread, making
         :meth:`emit` non-blocking. This avoids blocking agent execution
-        during audit trace HTTP calls.
+        while a sink is doing I/O.
     """
 
     # Trip a sink after this many consecutive emit failures (circuit-breaker).
@@ -314,8 +314,7 @@ class AuditManager:
     def _register_traces_sink(self) -> None:
         """Register the always-on ``traces`` sink.
 
-        The traces sink (OpenTelemetry spans to the Orchestrator audit
-        UI) is registered for every manager and cannot be disabled by
+        Registered for every manager and cannot be disabled by
         application code — it carries the governance audit trail. The
         factory import is deferred to avoid a module-load cycle
         (``factory`` imports back into this module).
