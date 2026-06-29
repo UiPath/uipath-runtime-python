@@ -43,12 +43,12 @@ logger = logging.getLogger(__name__)
 
 
 def _compensation_data_for_hook(context: CheckContext) -> dict[str, Any]:
-    """Build the ``data`` payload for the /runtime/govern compensating call.
+    """Build the ``data`` payload for the compensating-governance call.
 
-    The server runs the guardrail check against the same content the
-    evaluator was looking at — so we forward whichever
-    :class:`CheckContext` field is populated for the active hook. Fields
-    not relevant to the hook are omitted to keep the payload tight.
+    Forwards whichever :class:`CheckContext` field is populated for the
+    active hook so the compensating call evaluates the same content
+    the evaluator was looking at. Fields not relevant to the hook are
+    omitted to keep the payload tight.
     """
     if context.hook in (LifecycleHook.BEFORE_AGENT,):
         return {"content": context.agent_input}
@@ -109,7 +109,7 @@ def _get_vader_analyzer() -> Any:
         except ImportError:
             logger.error(
                 "vaderSentiment failed to import despite being a hard dependency; "
-                "sentiment_concern checks will not fire. Reinstall uipath-core."
+                "sentiment_concern checks will not fire."
             )
             _vader_analyzer = None
     return _vader_analyzer
@@ -134,7 +134,7 @@ def _get_chardet() -> Any:
             logger.error(
                 "chardet failed to import despite being a hard dependency; "
                 "encoding_concern confidence check will not fire (stdlib "
-                "signals still apply). Reinstall uipath-core."
+                "signals still apply)."
             )
             _chardet_module = None
     return _chardet_module
@@ -417,14 +417,13 @@ class GovernanceEvaluator:
 
         self._emit_audit(audit, mode)
 
-        # For any guardrail mapped to UiPath but currently disabled, hand
-        # the disabled guardrails to the governance-server's
-        # /runtime/govern endpoint. The SERVER runs the guardrail check
-        # AND writes the trace (the payload carries traceId / src_timestamp
-        # / hook / agent so it can correlate) — the agent does NOT emit a
-        # trace itself, to avoid double-writing. Fire-and-forget on a
-        # daemon thread so a slow or unreachable endpoint never blocks
-        # the agent.
+        # For any guardrail mapped to UiPath but currently disabled,
+        # dispatch a compensating-governance call via the injected
+        # compensator. The compensating call (provider-owned) runs the
+        # real guardrail check and writes its own audit trace — the
+        # evaluator does NOT emit a Python-side trace for these rules,
+        # to avoid double-writing. Fire-and-forget so a slow downstream
+        # never blocks the agent hook.
         self._dispatch_compensation(audit, context)
 
         if final_action == Action.DENY:
@@ -494,17 +493,24 @@ class GovernanceEvaluator:
 
         hook_name = audit.hook.name
 
-        # ``guardrail_fallback`` rules are server-traced: the agent POSTs
-        # to ``/runtime/govern`` (see :meth:`_dispatch_compensation`) and
-        # the governance-server emits the audit event with the actual
-        # validator verdict. Emitting a Python-side ``rule_evaluation``
-        # event here would produce a duplicate trace carrying no
-        # verdict, so filter these rules out of every event the Python
-        # evaluator emits (per-rule AND the hook summary's counts).
+        # ``guardrail_fallback`` rules are traced by the compensating
+        # path (see :meth:`_dispatch_compensation`), which carries the
+        # actual validator verdict. Emitting a Python-side
+        # ``rule_evaluation`` event here would produce a duplicate
+        # trace carrying no verdict, so filter these rules out of every
+        # event the evaluator emits (per-rule AND the hook summary).
         emittable = [
             ev for ev in audit.evaluations
             if not self._is_guardrail_fallback_rule(ev.rule_id)
         ]
+
+        # No emittable rules means every match this hook was a
+        # guardrail-fallback already traced by the compensation path.
+        # Skip the hook summary entirely — emitting it with
+        # total_rules=0 + the audit's overall final_action would
+        # double-count the compensation-owned verdict.
+        if not emittable:
+            return
 
         for evaluation in emittable:
             manager.emit_rule_evaluation(
@@ -520,22 +526,51 @@ class GovernanceEvaluator:
                 description=evaluation.description,
             )
 
+        # Derive the summary's final action from the emittable subset
+        # only. ``audit.final_action`` folded in fallback rules whose
+        # verdict travels on the compensation path; including them
+        # here would mix the two trace paths' verdicts.
+        summary_final_action = self._apply_enforcement_mode(
+            self._most_restrictive_matched_action(emittable)
+        )
+
         manager.emit_hook_summary(
             hook=hook_name,
             agent_name=audit.agent_name,
             total_rules=len(emittable),
             matched_rules=sum(1 for ev in emittable if ev.matched),
-            final_action=audit.final_action.value,
+            final_action=summary_final_action.value,
             enforcement_mode=mode,
         )
 
-    def _is_guardrail_fallback_rule(self, rule_id: str) -> bool:
-        """Return True if the rule is a UiPath-compensating fallback rule.
+    @staticmethod
+    def _most_restrictive_matched_action(
+        evals: list[RuleEvaluation],
+    ) -> Action:
+        """Return the most-restrictive matched action across ``evals``.
 
-        Such rules carry a ``guardrail_fallback`` condition; their audit
-        trace is emitted by the governance-server in response to the
-        ``/runtime/govern`` POST, so the Python evaluator must not emit
-        a duplicate trace for them.
+        Mirrors the cross-rule aggregation in :meth:`evaluate`:
+        DENY > ESCALATE > AUDIT > ALLOW. Unmatched rules contribute
+        nothing.
+        """
+        result = Action.ALLOW
+        for ev in evals:
+            if not ev.matched:
+                continue
+            a = ev.action
+            if a == Action.DENY:
+                return Action.DENY
+            if a == Action.ESCALATE and result != Action.DENY:
+                result = Action.ESCALATE
+            elif a == Action.AUDIT and result == Action.ALLOW:
+                result = Action.AUDIT
+        return result
+
+    def _is_guardrail_fallback_rule(self, rule_id: str) -> bool:
+        """Return True if the rule carries a ``guardrail_fallback`` condition.
+
+        Such rules are traced by the compensating path, so the
+        evaluator must not emit a duplicate Python-side trace for them.
         """
         rule = self._policy_index.get_rule(rule_id)
         if rule is None:

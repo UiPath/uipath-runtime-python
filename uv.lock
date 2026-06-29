@@ -9,9 +9,6 @@ exclude-newer-span = "P2D"
 [options.exclude-newer-package]
 uipath-core = false
 
-[manifest]
-overrides = [{ name = "uipath-core", specifier = "==0.5.24.dev1017616976", index = "https://test.pypi.org/simple/" }]
-
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
@@ -1151,16 +1148,16 @@ wheels = [
 
 [[package]]
 name = "uipath-core"
-version = "0.5.24.dev1017616976"
-source = { registry = "https://test.pypi.org/simple/" }
+version = "0.5.25"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://test-files.pythonhosted.org/packages/9f/ab/a6d8edda9d02f8506698245c240c8d1b1b6c1d3398eaedfabd9756405ae3/uipath_core-0.5.24.dev1017616976.tar.gz", hash = "sha256:e0f14e00db1864d8b8ae76a9422b75293387bf7493afb91d99ca1202d9902e17", size = 130551, upload-time = "2026-06-27T10:16:48.961Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/f3/8c4220bcd6b5a85a0be48e5e48afc0a0182454526f76b4927be2b307b065/uipath_core-0.5.25.tar.gz", hash = "sha256:8645b65b7987b4fc7d686d07310a3a31b447c2e7dc5e567cff55612a96f24ab2", size = 130395, upload-time = "2026-06-29T10:01:34.602Z" }
 wheels = [
-    { url = "https://test-files.pythonhosted.org/packages/4b/9e/4c0deb7d4c216be3612b18103362eeeebd2e5691e7be9ef12bce22aa4aa5/uipath_core-0.5.24.dev1017616976-py3-none-any.whl", hash = "sha256:a5755b7b6ab19298220104c9873c664ab8c9c2c2ef6afdead7c67189171899f0", size = 55002, upload-time = "2026-06-27T10:16:47.823Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/56/c87da71a367fecd10a5f0f9cb4b05489ea214d80ba597ca636394cd5ebfa/uipath_core-0.5.25-py3-none-any.whl", hash = "sha256:5cf95a9ffa7bc2bd95d394aeb7f44dc4979a69e067c1ef92b41fd05ead802e7d", size = 54759, upload-time = "2026-06-29T10:01:33.189Z" },
 ]
 
 [[package]]
@@ -1194,7 +1191,7 @@ dev = [
 requires-dist = [
     { name = "chardet", specifier = ">=5.2.0,<8.0" },
     { name = "pyyaml", specifier = ">=6.0,<7.0" },
-    { name = "uipath-core", specifier = ">=0.5.22,<0.6.0", index = "https://test.pypi.org/simple/" },
+    { name = "uipath-core", specifier = ">=0.5.25,<0.6.0" },
     { name = "vadersentiment", specifier = ">=3.3.2,<4.0" },
 ]
 

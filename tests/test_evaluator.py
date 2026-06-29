@@ -129,10 +129,9 @@ def audit_setup() -> Any:
     """Per-test :class:`AuditManager` + capturing sink — no default sinks.
 
     Returns ``(manager, sink)`` so a test can build evaluators with the
-    manager and inspect emitted events through the sink. Synchronous
-    mode keeps assertions deterministic.
+    manager and inspect emitted events through the sink.
     """
-    manager = AuditManager(async_mode=False, register_default_sinks=False)
+    manager = AuditManager(register_default_sinks=False)
     sink = _CapturingSink()
     manager.register_sink(sink)
     yield manager, sink

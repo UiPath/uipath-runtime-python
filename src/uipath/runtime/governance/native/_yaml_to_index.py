@@ -1,11 +1,9 @@
 """Runtime YAML → PolicyIndex parser.
 
-Mirrors the shape produced by ``packs/compile_packs.py`` but builds
-the :class:`PolicyIndex` directly from parsed YAML data rather than
-generating Python source. The host calls this to compile the YAML
-body returned by :meth:`GovernancePolicyProvider.get_policy_async`
-into an in-memory index, then hands the index to
-:class:`GovernanceRuntime`.
+Builds a :class:`PolicyIndex` directly from parsed YAML data. The host
+calls this to compile the YAML body returned by
+:meth:`GovernancePolicyProvider.get_policy_async` into an in-memory
+index, then hands the index to :class:`GovernanceRuntime`.
 
 Accepts either a single YAML document (one pack) or a multi-document
 stream (``---``-separated packs). Unknown check types and malformed
@@ -209,12 +207,9 @@ def _build_check(
 ) -> Check | None:
     """Build one Check from a YAML check entry.
 
-    Supports the same check types as ``compile_packs.py``: explicit
-    conditions, regex, budget, tool_allowlist, parameter_validation,
-    rate_limit, field_regex, sentiment_concern, data_quality_score,
-    incident_taxonomy, commitment_extractor, plus ``guardrail_fallback``
-    (reads the rule-level ``mapped_to_uipath`` / ``policy_enabled`` flags
-    threaded in from ``_build_rule``).
+    The ``guardrail_fallback`` branch reads the rule-level
+    ``mapped_to_uipath`` / ``policy_enabled`` flags threaded in from
+    :func:`_build_rule`. Unknown check types are skipped.
     """
     conditions: list[Condition] = []
     message = ""
@@ -384,10 +379,10 @@ def _build_check(
         # Centralized guardrail compensating control. The on/off state
         # lives at the RULE level (mapped_to_uipath / policy_enabled),
         # threaded in from ``_build_rule``; ``validator`` names which
-        # guardrail check the server should run on behalf of the agent.
-        # The condition matches only when the guardrail is mapped to
-        # UiPath but disabled — see the ``guardrail_fallback`` operator
-        # in :class:`GovernanceEvaluator`.
+        # guardrail check the compensating call should run. The
+        # condition matches only when the guardrail is mapped to UiPath
+        # but disabled — see the ``guardrail_fallback`` operator in
+        # :class:`GovernanceEvaluator`.
         conditions.append(
             Condition(
                 operator="guardrail_fallback",
