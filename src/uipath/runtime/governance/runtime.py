@@ -25,10 +25,9 @@ hooks (BEFORE_MODEL, AFTER_MODEL, TOOL_CALL, AFTER_TOOL) are fired by
 adapters that observe per-step events.
 
 Trace-id is intentionally **not** carried on this wrapper. The
-governance compensator captures the live OTel context across the
-thread-pool hop via :func:`contextvars.copy_context`, and the
-injected provider resolves the canonical trace id at HTTP-call time.
-The runtime layer is fully env-free for this path.
+governance compensator dispatches synchronously on the caller's
+thread; the injected provider resolves the canonical trace id at
+call time. The runtime layer is fully env-free for this path.
 """
 
 from __future__ import annotations

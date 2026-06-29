@@ -14,7 +14,7 @@ import math
 import re
 from collections import Counter
 from datetime import datetime, timezone
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import Any
 
 from uipath.core.governance import EnforcementMode
@@ -92,52 +92,40 @@ def _compile_regex(pattern: str) -> re.Pattern[str] | None:
 # critical path. The except branch is defence against a corrupted
 # install (file present in METADATA but module unimportable) — the
 # operator no-ops rather than crashing the agent.
-_VADER_UNINITIALIZED = object()
-_vader_analyzer: Any = _VADER_UNINITIALIZED
-
-
+@cache
 def _get_vader_analyzer() -> Any:
     """Return a cached SentimentIntensityAnalyzer, or None if unavailable."""
-    global _vader_analyzer
-    if _vader_analyzer is _VADER_UNINITIALIZED:
-        try:
-            from vaderSentiment.vaderSentiment import (  # type: ignore[import-untyped]
-                SentimentIntensityAnalyzer,
-            )
+    try:
+        from vaderSentiment.vaderSentiment import (  # type: ignore[import-untyped]
+            SentimentIntensityAnalyzer,
+        )
 
-            _vader_analyzer = SentimentIntensityAnalyzer()
-        except ImportError:
-            logger.error(
-                "vaderSentiment failed to import despite being a hard dependency; "
-                "sentiment_concern checks will not fire."
-            )
-            _vader_analyzer = None
-    return _vader_analyzer
+        return SentimentIntensityAnalyzer()
+    except ImportError:
+        logger.error(
+            "vaderSentiment failed to import despite being a hard dependency; "
+            "sentiment_concern checks will not fire."
+        )
+        return None
 
 
 # --- chardet: lazy-imported module for encoding integrity (A.7.4) ---
 # Hard dependency, lazy-loaded for symmetry with the other library
 # wrappers. The except branch covers corrupted installs only.
-_CHARDET_UNINITIALIZED = object()
-_chardet_module: Any = _CHARDET_UNINITIALIZED
-
-
+@cache
 def _get_chardet() -> Any:
     """Return the chardet module, or None if unavailable."""
-    global _chardet_module
-    if _chardet_module is _CHARDET_UNINITIALIZED:
-        try:
-            import chardet
+    try:
+        import chardet
 
-            _chardet_module = chardet
-        except ImportError:
-            logger.error(
-                "chardet failed to import despite being a hard dependency; "
-                "encoding_concern confidence check will not fire (stdlib "
-                "signals still apply)."
-            )
-            _chardet_module = None
-    return _chardet_module
+        return chardet
+    except ImportError:
+        logger.error(
+            "chardet failed to import despite being a hard dependency; "
+            "encoding_concern confidence check will not fire (stdlib "
+            "signals still apply)."
+        )
+        return None
 
 
 # --- Static patterns for encoding_concern (A.7.4) ---
@@ -306,7 +294,7 @@ class GovernanceEvaluator:
                 emitted). Tests that don't care about emission can
                 leave this out.
             compensator: Per-runtime :class:`GuardrailCompensator`
-                used to dispatch ``/runtime/govern`` POSTs for
+                used to dispatch compensating-governance calls for
                 guardrail-fallback rules. When ``None`` such dispatch
                 is skipped — the evaluator still records the matched
                 rules in the :class:`AuditRecord`.
@@ -422,8 +410,9 @@ class GovernanceEvaluator:
         # compensator. The compensating call (provider-owned) runs the
         # real guardrail check and writes its own audit trace — the
         # evaluator does NOT emit a Python-side trace for these rules,
-        # to avoid double-writing. Fire-and-forget so a slow downstream
-        # never blocks the agent hook.
+        # to avoid double-writing. The provider is expected to be
+        # non-blocking (batched / async / fire-and-forget internally);
+        # the runtime layer no longer owns that scheduling.
         self._dispatch_compensation(audit, context)
 
         if final_action == Action.DENY:
@@ -434,12 +423,12 @@ class GovernanceEvaluator:
     def _dispatch_compensation(
         self, audit: AuditRecord, context: CheckContext
     ) -> None:
-        """Schedule compensating governance for any matched fallback rules.
+        """Dispatch compensating governance for any matched fallback rules.
 
-        Delegates to the injected :class:`GuardrailCompensator`. The
-        compensator owns concurrency, queue caps, exception isolation,
-        and graceful process-exit cancellation — this method just
-        builds the payload, logs the summary, and submits.
+        Delegates to the injected :class:`GuardrailCompensator`, which
+        builds the wire payload and hands it to the provider. This
+        method picks the fallback rules out of the audit, logs the
+        summary, and submits.
 
         No-op when no compensator was supplied at construction (e.g.
         unit tests that don't care about the dispatch path).
