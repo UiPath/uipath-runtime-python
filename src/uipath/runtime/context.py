@@ -55,7 +55,7 @@ class UiPathRuntimeContext(BaseModel):
         None,
         description="Conversation owner id for CAS (a real cloud user id or a synthetic user id)",
     )
-    voice_mode: Literal["session"] | None = Field(
+    voice_mode: Literal["session", "maestro_flow"] | None = Field(
         None, description="Voice job type for CAS"
     )
     mcp_server_id: str | None = None
