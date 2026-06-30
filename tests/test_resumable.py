@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from uipath.core.errors import ErrorCategory, UiPathPendingTriggerError
-from uipath.core.triggers import UiPathResumeTrigger, UiPathResumeTriggerType
+from uipath.core.triggers import (
+    UiPathResumeTrigger,
+    UiPathResumeTriggerName,
+    UiPathResumeTriggerType,
+)
 
 from uipath.runtime import (
     UiPathExecuteOptions,
@@ -17,13 +21,14 @@ from uipath.runtime import (
 )
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.resumable.protocols import (
+    UiPathResumableStorageProtocol,
     UiPathResumeTriggerProtocol,
 )
 from uipath.runtime.resumable.runtime import UiPathResumableRuntime
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 
-class MultiTriggerMockRuntime:
+class SiblingTriggerMockRuntime:
     """Mock runtime that simulates parallel branching with multiple interrupts."""
 
     def __init__(self) -> None:
@@ -89,6 +94,56 @@ class MultiTriggerMockRuntime:
         raise NotImplementedError()
 
 
+class MultiTriggerMockRuntime:
+    """Mock runtime that suspends on a multi-trigger interrupt, then suspends again."""
+
+    def __init__(self) -> None:
+        self.execution_count = 0
+
+    async def dispose(self) -> None:
+        pass
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        self.execution_count += 1
+        is_resume = options and options.resume
+
+        if self.execution_count == 1:
+            return UiPathRuntimeResult(
+                status=UiPathRuntimeStatus.SUSPENDED,
+                output={"child-1": {"process": "first-child"}},
+            )
+
+        assert is_resume
+        assert input == {
+            "child-1": {
+                "completed": True,
+                "__uipath": {
+                    "triggerType": UiPathResumeTriggerType.JOB.value,
+                    "triggerName": "Unknown",
+                },
+            }
+        }
+        return UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUSPENDED,
+            output={"child-2": {"process": "second-child"}},
+        )
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        result = await self.execute(input, options)
+        yield result
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        raise NotImplementedError()
+
+
 class StatefulStorageMock:
     """Stateful storage mock that tracks triggers."""
 
@@ -106,8 +161,14 @@ class StatefulStorageMock:
     async def delete_trigger(
         self, runtime_id: str, trigger: UiPathResumeTrigger
     ) -> None:
+        await self.delete_triggers(runtime_id, [trigger])
+
+    async def delete_triggers(
+        self, runtime_id: str, triggers: list[UiPathResumeTrigger]
+    ) -> None:
+        interrupt_ids = {trigger.interrupt_id for trigger in triggers}
         self.triggers = [
-            t for t in self.triggers if t.interrupt_id != trigger.interrupt_id
+            t for t in self.triggers if t.interrupt_id not in interrupt_ids
         ]
 
     async def set_value(
@@ -116,6 +177,80 @@ class StatefulStorageMock:
         pass
 
     async def get_value(self, runtime_id: str, namespace: str, key: str) -> Any:
+        return None
+
+
+class DeprecatedDeleteAliasStorage(UiPathResumableStorageProtocol):
+    """Storage that relies on the protocol's deprecated singular delete alias."""
+
+    def __init__(self) -> None:
+        self.deleted_triggers: list[UiPathResumeTrigger] = []
+
+    async def get_triggers(self, runtime_id: str) -> list[UiPathResumeTrigger]:
+        return []
+
+    async def save_triggers(
+        self, runtime_id: str, triggers: list[UiPathResumeTrigger]
+    ) -> None:
+        pass
+
+    async def delete_triggers(
+        self, runtime_id: str, triggers: list[UiPathResumeTrigger]
+    ) -> None:
+        self.deleted_triggers.extend(triggers)
+
+    async def set_value(
+        self, runtime_id: str, namespace: str, key: str, value: Any
+    ) -> None:
+        pass
+
+    async def get_value(self, runtime_id: str, namespace: str, key: str) -> Any:
+        return None
+
+
+class DefaultBulkDeleteStorage(UiPathResumableStorageProtocol):
+    """Storage that relies on the protocol's plural delete default."""
+
+    def __init__(self) -> None:
+        self.deleted_triggers: list[UiPathResumeTrigger] = []
+
+    async def get_triggers(self, runtime_id: str) -> list[UiPathResumeTrigger]:
+        return []
+
+    async def save_triggers(
+        self, runtime_id: str, triggers: list[UiPathResumeTrigger]
+    ) -> None:
+        pass
+
+    async def delete_trigger(
+        self, runtime_id: str, trigger: UiPathResumeTrigger
+    ) -> None:
+        self.deleted_triggers.append(trigger)
+
+    async def set_value(
+        self, runtime_id: str, namespace: str, key: str, value: Any
+    ) -> None:
+        pass
+
+    async def get_value(self, runtime_id: str, namespace: str, key: str) -> Any:
+        return None
+
+
+class DefaultCreateTriggersManager(UiPathResumeTriggerProtocol):
+    """Trigger manager that relies on the protocol's plural create default."""
+
+    def __init__(self) -> None:
+        self.created_values: list[Any] = []
+
+    async def create_trigger(self, suspend_value: Any) -> UiPathResumeTrigger:
+        self.created_values.append(suspend_value)
+        return UiPathResumeTrigger(
+            interrupt_id="",
+            trigger_type=UiPathResumeTriggerType.TASK,
+            payload=suspend_value,
+        )
+
+    async def read_trigger(self, trigger: UiPathResumeTrigger) -> Any | None:
         return None
 
 
@@ -134,6 +269,11 @@ def make_trigger_manager_mock() -> UiPathResumeTriggerProtocol:
         raise UiPathPendingTriggerError(ErrorCategory.USER, "Trigger not fired yet")
 
     manager.create_trigger = AsyncMock(side_effect=create_trigger_impl)
+
+    async def create_triggers_impl(data: dict[str, Any]) -> list[UiPathResumeTrigger]:
+        return [await manager.create_trigger(data)]
+
+    manager.create_triggers = AsyncMock(side_effect=create_triggers_impl)
     manager.read_trigger = AsyncMock(side_effect=read_trigger_default)
 
     return cast(UiPathResumeTriggerProtocol, manager)
@@ -141,12 +281,215 @@ def make_trigger_manager_mock() -> UiPathResumeTriggerProtocol:
 
 class TestResumableRuntime:
     @pytest.mark.asyncio
+    async def test_delete_triggers_default_delegates_to_singular_delete(
+        self,
+    ) -> None:
+        """Plural delete compatibility default delegates one trigger at a time."""
+
+        storage = DefaultBulkDeleteStorage()
+        triggers = [
+            UiPathResumeTrigger(
+                interrupt_id="int-1",
+                trigger_type=UiPathResumeTriggerType.TASK,
+            ),
+            UiPathResumeTrigger(
+                interrupt_id="int-2",
+                trigger_type=UiPathResumeTriggerType.TASK,
+            ),
+        ]
+
+        await storage.delete_triggers("runtime-1", triggers)
+
+        assert storage.deleted_triggers == triggers
+
+    @pytest.mark.asyncio
+    async def test_delete_trigger_alias_delegates_to_delete_triggers(self) -> None:
+        """Deprecated singular delete API delegates to the plural API."""
+
+        storage = DeprecatedDeleteAliasStorage()
+        trigger = UiPathResumeTrigger(
+            interrupt_id="int-1",
+            trigger_type=UiPathResumeTriggerType.TASK,
+        )
+
+        with pytest.warns(
+            DeprecationWarning,
+            match="delete_trigger\\(\\) is deprecated; use delete_triggers\\(\\) instead",
+        ):
+            await storage.delete_trigger("runtime-1", trigger)
+
+        assert storage.deleted_triggers == [trigger]
+
+    @pytest.mark.asyncio
+    async def test_create_triggers_default_delegates_to_create_trigger(self) -> None:
+        """Plural create compatibility default wraps a single created trigger."""
+
+        manager = DefaultCreateTriggersManager()
+
+        triggers = await manager.create_triggers({"action": "approve"})
+
+        assert len(triggers) == 1
+        assert triggers[0].payload == {"action": "approve"}
+        assert manager.created_values == [{"action": "approve"}]
+
+    def test_with_trigger_metadata_merges_existing_uipath_metadata(self) -> None:
+        """Existing UiPath metadata is preserved when trigger metadata is added."""
+
+        storage = StatefulStorageMock()
+        trigger_manager = make_trigger_manager_mock()
+        resumable = UiPathResumableRuntime(
+            delegate=SiblingTriggerMockRuntime(),
+            storage=storage,
+            trigger_manager=trigger_manager,
+            runtime_id="runtime-1",
+        )
+        trigger = UiPathResumeTrigger(
+            interrupt_id="int-1",
+            trigger_type=UiPathResumeTriggerType.TIMER,
+            trigger_name=UiPathResumeTriggerName.TIMER,
+        )
+
+        result = resumable._with_trigger_metadata(
+            trigger,
+            {"__uipath": {"kind": "timeout", "timeout": 10}, "value": "done"},
+        )
+
+        assert result == {
+            "__uipath": {
+                "kind": "timeout",
+                "timeout": 10,
+                "triggerType": UiPathResumeTriggerType.TIMER.value,
+                "triggerName": UiPathResumeTriggerName.TIMER.value,
+            },
+            "value": "done",
+        }
+
+    def test_with_trigger_metadata_wraps_non_mapping_data(self) -> None:
+        """Non-mapping resume values are wrapped with trigger metadata."""
+
+        storage = StatefulStorageMock()
+        trigger_manager = make_trigger_manager_mock()
+        resumable = UiPathResumableRuntime(
+            delegate=SiblingTriggerMockRuntime(),
+            storage=storage,
+            trigger_manager=trigger_manager,
+            runtime_id="runtime-1",
+        )
+        trigger = UiPathResumeTrigger(
+            interrupt_id="int-1",
+            trigger_type=UiPathResumeTriggerType.TASK,
+            trigger_name=UiPathResumeTriggerName.TASK,
+        )
+
+        result = resumable._with_trigger_metadata(trigger, "approved")
+
+        assert result == {
+            "__uipath": {
+                "triggerType": UiPathResumeTriggerType.TASK.value,
+                "triggerName": UiPathResumeTriggerName.TASK.value,
+            },
+            "value": "approved",
+        }
+        assert resumable._metadata_value("CustomName") == "CustomName"
+
+    @pytest.mark.asyncio
+    async def test_restore_resume_input_deletes_single_trigger_for_explicit_input(
+        self,
+    ) -> None:
+        """Explicit resume input clears the only stored trigger."""
+
+        storage = StatefulStorageMock()
+        storage.triggers = [
+            UiPathResumeTrigger(
+                interrupt_id="int-1",
+                trigger_type=UiPathResumeTriggerType.TASK,
+            )
+        ]
+        resumable = UiPathResumableRuntime(
+            delegate=SiblingTriggerMockRuntime(),
+            storage=storage,
+            trigger_manager=make_trigger_manager_mock(),
+            runtime_id="runtime-1",
+        )
+
+        result = await resumable._restore_resume_input({"int-1": {"approved": True}})
+
+        assert result == {"int-1": {"approved": True}}
+        assert storage.triggers == []
+
+    @pytest.mark.asyncio
+    async def test_restore_resume_input_deletes_matching_trigger_for_explicit_input(
+        self,
+    ) -> None:
+        """Explicit resume input clears only matching stored triggers."""
+
+        trigger_1 = UiPathResumeTrigger(
+            interrupt_id="int-1",
+            trigger_type=UiPathResumeTriggerType.TASK,
+        )
+        trigger_2 = UiPathResumeTrigger(
+            interrupt_id="int-2",
+            trigger_type=UiPathResumeTriggerType.TASK,
+        )
+        storage = StatefulStorageMock()
+        storage.triggers = [trigger_1, trigger_2]
+        resumable = UiPathResumableRuntime(
+            delegate=SiblingTriggerMockRuntime(),
+            storage=storage,
+            trigger_manager=make_trigger_manager_mock(),
+            runtime_id="runtime-1",
+        )
+
+        result = await resumable._restore_resume_input({"int-2": {"approved": True}})
+
+        assert result == {"int-2": {"approved": True}}
+        assert storage.triggers == [trigger_1]
+
+    @pytest.mark.asyncio
+    async def test_build_resume_map_skips_duplicate_pollable_trigger(self) -> None:
+        """Duplicate pollable triggers for one interrupt are read once."""
+
+        trigger_1 = UiPathResumeTrigger(
+            interrupt_id="int-1",
+            trigger_type=UiPathResumeTriggerType.TASK,
+        )
+        trigger_2 = UiPathResumeTrigger(
+            interrupt_id="int-1",
+            trigger_type=UiPathResumeTriggerType.JOB,
+        )
+        storage = StatefulStorageMock()
+        storage.triggers = [trigger_1, trigger_2]
+        trigger_manager = make_trigger_manager_mock()
+        read_trigger_mock = AsyncMock(return_value="approved")
+        cast(Any, trigger_manager).read_trigger = read_trigger_mock
+        resumable = UiPathResumableRuntime(
+            delegate=SiblingTriggerMockRuntime(),
+            storage=storage,
+            trigger_manager=trigger_manager,
+            runtime_id="runtime-1",
+        )
+
+        result = await resumable._build_resume_map([trigger_1, trigger_2])
+
+        assert result == {
+            "int-1": {
+                "__uipath": {
+                    "triggerType": UiPathResumeTriggerType.TASK.value,
+                    "triggerName": "Unknown",
+                },
+                "value": "approved",
+            }
+        }
+        read_trigger_mock.assert_awaited_once_with(trigger_1)
+        assert storage.triggers == []
+
+    @pytest.mark.asyncio
     async def test_resumable_creates_multiple_triggers_on_first_suspension(
         self,
     ) -> None:
         """First suspension with parallel branches should create multiple triggers."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -179,7 +522,7 @@ class TestResumableRuntime:
     async def test_resumable_adds_only_new_triggers_on_partial_resume(self) -> None:
         """Partial resume should keep pending trigger and add only new ones."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -222,7 +565,7 @@ class TestResumableRuntime:
     async def test_resumable_completes_after_all_triggers_resolved(self) -> None:
         """After all triggers resolved, execution should complete successfully."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -269,7 +612,7 @@ class TestResumableRuntime:
     async def test_resumable_auto_resumes_when_triggers_already_fired(self) -> None:
         """When triggers are already fired during suspension, runtime should auto-resume."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -308,7 +651,7 @@ class TestResumableRuntime:
     async def test_resumable_auto_resumes_partial_fired_triggers(self) -> None:
         """When only some triggers are fired during suspension, auto-resume with those."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -344,7 +687,7 @@ class TestResumableRuntime:
     async def test_resumable_auto_resumes_multiple_times(self) -> None:
         """When triggers keep being fired immediately, keep auto-resuming until complete."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -389,7 +732,7 @@ class TestResumableRuntime:
     async def test_resumable_stream_auto_resumes_when_triggers_fired(self) -> None:
         """Stream should auto-resume when triggers are already fired."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -426,7 +769,7 @@ class TestResumableRuntime:
     async def test_resumable_no_auto_resume_when_all_triggers_pending(self) -> None:
         """When all triggers are pending, should NOT auto-resume."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -457,7 +800,7 @@ class TestResumableRuntime:
     async def test_resumable_skips_api_triggers_on_auto_resume_check(self) -> None:
         """API triggers should be skipped when checking for auto-resume after suspension."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -508,7 +851,7 @@ class TestResumableRuntime:
         404 and fault the run. They should behave like API triggers here.
         """
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -552,7 +895,7 @@ class TestResumableRuntime:
     async def test_resumable_skips_timer_triggers_on_auto_resume_check(self) -> None:
         """Timer triggers should be skipped when checking for auto-resume."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -595,7 +938,7 @@ class TestResumableRuntime:
     ) -> None:
         """Mixed triggers: TASK triggers should trigger auto-resume, API triggers should not."""
 
-        runtime_impl = MultiTriggerMockRuntime()
+        runtime_impl = SiblingTriggerMockRuntime()
         storage = StatefulStorageMock()
         trigger_manager = make_trigger_manager_mock()
 
@@ -640,3 +983,67 @@ class TestResumableRuntime:
 
         # Delegate should have been executed twice (initial + auto-resume for TASK trigger)
         assert runtime_impl.execution_count == 2
+
+    @pytest.mark.asyncio
+    async def test_resumable_removes_sibling_triggers_when_one_trigger_fires(
+        self,
+    ) -> None:
+        """When one trigger fires, sibling triggers must not leak forward."""
+
+        runtime_impl = MultiTriggerMockRuntime()
+        storage = StatefulStorageMock()
+        trigger_manager = make_trigger_manager_mock()
+
+        async def create_sibling_triggers(
+            data: dict[str, Any],
+        ) -> list[UiPathResumeTrigger]:
+            return [
+                UiPathResumeTrigger(
+                    interrupt_id="",  # Will be set by resumable runtime
+                    trigger_type=UiPathResumeTriggerType.JOB,
+                    payload={"source": data["process"]},
+                ),
+                UiPathResumeTrigger(
+                    interrupt_id="",  # Will be set by resumable runtime
+                    trigger_type=UiPathResumeTriggerType.TIMER,
+                    payload={"source": data["process"]},
+                ),
+            ]
+
+        create_triggers_mock = AsyncMock(side_effect=create_sibling_triggers)
+        cast(Any, trigger_manager).create_triggers = create_triggers_mock
+
+        async def read_trigger_impl(trigger: UiPathResumeTrigger) -> dict[str, Any]:
+            if (
+                trigger.interrupt_id == "child-1"
+                and trigger.trigger_type == UiPathResumeTriggerType.JOB
+            ):
+                return {"completed": True}
+            raise UiPathPendingTriggerError(ErrorCategory.USER, "still pending")
+
+        read_trigger_mock = AsyncMock(side_effect=read_trigger_impl)
+        cast(Any, trigger_manager).read_trigger = read_trigger_mock
+
+        resumable = UiPathResumableRuntime(
+            delegate=runtime_impl,
+            storage=storage,
+            trigger_manager=trigger_manager,
+            runtime_id="runtime-1",
+        )
+
+        result = await resumable.execute({})
+
+        assert result.status == UiPathRuntimeStatus.SUSPENDED
+        assert result.triggers is not None
+        assert {t.interrupt_id for t in result.triggers} == {"child-2"}
+        assert len(result.triggers) == 2
+        assert {t.trigger_type for t in result.triggers} == {
+            UiPathResumeTriggerType.JOB,
+            UiPathResumeTriggerType.TIMER,
+        }
+        assert runtime_impl.execution_count == 2
+        assert create_triggers_mock.await_count == 2
+        assert read_trigger_mock.await_count == 2
+
+        saved_triggers = await storage.get_triggers("runtime-1")
+        assert {t.interrupt_id for t in saved_triggers} == {"child-2"}

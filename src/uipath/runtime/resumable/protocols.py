@@ -1,5 +1,6 @@
 """Module defining the protocol for resume trigger storage."""
 
+import warnings
 from typing import Any, Protocol
 
 from uipath.core.triggers import UiPathResumeTrigger
@@ -34,6 +35,21 @@ class UiPathResumableStorageProtocol(UiPathRuntimeStorageProtocol, Protocol):
         """
         ...
 
+    async def delete_triggers(
+        self, runtime_id: str, triggers: list[UiPathResumeTrigger]
+    ) -> None:
+        """Delete resume triggers from storage.
+
+        Args:
+            runtime_id: The runtime ID
+            triggers: The resume triggers to delete
+
+        Raises:
+            Exception: If deletion operation fails
+        """
+        for trigger in triggers:
+            await self.delete_trigger(runtime_id, trigger)
+
     async def delete_trigger(
         self, runtime_id: str, trigger: UiPathResumeTrigger
     ) -> None:
@@ -46,7 +62,13 @@ class UiPathResumableStorageProtocol(UiPathRuntimeStorageProtocol, Protocol):
         Raises:
             Exception: If deletion operation fails
         """
-        ...
+        warnings.warn(
+            "delete_trigger() is deprecated; use delete_triggers() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # TODO: Remove this compatibility alias in the next minor version.
+        await self.delete_triggers(runtime_id, [trigger])
 
 
 class UiPathResumeTriggerCreatorProtocol(Protocol):
@@ -67,6 +89,23 @@ class UiPathResumeTriggerCreatorProtocol(Protocol):
             UiPathRuntimeError: If trigger creation fails
         """
         ...
+
+    async def create_triggers(self, suspend_value: Any) -> list[UiPathResumeTrigger]:
+        """Create resume triggers from a suspend value.
+
+        Most suspend values produce one trigger. Composite values may produce
+        multiple sibling triggers for the same interrupt.
+
+        Args:
+            suspend_value: The value that caused the suspension.
+
+        Returns:
+            UiPathResumeTrigger objects ready to be persisted.
+
+        Raises:
+            UiPathRuntimeError: If trigger creation fails
+        """
+        return [await self.create_trigger(suspend_value)]
 
 
 class UiPathResumeTriggerReaderProtocol(Protocol):
