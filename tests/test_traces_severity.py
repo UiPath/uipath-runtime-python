@@ -1,10 +1,10 @@
 """Tests for trace-span verbosity / status semantics.
 
 ``TracesAuditSink`` emits an OpenTelemetry span for every governance
-hook end and every rule evaluation. The contract follows §4 of the
-cross-product unification doc — verdict is split into ``evaluator_result``
-(what the rule decided, mode-independent) and ``action_applied`` (what
-actually happened, derived from evaluator_result + mode).
+hook end and every rule evaluation. The verdict is split into
+``evaluator_result`` (what the rule decided, mode-independent) and
+``action_applied`` (what actually happened, derived from
+evaluator_result + mode).
 
 Mode travels with the event (set by the emitter from its
 per-instance ``EnforcementMode``) so parallel runtimes running
@@ -15,12 +15,12 @@ different modes don't cross-contaminate the sink's view.
   the agent (ENFORCE mode + configured action ``deny``).
 - ``verbosityLevel = 3`` (Warning) and ``Status.UNSET`` for advisory
   outcomes (``action_applied`` in ``{AUDIT, HITL}``). HITL is its own
-  spec bucket — escalation pauses for human review, it doesn't fail
-  the run, so it stays Warning even in ENFORCE mode.
+  bucket — escalation pauses for human review, it doesn't fail the
+  run, so it stays Warning even in ENFORCE mode.
 - Hook spans never set Status, regardless of mode or final_action.
   They're summary containers; severity belongs on the per-rule span.
-- ``ALLOW`` / ``NONE`` results leave verbosityLevel unset (Orchestrator
-  default = 2, Information) and never call set_status.
+- ``ALLOW`` / ``NONE`` results leave verbosityLevel unset (consumers
+  apply their default) and never call set_status.
 """
 
 from __future__ import annotations
