@@ -1,10 +1,16 @@
 """Resumable runtime protocol and implementation."""
 
 import logging
+from collections import Counter
+from enum import Enum
 from typing import Any, AsyncGenerator
 
 from uipath.core.errors import UiPathPendingTriggerError
-from uipath.core.triggers import UiPathResumeTrigger, UiPathResumeTriggerType
+from uipath.core.triggers import (
+    UIPATH_METADATA_KEY,
+    UiPathResumeTrigger,
+    UiPathResumeTriggerType,
+)
 
 from uipath.runtime.base import (
     UiPathExecuteOptions,
@@ -168,7 +174,7 @@ class UiPathResumableRuntime:
                 UiPathResumeTriggerType.TIMER,
             )
         ]
-        return await self._build_resume_map(pollable_triggers)
+        return await self._build_resume_map(pollable_triggers, all_triggers=triggers)
 
     async def _restore_resume_input(
         self,
@@ -190,15 +196,17 @@ class UiPathResumableRuntime:
             if triggers:
                 if len(triggers) == 1:
                     # Single trigger - just delete it
-                    await self.storage.delete_trigger(self.runtime_id, triggers[0])
+                    await self.storage.delete_triggers(self.runtime_id, triggers)
                 else:
                     # Multiple triggers - match by interrupt_id
-                    found = False
-                    for trigger in triggers:
-                        if trigger.interrupt_id in input:
-                            await self.storage.delete_trigger(self.runtime_id, trigger)
-                            found = True
-                    if not found:
+                    matched_triggers = [
+                        trigger for trigger in triggers if trigger.interrupt_id in input
+                    ]
+                    if matched_triggers:
+                        await self.storage.delete_triggers(
+                            self.runtime_id, matched_triggers
+                        )
+                    else:
                         logger.warning(
                             f"Multiple triggers detected but none match the provided input. "
                             f"Please specify which trigger to resume by {{interrupt_id: value}}. "
@@ -213,30 +221,69 @@ class UiPathResumableRuntime:
 
     async def _build_resume_map(
         self,
-        triggers: list[UiPathResumeTrigger],
+        pollable_triggers: list[UiPathResumeTrigger],
+        all_triggers: list[UiPathResumeTrigger] | None = None,
     ) -> dict[str, Any]:
         """Build resume map from triggers: {interrupt_id: resume_data}.
 
         Args:
-            triggers: List of triggers to read and map
+            pollable_triggers: List of triggers to read and map.
+            all_triggers: Full trigger set to use when detecting sibling triggers.
 
         Returns:
             A dict mapping interrupt_id to the trigger's resume data.
         """
         resume_map: dict[str, Any] = {}
-        for trigger in triggers:
+        trigger_count_by_interrupt_id = Counter(
+            trigger.interrupt_id for trigger in all_triggers or pollable_triggers
+        )
+        for trigger in pollable_triggers:
+            assert trigger.interrupt_id is not None, (
+                "Trigger interrupt_id cannot be None"
+            )
+            if trigger.interrupt_id in resume_map:
+                continue
+
             try:
                 data = await self.trigger_manager.read_trigger(trigger)
-                assert trigger.interrupt_id is not None, (
-                    "Trigger interrupt_id cannot be None"
-                )
+                if trigger_count_by_interrupt_id[trigger.interrupt_id] > 1:
+                    data = self._with_trigger_metadata(trigger, data)
                 resume_map[trigger.interrupt_id] = data
-                await self.storage.delete_trigger(self.runtime_id, trigger)
+                sibling_triggers = [
+                    sibling
+                    for sibling in all_triggers or pollable_triggers
+                    if sibling.interrupt_id == trigger.interrupt_id
+                ]
+                await self.storage.delete_triggers(self.runtime_id, sibling_triggers)
             except UiPathPendingTriggerError:
                 # Trigger still pending, skip it
                 pass
 
         return resume_map
+
+    def _with_trigger_metadata(
+        self, trigger: UiPathResumeTrigger, data: Any
+    ) -> dict[str, Any]:
+        metadata = {
+            "triggerType": self._metadata_value(trigger.trigger_type),
+            "triggerName": self._metadata_value(trigger.trigger_name),
+        }
+
+        if isinstance(data, dict):
+            existing_metadata = data.get(UIPATH_METADATA_KEY)
+            if isinstance(existing_metadata, dict):
+                metadata = {**existing_metadata, **metadata}
+
+            return {**data, UIPATH_METADATA_KEY: metadata}
+
+        return {UIPATH_METADATA_KEY: metadata, "value": data}
+
+    @staticmethod
+    def _metadata_value(value: Any) -> Any:
+        if isinstance(value, Enum):
+            return value.value
+
+        return value
 
     async def _handle_suspension(
         self, result: UiPathRuntimeResult
@@ -273,11 +320,12 @@ class UiPathResumableRuntime:
 
         # Create triggers only for new interrupts
         for interrupt_id in new_ids:
-            trigger = await self.trigger_manager.create_trigger(
+            triggers = await self.trigger_manager.create_triggers(
                 current_interrupts[interrupt_id]
             )
-            trigger.interrupt_id = interrupt_id
-            suspended_result.triggers.append(trigger)
+            for trigger in triggers:
+                trigger.interrupt_id = interrupt_id
+                suspended_result.triggers.append(trigger)
 
         if suspended_result.triggers:
             await self.storage.save_triggers(self.runtime_id, suspended_result.triggers)
