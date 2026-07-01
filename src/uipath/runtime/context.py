@@ -53,7 +53,7 @@ class UiPathRuntimeContext(BaseModel):
     )
     conversational_outputs_enabled: bool = Field(
         False,
-        description=("Whether conversational agent should generate structured outputs on its turn."),
+        description="Whether conversational agent output-generation is enabled."
     )
     conversational_user_id: str | None = Field(
         None,
