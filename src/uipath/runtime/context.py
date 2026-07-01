@@ -51,6 +51,10 @@ class UiPathRuntimeContext(BaseModel):
         True,
         description="Whether to emit the exchange end event for CAS",
     )
+    conversational_outputs_enabled: bool = Field(
+        False,
+        description=("Whether conversational agent should generate structured outputs on its turn."),
+    )
     conversational_user_id: str | None = Field(
         None,
         description="Conversation owner id for CAS (a real cloud user id or a synthetic user id)",
@@ -408,6 +412,7 @@ class UiPathRuntimeContext(BaseModel):
             "conversationalService.exchangeId": "exchange_id",
             "conversationalService.messageId": "message_id",
             "conversationalService.endExchange": "end_exchange",
+            "conversationalService.enableOutputs": "conversational_outputs_enabled",
             "conversationalService.conversationalUserId": "conversational_user_id",
             "mcpServer.id": "mcp_server_id",
             "mcpServer.slug": "mcp_server_slug",
