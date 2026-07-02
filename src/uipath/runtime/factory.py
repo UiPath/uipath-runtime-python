@@ -20,7 +20,7 @@ class UiPathRuntimeFactorySettings(BaseModel):
     trace_settings: UiPathTraceSettings | None = None
 
     agent_type: str | None = None
-    
+
     agent_framework: str | None = None
 
 
