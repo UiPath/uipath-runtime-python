@@ -28,6 +28,7 @@ class UiPathRuntimeLogsInterceptor:
         job_id: str | None = None,
         execution_id: str | None = None,
         log_handler: logging.Handler | None = None,
+        log_to_file: bool = False,
     ):
         """Initialize the log interceptor.
 
@@ -38,6 +39,7 @@ class UiPathRuntimeLogsInterceptor:
             job_id (str, optional): If provided, logs go to file; otherwise, to stdout.
             execution_id (str, optional): Unique identifier for this execution context.
             log_handler (logging.Handler, optional): Custom log handler to use for this execution context.
+            log_to_file (bool): If True, force file logging even without a job_id.
         """
         min_level = min_level or "INFO"
         self.job_id = job_id
@@ -67,8 +69,8 @@ class UiPathRuntimeLogsInterceptor:
         if log_handler:
             self.log_handler = log_handler
         else:
-            # Create either file handler (runtime) or stdout handler (debug)
-            if not job_id:
+            # Create either file handler (runtime/log_to_file) or stdout handler (debug)
+            if not job_id and not log_to_file:
                 # Only wrap if stdout is using a problematic encoding (like cp1252 on Windows)
                 if (
                     hasattr(sys.stdout, "encoding")
