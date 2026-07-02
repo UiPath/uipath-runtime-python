@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from uipath.core.errors import ErrorCategory, UiPathFaultedTriggerError
 
 from uipath.runtime.context import UiPathRuntimeContext
@@ -371,3 +372,29 @@ def test_explicit_execution_source_not_overwritten() -> None:
     ctx = UiPathRuntimeContext(command="run", execution_source="custom")
 
     assert ctx.execution_source == "custom"
+
+
+@pytest.mark.parametrize("voice_mode", ["session", "maestro_flow"])
+def test_constructor_accepts_supported_voice_modes(voice_mode: str) -> None:
+    ctx = UiPathRuntimeContext(voice_mode=voice_mode)
+
+    assert ctx.voice_mode == voice_mode
+
+
+@pytest.mark.parametrize("voice_mode", ["session", "maestro_flow"])
+def test_from_config_accepts_supported_voice_modes(
+    voice_mode: str, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(
+        json.dumps({"fpsProperties": {"voice.mode": voice_mode}})
+    )
+
+    ctx = UiPathRuntimeContext.from_config(str(config_path))
+
+    assert ctx.voice_mode == voice_mode
+
+
+def test_constructor_rejects_unknown_voice_mode() -> None:
+    with pytest.raises(ValidationError):
+        UiPathRuntimeContext(voice_mode="chat")
