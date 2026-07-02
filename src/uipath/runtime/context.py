@@ -52,8 +52,7 @@ class UiPathRuntimeContext(BaseModel):
         description="Whether to emit the exchange end event for CAS",
     )
     conversational_outputs_enabled: bool = Field(
-        False,
-        description="Whether conversational agent output-generation is enabled."
+        False, description="Whether conversational agent output-generation is enabled."
     )
     conversational_user_id: str | None = Field(
         None,
