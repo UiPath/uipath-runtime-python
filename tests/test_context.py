@@ -183,6 +183,7 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
             "conversationalService.conversationId": "conv-123",
             "conversationalService.exchangeId": "ex-456",
             "conversationalService.messageId": "msg-789",
+            "conversationalService.enableOutputs": True,
             "conversationalService.conversationalUserId": "owner-guid",
             "mcpServer.id": "server-id-123",
             "mcpServer.slug": "my-mcp-server",
@@ -196,9 +197,28 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
     assert ctx.conversation_id == "conv-123"
     assert ctx.exchange_id == "ex-456"
     assert ctx.message_id == "msg-789"
+    assert ctx.conversational_outputs_enabled is True
     assert ctx.conversational_user_id == "owner-guid"
     assert ctx.mcp_server_id == "server-id-123"
     assert ctx.mcp_server_slug == "my-mcp-server"
+
+
+def test_from_config_conversational_outputs_enabled_defaults_false(
+    tmp_path: Path,
+) -> None:
+    """When enableOutputs isn't in fpsProperties, the field defaults to False —
+    legacy safe behavior for pre-migration conversational agents."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.conversationId": "conv-legacy",
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.conversational_outputs_enabled is False
 
 
 def test_from_config_loads_runtime_and_fps_properties(tmp_path: Path) -> None:
