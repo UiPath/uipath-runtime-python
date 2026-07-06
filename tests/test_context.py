@@ -391,3 +391,20 @@ def test_explicit_execution_source_not_overwritten() -> None:
     ctx = UiPathRuntimeContext(command="run", execution_source="custom")
 
     assert ctx.execution_source == "custom"
+
+
+def test_constructor_accepts_maestro_flow_voice_mode() -> None:
+    ctx = UiPathRuntimeContext(voice_mode="maestro_flow")
+
+    assert ctx.voice_mode == "maestro_flow"
+
+
+def test_from_config_accepts_maestro_flow_voice_mode(tmp_path: Path) -> None:
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(
+        json.dumps({"fpsProperties": {"voice.mode": "maestro_flow"}})
+    )
+
+    ctx = UiPathRuntimeContext.from_config(str(config_path))
+
+    assert ctx.voice_mode == "maestro_flow"
