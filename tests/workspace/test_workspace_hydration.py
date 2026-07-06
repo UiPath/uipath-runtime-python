@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, cast
 
 import pytest
 
@@ -100,6 +100,7 @@ class WritingRuntime:
         self.workspace_path = workspace_path
         self.status = status
         self.disposed = False
+        self.runtime_id = "runtime-1"
 
     async def execute(
         self,
@@ -255,6 +256,24 @@ async def test_hydrate_skips_unchanged_local_file(tmp_path: Path) -> None:
     await hydrator.hydrate(registry)
 
     assert attachments.downloads == 0
+
+
+def test_hydration_runtime_forwards_delegate_attributes(tmp_path: Path) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    delegate = WritingRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL)
+    runtime = HydrationRuntime(
+        delegate,
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    forwarded_runtime = cast(Any, runtime)
+    assert forwarded_runtime.runtime_id == "runtime-1"
+    assert forwarded_runtime.workspace_path == workspace.path
 
 
 @pytest.mark.asyncio

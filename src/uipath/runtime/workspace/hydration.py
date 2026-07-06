@@ -94,6 +94,10 @@ class HydrationRuntime:
         finally:
             await self.workspace.dispose()
 
+    def __getattr__(self, name: str) -> Any:
+        """Forward unknown attributes to the wrapped runtime."""
+        return getattr(self.delegate, name)
+
     async def _hydrate(self) -> None:
         registry = await self.registry_store.load()
         hydrated = await self.hydrator.hydrate(registry)
