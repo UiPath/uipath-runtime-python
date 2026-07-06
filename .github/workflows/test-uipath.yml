@@ -45,7 +45,9 @@ jobs:
       - name: Update uipath-runtime version
         shell: bash
         working-directory: uipath-python/packages/uipath
-        run: uv add ../../../uipath-runtime-python/dist/*.whl --dev
+        run: |
+          runtime_wheel="$(python ../../../uipath-runtime-python/.github/scripts/force-runtime-override.py pyproject.toml ../../../uipath-runtime-python/dist)"
+          uv add "$runtime_wheel" --dev
 
       - name: Run uipath tests
         working-directory: uipath-python/packages/uipath
@@ -89,7 +91,9 @@ jobs:
       - name: Update uipath-runtime version
         shell: bash
         working-directory: uipath-python/packages/uipath
-        run: uv add ../../../uipath-runtime-python/dist/*.whl --dev
+        run: |
+          runtime_wheel="$(python ../../../uipath-runtime-python/.github/scripts/force-runtime-override.py pyproject.toml ../../../uipath-runtime-python/dist)"
+          uv add "$runtime_wheel" --dev
 
       - name: Run typecheck
         working-directory: uipath-python/packages/uipath
@@ -162,7 +166,9 @@ jobs:
       - name: Update uipath-runtime version
         shell: bash
         working-directory: uipath-python/packages/uipath
-        run: uv add ../../../uipath-runtime-python/dist/*.whl --dev
+        run: |
+          runtime_wheel="$(python ../../../uipath-runtime-python/.github/scripts/force-runtime-override.py pyproject.toml ../../../uipath-runtime-python/dist)"
+          uv add "$runtime_wheel" --dev
 
       - name: Install dependencies
         working-directory: uipath-python/packages/uipath
@@ -179,8 +185,8 @@ jobs:
         run: |
           echo "Running testcase: ${{ matrix.testcase }}"
           echo "Environment: ${{ matrix.environment }}"
+          python ../../../../../uipath-runtime-python/.github/scripts/force-runtime-override.py pyproject.toml ../../../../../uipath-runtime-python/dist
 
           # Execute the testcase run script directly
           bash run.sh
           bash ../common/validate_output.sh
-
