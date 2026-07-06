@@ -4,6 +4,8 @@ from typing import Any, Protocol
 
 from uipath.core.triggers import UiPathResumeTrigger
 
+from uipath.runtime.errors import UiPathRuntimeError
+from uipath.runtime.errors.codes import UiPathErrorCode
 from uipath.runtime.storage import UiPathRuntimeStorageProtocol
 
 
@@ -34,6 +36,20 @@ class UiPathResumableStorageProtocol(UiPathRuntimeStorageProtocol, Protocol):
         """
         ...
 
+    async def delete_triggers(
+        self, runtime_id: str, triggers: list[UiPathResumeTrigger]
+    ) -> None:
+        """Delete resume triggers from storage.
+
+        Args:
+            runtime_id: The runtime ID
+            triggers: The resume triggers to delete
+
+        Raises:
+            Exception: If deletion operation fails
+        """
+        ...
+
     async def delete_trigger(
         self, runtime_id: str, trigger: UiPathResumeTrigger
     ) -> None:
@@ -46,7 +62,8 @@ class UiPathResumableStorageProtocol(UiPathRuntimeStorageProtocol, Protocol):
         Raises:
             Exception: If deletion operation fails
         """
-        ...
+        # TODO: Remove this compatibility alias in the next minor version.
+        await self.delete_triggers(runtime_id, [trigger])
 
 
 class UiPathResumeTriggerCreatorProtocol(Protocol):
@@ -62,6 +79,34 @@ class UiPathResumeTriggerCreatorProtocol(Protocol):
 
         Returns:
             UiPathResumeTrigger ready to be persisted
+
+        Raises:
+            UiPathRuntimeError: If trigger creation fails
+        """
+        # TODO: Remove this compatibility alias in the next minor version.
+        triggers = await self.create_triggers(suspend_value)
+        if len(triggers) != 1:
+            raise UiPathRuntimeError(
+                code=UiPathErrorCode.CREATE_RESUME_TRIGGER_ERROR,
+                title="Unexpected resume trigger count",
+                detail=(
+                    "create_trigger() cannot return multiple resume triggers. "
+                    "Use create_triggers() instead."
+                ),
+            )
+        return triggers[0]
+
+    async def create_triggers(self, suspend_value: Any) -> list[UiPathResumeTrigger]:
+        """Create resume triggers from a suspend value.
+
+        Most suspend values produce one trigger. Composite values may produce
+        multiple sibling triggers for the same interrupt.
+
+        Args:
+            suspend_value: The value that caused the suspension.
+
+        Returns:
+            UiPathResumeTrigger objects ready to be persisted.
 
         Raises:
             UiPathRuntimeError: If trigger creation fails

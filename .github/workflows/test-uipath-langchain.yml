@@ -45,7 +45,9 @@ jobs:
       - name: Update uipath-runtime version
         shell: bash
         working-directory: uipath-langchain-python
-        run: uv add ../uipath-runtime-python/dist/*.whl --dev
+        run: |
+          runtime_wheel="$(python ../uipath-runtime-python/.github/scripts/force-runtime-override.py pyproject.toml ../uipath-runtime-python/dist)"
+          uv add "$runtime_wheel" --dev
 
       - name: Run uipath-langchain tests
         working-directory: uipath-langchain-python
@@ -89,7 +91,9 @@ jobs:
       - name: Update uipath-runtime version
         shell: bash
         working-directory: uipath-langchain-python
-        run: uv add ../uipath-runtime-python/dist/*.whl --dev
+        run: |
+          runtime_wheel="$(python ../uipath-runtime-python/.github/scripts/force-runtime-override.py pyproject.toml ../uipath-runtime-python/dist)"
+          uv add "$runtime_wheel" --dev
 
       - name: Run typecheck
         working-directory: uipath-langchain-python
@@ -163,7 +167,9 @@ jobs:
       - name: Update uipath-runtime version
         shell: bash
         working-directory: uipath-langchain-python
-        run: uv add ../uipath-runtime-python/dist/*.whl --dev
+        run: |
+          runtime_wheel="$(python ../uipath-runtime-python/.github/scripts/force-runtime-override.py pyproject.toml ../uipath-runtime-python/dist)"
+          uv add "$runtime_wheel" --dev
 
       - name: Install dependencies
         working-directory: uipath-langchain-python
@@ -182,8 +188,8 @@ jobs:
           echo "Environment: ${{ matrix.environment }}"
           echo "LLM: ${{ matrix.use_azure_chat && 'UiPathAzureChatOpenAI' || 'UiPathChat' }}"
           echo "USE_AZURE_CHAT: ${{ matrix.use_azure_chat }}"
+          python ../../../uipath-runtime-python/.github/scripts/force-runtime-override.py pyproject.toml ../../../uipath-runtime-python/dist
 
           # Execute the testcase run script directly
           bash run.sh
           bash ../common/validate_output.sh
-
