@@ -59,6 +59,12 @@ class UiPathRuntimeSchema(BaseModel):
     type: str = Field(..., alias="type")
     input: dict[str, Any] = Field(..., alias="input")
     output: dict[str, Any] = Field(..., alias="output")
+    is_transaction_root: bool | None = Field(
+        None,
+        alias="isTransactionRoot",
+        description="Whether this entrypoint is a transaction root "
+        "(set for vertical-solution projects)",
+    )
     graph: UiPathRuntimeGraph | None = Field(
         None, description="Runtime graph structure for debugging"
     )
