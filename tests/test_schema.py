@@ -3,6 +3,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from uipath.runtime.schema import (
+    UiPathRuntimeSchema,
     transform_attachments,
     transform_nullable_types,
     transform_references,
@@ -295,3 +296,38 @@ class TestSchemaGenerationHelpers:
         }
 
         assert result == expected
+
+
+class TestUiPathRuntimeSchema:
+    def _make_schema(self, **kwargs: Any) -> UiPathRuntimeSchema:
+        return UiPathRuntimeSchema(
+            filePath="main.py",
+            uniqueId="00000000-0000-0000-0000-000000000001",
+            type="function",
+            input={},
+            output={},
+            **kwargs,
+        )
+
+    def test_is_transaction_root_omitted_when_unset(self):
+        """Unset flag must not appear in the serialized entrypoint (bool? on consumers)."""
+        schema = self._make_schema()
+
+        dumped = schema.model_dump(by_alias=True, exclude_unset=True)
+
+        assert "isTransactionRoot" not in dumped
+
+    def test_is_transaction_root_serializes_by_alias(self):
+        """The flag set via the python name serializes under its camelCase alias."""
+        schema = self._make_schema()
+        schema.is_transaction_root = True
+
+        dumped = schema.model_dump(by_alias=True, exclude_unset=True)
+
+        assert dumped["isTransactionRoot"] is True
+
+    def test_is_transaction_root_validates_from_alias(self):
+        """The flag round-trips when read back from entry-points.json content."""
+        schema = self._make_schema(isTransactionRoot=True)
+
+        assert schema.is_transaction_root is True
