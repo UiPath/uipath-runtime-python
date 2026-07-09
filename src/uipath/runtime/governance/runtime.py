@@ -47,7 +47,7 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import contextmanager
-from typing import Any, AsyncGenerator, Iterator
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Iterator
 
 from uipath.core.governance import EnforcementMode
 from uipath.core.governance.exceptions import GovernanceBlockException
@@ -58,11 +58,15 @@ from uipath.runtime.base import (
     UiPathRuntimeProtocol,
     UiPathStreamOptions,
 )
+from uipath.runtime.errors import UiPathErrorCategory, UiPathErrorContract
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.governance.native.evaluator import GovernanceEvaluator
 from uipath.runtime.governance.native.models import PolicyIndex
-from uipath.runtime.result import UiPathRuntimeResult
+from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 from uipath.runtime.schema import UiPathRuntimeSchema
+
+if TYPE_CHECKING:
+    from uipath.runtime.governance.rego.evaluator import RegoEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +123,38 @@ def _governance_root_span(agent_name: str, runtime_id: str) -> Iterator[None]:
         yield
 
 
+def _find_governance_block(exc: BaseException) -> GovernanceBlockException | None:
+    """Walk the exception chain to find a wrapped GovernanceBlockException.
+
+    Framework runtimes (e.g. LangGraph) wrap exceptions in their own error
+    types. This walks ``__cause__`` and ``__context__`` to find a
+    GovernanceBlockException even when it's not the top-level exception.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None:
+        if id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, GovernanceBlockException):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _governance_faulted_result(exc: GovernanceBlockException) -> UiPathRuntimeResult:
+    """Build a FAULTED result from a GovernanceBlockException."""
+    return UiPathRuntimeResult(
+        status=UiPathRuntimeStatus.FAULTED,
+        error=UiPathErrorContract(
+            code="Governance.PolicyViolation",
+            title="Policy violation blocked execution",
+            detail=str(exc),
+            category=UiPathErrorCategory.USER,
+        ),
+    )
+
+
 def _serialize_payload(payload: Any) -> str:
     """Serialize an agent input / output to a string for evaluator checks.
 
@@ -165,6 +201,7 @@ class UiPathGovernedRuntime:
         enforcement_mode: EnforcementMode,
         *,
         evaluator: GovernanceEvaluator | None = None,
+        rego_evaluator: RegoEvaluator | None = None,
         agent_name: str = "",
         runtime_id: str = "",
     ):
@@ -187,6 +224,10 @@ class UiPathGovernedRuntime:
                 :meth:`execute` / :meth:`stream`. When ``None`` the
                 wrapper is a pure passthrough — the caller is expected
                 to fire those evaluations itself.
+            rego_evaluator: Optional :class:`RegoEvaluator` for
+                WASM-based Rego policy evaluation. Runs sequentially
+                after the native evaluator on each lifecycle hook.
+                When ``None``, Rego evaluation is skipped.
             agent_name: Name of the agent (the runtime's entrypoint).
                 Passed through to the evaluator's hook methods.
             runtime_id: Runtime-instance id (conversation id, job id,
@@ -197,46 +238,84 @@ class UiPathGovernedRuntime:
         self._policy_index = policy_index
         self._enforcement_mode = enforcement_mode
         self._evaluator = evaluator
+        self._rego_evaluator = rego_evaluator
         self._agent_name = agent_name
         self._runtime_id = runtime_id
 
     def _fire_before_agent(self, input: Any) -> None:
-        """Fire BEFORE_AGENT when an evaluator is wired; otherwise no-op.
+        """Fire BEFORE_AGENT through native then Rego evaluators.
 
-        ``GovernanceBlockException`` propagates — that's how
-        ENFORCE-mode DENY rules halt a run. Anything else is logged
-        and swallowed so a governance bug never breaks the agent.
+        Both evaluators run regardless of whether the first one flags a
+        violation (sequential-merge), so the caller sees all violations
+        rather than only the first. The first ``GovernanceBlockException``
+        collected is raised; non-block exceptions are logged and swallowed.
         """
-        if self._evaluator is None:
-            return
-        try:
-            self._evaluator.evaluate_before_agent(
-                agent_input=_serialize_payload(input),
-                agent_name=self._agent_name,
-                runtime_id=self._runtime_id,
-            )
-        except GovernanceBlockException:
-            raise
-        except Exception as exc:  # noqa: BLE001 — never break a run on audit failure
-            logger.warning("BEFORE_AGENT governance evaluation failed: %s", exc)
+        violations: list[GovernanceBlockException] = []
+        serialized = _serialize_payload(input)
+
+        if self._evaluator is not None:
+            try:
+                self._evaluator.evaluate_before_agent(
+                    agent_input=serialized,
+                    agent_name=self._agent_name,
+                    runtime_id=self._runtime_id,
+                )
+            except GovernanceBlockException as exc:
+                violations.append(exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("BEFORE_AGENT native governance evaluation failed: %s", exc)
+
+        if self._rego_evaluator is not None:
+            try:
+                self._rego_evaluator.evaluate_before_agent(
+                    agent_input=serialized,
+                    agent_name=self._agent_name,
+                    runtime_id=self._runtime_id,
+                )
+            except GovernanceBlockException as exc:
+                violations.append(exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("BEFORE_AGENT rego governance evaluation failed: %s", exc)
+
+        if violations:
+            raise violations[0]
 
     def _fire_after_agent(self, result: UiPathRuntimeResult) -> None:
-        """Fire AFTER_AGENT against ``result.output``.
+        """Fire AFTER_AGENT through native then Rego evaluators.
 
-        Same exception policy as :meth:`_fire_before_agent`.
+        Same sequential-merge exception policy as :meth:`_fire_before_agent`.
         """
-        if self._evaluator is None:
+        if self._evaluator is None and self._rego_evaluator is None:
             return
-        try:
-            self._evaluator.evaluate_after_agent(
-                agent_output=_serialize_payload(result.output),
-                agent_name=self._agent_name,
-                runtime_id=self._runtime_id,
-            )
-        except GovernanceBlockException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("AFTER_AGENT governance evaluation failed: %s", exc)
+        violations: list[GovernanceBlockException] = []
+        serialized = _serialize_payload(getattr(result, "output", result))
+
+        if self._evaluator is not None:
+            try:
+                self._evaluator.evaluate_after_agent(
+                    agent_output=serialized,
+                    agent_name=self._agent_name,
+                    runtime_id=self._runtime_id,
+                )
+            except GovernanceBlockException as exc:
+                violations.append(exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("AFTER_AGENT native governance evaluation failed: %s", exc)
+
+        if self._rego_evaluator is not None:
+            try:
+                self._rego_evaluator.evaluate_after_agent(
+                    agent_output=serialized,
+                    agent_name=self._agent_name,
+                    runtime_id=self._runtime_id,
+                )
+            except GovernanceBlockException as exc:
+                violations.append(exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("AFTER_AGENT rego governance evaluation failed: %s", exc)
+
+        if violations:
+            raise violations[0]
 
     async def execute(
         self,
@@ -255,10 +334,18 @@ class UiPathGovernedRuntime:
         raises, there's no output to evaluate.
         """
         with _governance_root_span(self._agent_name, self._runtime_id):
-            self._fire_before_agent(input)
-            result = await self._delegate.execute(input, options=options)
-            self._fire_after_agent(result)
-            return result
+            try:
+                self._fire_before_agent(input)
+                result = await self._delegate.execute(input, options=options)
+                self._fire_after_agent(result)
+                return result
+            except GovernanceBlockException as exc:
+                return _governance_faulted_result(exc)
+            except Exception as exc:
+                block = _find_governance_block(exc)
+                if block is not None:
+                    return _governance_faulted_result(block)
+                raise
 
     async def stream(
         self,
@@ -278,10 +365,18 @@ class UiPathGovernedRuntime:
         pass through untouched.
         """
         with _governance_root_span(self._agent_name, self._runtime_id):
-            self._fire_before_agent(input)
+            try:
+                self._fire_before_agent(input)
+            except GovernanceBlockException as exc:
+                yield _governance_faulted_result(exc)
+                return
             async for event in self._delegate.stream(input, options=options):
                 if isinstance(event, UiPathRuntimeResult):
-                    self._fire_after_agent(event)
+                    try:
+                        self._fire_after_agent(event)
+                    except GovernanceBlockException as exc:
+                        yield _governance_faulted_result(exc)
+                        return
                 yield event
 
     async def get_schema(self) -> UiPathRuntimeSchema:
