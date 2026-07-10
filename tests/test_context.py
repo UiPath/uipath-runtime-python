@@ -185,6 +185,7 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
             "conversationalService.messageId": "msg-789",
             "conversationalService.enableOutputs": True,
             "conversationalService.conversationalUserId": "owner-guid",
+            "conversationalService.runAsMe": True,
             "mcpServer.id": "server-id-123",
             "mcpServer.slug": "my-mcp-server",
         }
@@ -199,8 +200,26 @@ def test_from_config_extracts_fps_properties_without_runtime(tmp_path: Path) -> 
     assert ctx.message_id == "msg-789"
     assert ctx.conversational_outputs_enabled is True
     assert ctx.conversational_user_id == "owner-guid"
+    assert ctx.conversational_run_as_me is True
     assert ctx.mcp_server_id == "server-id-123"
     assert ctx.mcp_server_slug == "my-mcp-server"
+
+
+def test_conversational_run_as_me_defaults_false_when_fps_property_absent(
+    tmp_path: Path,
+) -> None:
+    """conversational_run_as_me defaults to False when the fps key is missing."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.conversationId": "conv-123",
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.conversational_run_as_me is False
 
 
 def test_from_config_conversational_outputs_enabled_defaults_false(

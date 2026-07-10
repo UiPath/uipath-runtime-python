@@ -58,6 +58,10 @@ class UiPathRuntimeContext(BaseModel):
         None,
         description="Conversation owner id for CAS (a real cloud user id or a synthetic user id)",
     )
+    conversational_run_as_me: bool = Field(
+        False,
+        description="Whether the conversational agent job is running with RunAsMe: true.",
+    )
     voice_mode: Literal["session", "maestro_flow"] | None = Field(
         None, description="Voice job type for CAS"
     )
@@ -413,6 +417,7 @@ class UiPathRuntimeContext(BaseModel):
             "conversationalService.endExchange": "end_exchange",
             "conversationalService.enableOutputs": "conversational_outputs_enabled",
             "conversationalService.conversationalUserId": "conversational_user_id",
+            "conversationalService.runAsMe": "conversational_run_as_me",
             "mcpServer.id": "mcp_server_id",
             "mcpServer.slug": "mcp_server_slug",
             "voice.mode": "voice_mode",
