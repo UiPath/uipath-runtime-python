@@ -10,8 +10,6 @@ dependencies = [
   "chardet>=5.2.0, <8.0",
 ]
 
-[project.optional-dependencies]
-governance-rego = ["opa-wasmtime>=0.1.1"]
 classifiers = [
   "Intended Audience :: Developers",
   "Topic :: Software Development :: Build Tools",
@@ -22,6 +20,9 @@ classifiers = [
 maintainers = [
   { name = "Cristian Pufu", email = "cristian.pufu@uipath.com" },
 ]
+
+[project.optional-dependencies]
+governance-rego = ["opa-wasmtime>=0.1.1"]
 
 [project.urls]
 Homepage = "https://uipath.com"
