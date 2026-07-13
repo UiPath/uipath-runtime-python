@@ -64,19 +64,94 @@ def context_to_input(
     }
 
 
+_WASM_MAGIC = b"\x00asm"
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _find_wasm_in_tar(tf: Any) -> bytes | None:
+    """Search a TarFile for a valid WASM member; return bytes or None."""
+    members = tf.getmembers()
+    for candidate in ("/policy.wasm", "policy.wasm", "./policy.wasm"):
+        try:
+            fobj = tf.extractfile(tf.getmember(candidate))
+        except KeyError:
+            continue
+        if fobj is None:
+            continue
+        data = fobj.read()
+        if data[:4] == _WASM_MAGIC:
+            return data
+    # Fall back: any .wasm member (skip macOS resource forks)
+    for m in members:
+        if m.name.endswith(".wasm") and not m.name.startswith("._"):
+            fobj = tf.extractfile(m)
+            if fobj is None:
+                continue
+            data = fobj.read()
+            if data[:4] == _WASM_MAGIC:
+                logger.info("Found valid WASM at non-standard path %r", m.name)
+                return data
+    return None
+
+
 def _extract_wasm_from_bundle(bundle_path: Path) -> bytes:
-    """Extract ``policy.wasm`` bytes from an OPA ``.tar.gz`` bundle."""
+    """Extract ``policy.wasm`` bytes from an OPA ``.tar.gz`` bundle.
+
+    OPA's backend produces a nested structure:
+      outer bundle.tar.gz
+        └── policy.wasm  ← a gzip-compressed inner tar bundle
+              └── /policy.wasm  ← the actual WASM binary (``\\x00asm``)
+    """
+    import gzip
+
     with open(bundle_path, "rb") as f:
         bundle_bytes = f.read()
-    with tarfile.open(fileobj=io.BytesIO(bundle_bytes), mode="r:gz") as tf:
-        try:
-            member = tf.getmember("/policy.wasm")
-        except KeyError:
-            member = tf.getmember("policy.wasm")
-        fobj = tf.extractfile(member)
-        if fobj is None:
-            raise ValueError(f"policy.wasm is not a regular file in {bundle_path}")
-        return fobj.read()
+
+    with tarfile.open(fileobj=io.BytesIO(bundle_bytes), mode="r:gz") as outer_tf:
+        members = outer_tf.getmembers()
+        logger.debug("Outer bundle members: %s", [m.name for m in members])
+
+        for candidate in ("/policy.wasm", "policy.wasm", "./policy.wasm"):
+            try:
+                fobj = outer_tf.extractfile(outer_tf.getmember(candidate))
+            except KeyError:
+                continue
+            if fobj is None:
+                continue
+
+            raw = fobj.read()
+
+            # Direct WASM (rare — bundle served without inner wrapping)
+            if raw[:4] == _WASM_MAGIC:
+                return raw
+
+            # Gzip-compressed: could be the WASM itself or an inner bundle
+            if raw[:2] == _GZIP_MAGIC:
+                inner = gzip.decompress(raw)
+                if inner[:4] == _WASM_MAGIC:
+                    return inner
+                # Inner content is itself a tar (nested OPA bundle format)
+                try:
+                    with tarfile.open(fileobj=io.BytesIO(inner), mode="r") as inner_tf:
+                        logger.debug(
+                            "Inner bundle members: %s",
+                            [m.name for m in inner_tf.getmembers()],
+                        )
+                        wasm = _find_wasm_in_tar(inner_tf)
+                        if wasm is not None:
+                            return wasm
+                except tarfile.TarError:
+                    pass
+
+            logger.warning(
+                "Bundle member %r yielded no valid WASM (first 8 bytes: %s)",
+                candidate, raw[:8].hex(),
+            )
+
+        names = [m.name for m in members]
+        raise ValueError(
+            f"No valid policy.wasm found in bundle {bundle_path}. Members: {names}"
+        )
 
 
 def _extract_data_json_from_bundle(bundle_path: Path) -> dict[str, Any] | None:

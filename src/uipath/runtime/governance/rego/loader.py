@@ -66,6 +66,12 @@ async def _build_rego_evaluator_async_inner(service: object) -> object:
 
     response = await service.retrieve_all_policies_async()  # type: ignore[union-attr]
     if not response.hook_bundles:
+        logger.warning(
+            "Rego build skipped: all-policies returned no WASM bundles for "
+            "org=%s tenant=%s — no Rego policies are published to this tenant yet.",
+            org_id,
+            tenant_id,
+        )
         return None
 
     cache_dir = get_cache_dir(org_id, tenant_id)
