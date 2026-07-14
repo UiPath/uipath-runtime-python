@@ -309,10 +309,10 @@ class RegoEvaluator:
             wasm_input = context_to_input(context, feature_plan=plan)
             raw = engine.evaluate(wasm_input)
             logger.info(
-                "Rego WASM hook=%s agent_input=%r model_input=%r raw=%r",
+                "Rego WASM hook=%s agent_input_len=%d model_input_len=%d raw=%r",
                 context.hook.value,
-                wasm_input.get("agent_input", "")[:80],
-                wasm_input.get("model_input", "")[:80],
+                len(wasm_input.get("agent_input", "")),
+                len(wasm_input.get("model_input", "")),
                 raw,
             )
         except Exception as exc:
