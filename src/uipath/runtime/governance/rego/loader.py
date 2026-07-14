@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from uipath.core.governance.models import LifecycleHook
 
@@ -11,6 +12,9 @@ from uipath.runtime.governance.rego.bundle_cache import (
     get_cached_etag,
     save_bundle,
 )
+
+if TYPE_CHECKING:
+    from uipath.runtime.governance._audit.base import AuditManager
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +29,10 @@ _HOOK_MAP: dict[str, LifecycleHook] = {
 }
 
 
-async def build_rego_evaluator_async(service: object) -> object:
+async def build_rego_evaluator_async(
+    service: object,
+    audit_manager: "AuditManager | None" = None,
+) -> object:
     """Fetch bundles via platform service and build a RegoEvaluator.
 
     Drop-in counterpart to the native evaluator's inline bootstrap:
@@ -33,26 +40,37 @@ async def build_rego_evaluator_async(service: object) -> object:
     Takes any object that exposes ``retrieve_all_policies_async()`` and
     ``download_bundle_async(url)`` — typically ``UiPath().governance``.
 
+    Args:
+        service: Platform service object exposing ``retrieve_all_policies_async()``
+            and ``download_bundle_async(url)``.
+        audit_manager: Optional :class:`~uipath.runtime.governance._audit.base.AuditManager`
+            to wire into the evaluator. When provided, Rego rule violations and
+            hook summaries are emitted as trace spans alongside the native checker's
+            events. When ``None``, audit emission is skipped.
+
     Returns a :class:`~uipath.runtime.governance.rego.evaluator.RegoEvaluator`
     on success, ``None`` when no bundles are available. Never raises.
     """
     try:
-        return await _build_rego_evaluator_async_inner(service)
+        return await _build_rego_evaluator_async_inner(service, audit_manager)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Rego evaluator build failed: %s", exc)
         return None
 
 
-async def _build_rego_evaluator_async_inner(service: object) -> object:
+async def _build_rego_evaluator_async_inner(
+    service: object,
+    audit_manager: "AuditManager | None" = None,
+) -> object:
     from pathlib import Path
 
-    from uipath.runtime.governance.rego.evaluator import (
-        RegoEvaluator,
-        _extract_data_json_from_bundle,
-    )
     from uipath.runtime.governance.native.backend_client import (
         resolve_organization_id,
         resolve_tenant_id,
+    )
+    from uipath.runtime.governance.rego.evaluator import (
+        RegoEvaluator,
+        _extract_data_json_from_bundle,
     )
 
     org_id = resolve_organization_id()
@@ -110,4 +128,4 @@ async def _build_rego_evaluator_async_inner(service: object) -> object:
         return None
 
     logger.info("Rego evaluator built (hooks=%s)", [h.value for h in hook_wasm_paths])
-    return RegoEvaluator(hook_wasm_paths, hook_data=hook_data or None)
+    return RegoEvaluator(hook_wasm_paths, hook_data=hook_data or None, audit_manager=audit_manager)
