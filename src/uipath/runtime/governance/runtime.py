@@ -241,6 +241,16 @@ class UiPathGovernedRuntime:
         self._rego_evaluator = rego_evaluator
         self._agent_name = agent_name
         self._runtime_id = runtime_id
+        # Wire the Rego evaluator into the native evaluator for per-step
+        # hooks (BEFORE_MODEL, AFTER_MODEL, TOOL_CALL, AFTER_TOOL). The
+        # framework adapter (e.g. uipath-langchain) holds a reference to
+        # the same GovernanceEvaluator object, so this post-construction
+        # mutation is visible to its callback handler without requiring
+        # any changes to the framework adapter's code.
+        # BEFORE_AGENT / AFTER_AGENT are owned by this runtime and are
+        # already dispatched separately in _fire_before_agent / _fire_after_agent.
+        if evaluator is not None and rego_evaluator is not None:
+            evaluator.set_rego_evaluator(rego_evaluator)
 
     def _fire_before_agent(self, input: Any) -> None:
         """Fire BEFORE_AGENT through native then Rego evaluators.
