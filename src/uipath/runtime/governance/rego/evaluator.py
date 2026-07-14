@@ -43,9 +43,17 @@ def context_to_input(
     """Serialize a CheckContext to the flat input dict Rego rules expect."""
     session = context.session_state if isinstance(context.session_state, dict) else {}
     features = compute_features(context, feature_plan) if feature_plan else {}
+    # For BEFORE_MODEL, the user's message is passed as model_input. WASM
+    # rules that check agent_input (e.g. "block_ssn_in_prompts") would miss
+    # it, so normalize: copy model_input → agent_input when agent_input is
+    # empty. This is safe — for BEFORE_MODEL, both fields represent the same
+    # user content.
+    agent_input = context.agent_input
+    if context.hook == LifecycleHook.BEFORE_MODEL and not agent_input:
+        agent_input = context.model_input
     return {
         "hook": context.hook.value,
-        "agent_input": context.agent_input,
+        "agent_input": agent_input,
         "agent_output": context.agent_output,
         "model_input": context.model_input,
         "model_output": context.model_output,
@@ -298,7 +306,15 @@ class RegoEvaluator:
 
         try:
             plan = self._feature_plans.get(context.hook, [])
-            raw = engine.evaluate(context_to_input(context, feature_plan=plan))
+            wasm_input = context_to_input(context, feature_plan=plan)
+            raw = engine.evaluate(wasm_input)
+            logger.info(
+                "Rego WASM hook=%s agent_input=%r model_input=%r raw=%r",
+                context.hook.value,
+                wasm_input.get("agent_input", "")[:80],
+                wasm_input.get("model_input", "")[:80],
+                raw,
+            )
         except Exception as exc:
             logger.warning("Rego WASM evaluation failed for hook=%s: %s", context.hook.value, exc)
             return AuditRecord(

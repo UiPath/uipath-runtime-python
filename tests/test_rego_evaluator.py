@@ -113,6 +113,47 @@ def test_context_to_input_session_state_defaults() -> None:
     assert result["session_state"] == {"tool_calls": 0, "llm_calls": 0}
 
 
+def test_context_to_input_before_model_normalizes_agent_input() -> None:
+    # When agent_input is empty for BEFORE_MODEL, model_input is copied so
+    # WASM rules checking either field receive the user's message.
+    ctx = CheckContext(
+        hook=LifecycleHook.BEFORE_MODEL,
+        agent_name="a",
+        runtime_id="r",
+        model_input="identify 999-99-9999",
+        agent_input="",
+    )
+    result = context_to_input(ctx)
+    assert result["agent_input"] == "identify 999-99-9999"
+    assert result["model_input"] == "identify 999-99-9999"
+
+
+def test_context_to_input_before_model_keeps_explicit_agent_input() -> None:
+    # When agent_input is already set, it is NOT overwritten.
+    ctx = CheckContext(
+        hook=LifecycleHook.BEFORE_MODEL,
+        agent_name="a",
+        runtime_id="r",
+        model_input="model text",
+        agent_input="explicit agent text",
+    )
+    result = context_to_input(ctx)
+    assert result["agent_input"] == "explicit agent text"
+
+
+def test_context_to_input_other_hooks_no_normalization() -> None:
+    # Normalization must not apply to other hooks.
+    ctx = CheckContext(
+        hook=LifecycleHook.BEFORE_AGENT,
+        agent_name="a",
+        runtime_id="r",
+        agent_input="",
+        model_input="should not copy",
+    )
+    result = context_to_input(ctx)
+    assert result["agent_input"] == ""
+
+
 # ---------------------------------------------------------------------------
 # _extract_wasm_from_bundle / _extract_data_json_from_bundle
 # ---------------------------------------------------------------------------
