@@ -95,12 +95,12 @@ def _find_wasm_in_tar(tf: Any) -> bytes | None:
 
 
 def _extract_wasm_from_bundle(bundle_path: Path) -> bytes:
-    """Extract ``policy.wasm`` bytes from an OPA ``.tar.gz`` bundle.
+    r"""Extract ``policy.wasm`` bytes from an OPA ``.tar.gz`` bundle.
 
     OPA's backend produces a nested structure:
       outer bundle.tar.gz
         └── policy.wasm  ← a gzip-compressed inner tar bundle
-              └── /policy.wasm  ← the actual WASM binary (``\\x00asm``)
+              └── /policy.wasm  ← the actual WASM binary (``\x00asm``)
     """
     import gzip
 
@@ -220,6 +220,8 @@ class RegoEvaluator:
         """Load WASM engines from paths; wire audit manager and enforcement mode."""
         self._engines: dict[LifecycleHook, Any] = {}
         self._feature_plans: dict[LifecycleHook, list[str]] = {}
+        if audit_manager is None:
+            audit_manager = AuditManager(register_default_sinks=True)
         self._audit_manager = audit_manager
         self._enforcement_mode = enforcement_mode
         hook_data = hook_data or {}
