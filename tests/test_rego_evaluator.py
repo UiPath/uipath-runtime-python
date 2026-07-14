@@ -154,6 +154,47 @@ def test_context_to_input_other_hooks_no_normalization() -> None:
     assert result["agent_input"] == ""
 
 
+def test_context_to_input_before_model_synthesizes_messages() -> None:
+    # When messages is empty for BEFORE_MODEL, a synthetic user message is
+    # built from model_input so WASM rules checking input.messages fire.
+    ctx = CheckContext(
+        hook=LifecycleHook.BEFORE_MODEL,
+        agent_name="a",
+        runtime_id="r",
+        model_input="identify 999-99-9999",
+        messages=[],
+    )
+    result = context_to_input(ctx)
+    assert result["messages"] == [{"role": "user", "content": "identify 999-99-9999"}]
+
+
+def test_context_to_input_before_model_keeps_explicit_messages() -> None:
+    # When messages is already populated, it is NOT overwritten.
+    existing = [{"role": "user", "content": "original"}]
+    ctx = CheckContext(
+        hook=LifecycleHook.BEFORE_MODEL,
+        agent_name="a",
+        runtime_id="r",
+        model_input="other text",
+        messages=existing,
+    )
+    result = context_to_input(ctx)
+    assert result["messages"] == existing
+
+
+def test_context_to_input_other_hooks_no_messages_synthesis() -> None:
+    # Messages synthesis must not apply to other hooks.
+    ctx = CheckContext(
+        hook=LifecycleHook.BEFORE_AGENT,
+        agent_name="a",
+        runtime_id="r",
+        model_input="should not synthesize",
+        messages=[],
+    )
+    result = context_to_input(ctx)
+    assert result["messages"] == []
+
+
 # ---------------------------------------------------------------------------
 # _extract_wasm_from_bundle / _extract_data_json_from_bundle
 # ---------------------------------------------------------------------------

@@ -51,6 +51,14 @@ def context_to_input(
     agent_input = context.agent_input
     if context.hook == LifecycleHook.BEFORE_MODEL and not agent_input:
         agent_input = context.model_input
+    # WASM rules check input.messages[].content (plain string) rather than
+    # the flat model_input field. When messages is empty for a BEFORE_MODEL
+    # hook, synthesize a single user message from model_input so that rules
+    # like block_ssn_in_prompts can match. The callback-handler path never
+    # passes messages, so this is the only way to populate the field.
+    messages = context.messages
+    if context.hook == LifecycleHook.BEFORE_MODEL and not messages and context.model_input:
+        messages = [{"role": "user", "content": context.model_input}]
     return {
         "hook": context.hook.value,
         "agent_input": agent_input,
@@ -67,7 +75,7 @@ def context_to_input(
             "llm_calls": session.get("llm_calls", 0),
         },
         "ring": context.ring,
-        "messages": context.messages,
+        "messages": messages,
         "features": features,
     }
 
