@@ -23,23 +23,31 @@ from uipath.runtime import (
     UiPathStreamOptions,
 )
 from uipath.runtime.chat import (
+    UiPathChatMetaEventProtocol,
     UiPathChatProtocol,
     UiPathChatRuntime,
 )
 from uipath.runtime.chat.runtime import _parse_confirmation
-from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeMessageEvent
+from uipath.runtime.events import (
+    UiPathRuntimeConversationMetaEvent,
+    UiPathRuntimeEvent,
+    UiPathRuntimeMessageEvent,
+)
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 
-def make_chat_bridge_mock() -> UiPathChatProtocol:
+def make_chat_bridge_mock(*, supports_meta_events: bool = True) -> UiPathChatProtocol:
     """Create a chat bridge mock with all methods that UiPathChatRuntime uses."""
     bridge_mock: Mock = Mock(spec=UiPathChatProtocol)
 
     bridge_mock.connect = AsyncMock()
     bridge_mock.disconnect = AsyncMock()
     bridge_mock.emit_message_event = AsyncMock()
+    if supports_meta_events:
+        bridge_mock.emit_meta_event = AsyncMock()
     bridge_mock.emit_interrupt_event = AsyncMock()
     bridge_mock.emit_executing_tool_call_event = AsyncMock()
+    bridge_mock.emit_exchange_end_event = AsyncMock()
     bridge_mock.wait_for_resume = AsyncMock()
 
     return cast(UiPathChatProtocol, bridge_mock)
@@ -52,10 +60,12 @@ class StreamingMockRuntime:
         self,
         messages: Sequence[str],
         *,
+        meta_events: Sequence[dict[str, Any]] = (),
         error_in_stream: bool = False,
     ) -> None:
         super().__init__()
         self.messages: list[str] = list(messages)
+        self.meta_events = list(meta_events)
         self.error_in_stream: bool = error_in_stream
         self.execute_called: bool = False
 
@@ -92,6 +102,9 @@ class StreamingMockRuntime:
                 ),
             )
             yield UiPathRuntimeMessageEvent(payload=message_event)
+
+        for meta_event in self.meta_events:
+            yield UiPathRuntimeConversationMetaEvent(payload=meta_event)
 
         # Final result at the end of streaming
         yield UiPathRuntimeResult(
@@ -255,6 +268,42 @@ async def test_chat_runtime_stream_yields_all_events():
     cast(AsyncMock, bridge.connect).assert_awaited_once()
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
     assert cast(AsyncMock, bridge.emit_message_event).await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_emits_conversation_meta_events():
+    runtime_impl = StreamingMockRuntime(
+        messages=[],
+        meta_events=[{"workspaceFiles": [{"path": "plan.md"}]}],
+    )
+    bridge = make_chat_bridge_mock()
+    chat_runtime = UiPathChatRuntime(runtime_impl, bridge)
+
+    events = [event async for event in chat_runtime.stream({})]
+
+    meta_event_bridge = cast(UiPathChatMetaEventProtocol, bridge)
+    cast(AsyncMock, meta_event_bridge.emit_meta_event).assert_awaited_once_with(
+        {"workspaceFiles": [{"path": "plan.md"}]}
+    )
+    assert isinstance(events[0], UiPathRuntimeConversationMetaEvent)
+    assert isinstance(events[1], UiPathRuntimeResult)
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_skips_meta_events_for_legacy_bridge(caplog):
+    runtime_impl = StreamingMockRuntime(
+        messages=[],
+        meta_events=[{"workspaceFiles": [{"path": "plan.md"}]}],
+    )
+    bridge = make_chat_bridge_mock(supports_meta_events=False)
+    chat_runtime = UiPathChatRuntime(runtime_impl, bridge)
+
+    with caplog.at_level("WARNING"):
+        events = [event async for event in chat_runtime.stream({})]
+
+    assert "does not support conversation metadata events" in caplog.text
+    assert isinstance(events[0], UiPathRuntimeConversationMetaEvent)
+    assert isinstance(events[1], UiPathRuntimeResult)
 
 
 @pytest.mark.asyncio

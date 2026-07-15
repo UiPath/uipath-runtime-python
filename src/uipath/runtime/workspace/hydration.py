@@ -160,7 +160,7 @@ class HydrationRuntime:
 
     async def _hydrate(self) -> None:
         registry = await self.registry_store.load()
-        hydrated = await self._get_hydrator().hydrate(registry)
+        hydrated = await self._get_hydrator().hydrate_from_registry(registry)
         if hydrated != registry:
             await self.registry_store.save(hydrated)
 

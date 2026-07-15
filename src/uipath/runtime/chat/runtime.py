@@ -12,10 +12,11 @@ from uipath.runtime.base import (
     UiPathRuntimeProtocol,
     UiPathStreamOptions,
 )
-from uipath.runtime.chat.protocol import UiPathChatProtocol
+from uipath.runtime.chat.protocol import UiPathChatMetaEventProtocol, UiPathChatProtocol
 from uipath.runtime.errors import UiPathBaseRuntimeError
 from uipath.runtime.errors.contract import UiPathErrorCategory
 from uipath.runtime.events import (
+    UiPathRuntimeConversationMetaEvent,
     UiPathRuntimeEvent,
     UiPathRuntimeMessageEvent,
 )
@@ -86,6 +87,13 @@ class UiPathChatRuntime:
                     if isinstance(event, UiPathRuntimeMessageEvent):
                         if event.payload:
                             await self.chat_bridge.emit_message_event(event.payload)
+                    elif isinstance(event, UiPathRuntimeConversationMetaEvent):
+                        if isinstance(self.chat_bridge, UiPathChatMetaEventProtocol):
+                            await self.chat_bridge.emit_meta_event(event.payload)
+                        else:
+                            logger.warning(
+                                "Chat bridge does not support conversation metadata events"
+                            )
 
                     if isinstance(event, UiPathRuntimeResult):
                         runtime_result = event

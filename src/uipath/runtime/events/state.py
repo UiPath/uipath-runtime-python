@@ -40,6 +40,15 @@ class UiPathRuntimeMessageEvent(UiPathRuntimeEvent):
     )
 
 
+class UiPathRuntimeConversationMetaEvent(UiPathRuntimeEvent):
+    """Conversation metadata emitted by a runtime."""
+
+    payload: dict[str, Any]
+    event_type: UiPathRuntimeEventType = Field(
+        default=UiPathRuntimeEventType.CONVERSATION_META, frozen=True
+    )
+
+
 class UiPathRuntimeStateEvent(UiPathRuntimeEvent):
     """Event emitted when agent state is updated.
 
@@ -82,4 +91,8 @@ class UiPathRuntimeStateEvent(UiPathRuntimeEvent):
     )
 
 
-__all__ = ["UiPathRuntimeMessageEvent", "UiPathRuntimeStateEvent"]
+__all__ = [
+    "UiPathRuntimeConversationMetaEvent",
+    "UiPathRuntimeMessageEvent",
+    "UiPathRuntimeStateEvent",
+]

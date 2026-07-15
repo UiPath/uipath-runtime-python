@@ -1,6 +1,6 @@
 """Abstract conversation bridge interface."""
 
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from uipath.core.chat import (
     UiPathConversationMessageEvent,
@@ -69,4 +69,13 @@ class UiPathChatProtocol(Protocol):
 
     async def wait_for_resume(self) -> dict[str, Any]:
         """Wait for the interrupt_end event to be received."""
+        ...
+
+
+@runtime_checkable
+class UiPathChatMetaEventProtocol(Protocol):
+    """Optional chat-bridge capability for conversation metadata events."""
+
+    async def emit_meta_event(self, meta_event: dict[str, Any]) -> None:
+        """Send an exchange-scoped conversation metadata event."""
         ...
