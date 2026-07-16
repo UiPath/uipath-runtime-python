@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import pytest
 
@@ -11,7 +12,7 @@ from uipath.runtime.governance._audit.console import ConsoleAuditSink
 
 def _make_event(
     event_type: str,
-    data: dict | None = None,
+    data: dict[str, Any] | None = None,
     hook: str = "before_model",
     agent_name: str = "test-agent",
 ) -> AuditEvent:

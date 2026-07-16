@@ -89,6 +89,19 @@ no_implicit_reexport = true
 
 disallow_untyped_defs = false
 
+# These modules import optional packages that lack py.typed markers in some
+# environments (e.g. opa-wasmtime, vaderSentiment, uipath-platform). The
+# type: ignore[import-untyped] suppresses the error where needed; the override
+# below prevents warn_unused_ignores from flagging it where the stubs ARE present.
+[[tool.mypy.overrides]]
+module = [
+    "uipath.runtime.governance.native.backend_client",
+    "uipath.runtime.governance.native.evaluator",
+    "uipath.runtime.governance.features.sentiment",
+    "uipath.runtime.governance.rego.evaluator",
+]
+warn_unused_ignores = false
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true

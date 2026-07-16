@@ -203,7 +203,7 @@ def get_backend_base_url() -> str:
     # env-var path when only uipath-core / uipath-runtime are installed.
     platform_url: str | None = None
     try:
-        from uipath.platform.common import UiPathConfig
+        from uipath.platform.common import UiPathConfig  # type: ignore[import-untyped]
 
         platform_url = UiPathConfig.base_url
     except (ImportError, AttributeError):
@@ -244,7 +244,7 @@ def _resolve_uipath_config_field(attr: str, env_var: str) -> str | None:
     (``AttributeError``), falls back to reading the named env var.
     """
     try:
-        from uipath.platform.common import UiPathConfig
+        from uipath.platform.common import UiPathConfig  # type: ignore[import-untyped]
 
         return getattr(UiPathConfig, attr, None) or os.environ.get(env_var)
     except ImportError:

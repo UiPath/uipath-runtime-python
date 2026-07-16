@@ -1,20 +1,21 @@
 """Tests for governance feature functions: encoding, sentiment, text_stats, incident, commitment, text, registry."""
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 from uipath.runtime.governance.native.models import CheckContext
 
 
-def _ctx(**kwargs: str) -> CheckContext:
+def _ctx(**kwargs: Any) -> CheckContext:
     from uipath.core.governance.models import LifecycleHook
-    defaults: dict = {
+    defaults: dict[str, Any] = {
         "hook": LifecycleHook.BEFORE_MODEL,
         "agent_name": "test-agent",
         "runtime_id": "test-run",
     }
     defaults.update(kwargs)
-    return CheckContext(**defaults)  # type: ignore[arg-type]
+    return CheckContext(**defaults)
 
 
 # ---------------------------------------------------------------------------

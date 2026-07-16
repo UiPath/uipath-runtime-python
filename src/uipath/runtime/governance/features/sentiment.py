@@ -14,7 +14,7 @@ _analyzer: Any = None
 def _get_analyzer() -> Any:
     global _analyzer
     if _analyzer is None:
-        from vaderSentiment.vaderSentiment import (
+        from vaderSentiment.vaderSentiment import (  # type: ignore[import-untyped]
             SentimentIntensityAnalyzer,
         )
         _analyzer = SentimentIntensityAnalyzer()
