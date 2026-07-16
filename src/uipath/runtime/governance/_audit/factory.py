@@ -29,5 +29,10 @@ def create_sink(name: str) -> AuditSink | None:
 
         return TracesAuditSink()
 
+    if name == "console":
+        from .console import ConsoleAuditSink
+
+        return ConsoleAuditSink()
+
     logger.warning("Unknown audit sink: %s", name)
     return None

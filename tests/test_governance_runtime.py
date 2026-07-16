@@ -480,12 +480,14 @@ async def test_execute_fires_before_and_after_agent_when_evaluator_wired() -> No
     assert evaluator.after_calls[0]["agent_output"] == "agent-output"
 
 
-async def test_execute_propagates_governance_block_exception() -> None:
-    """A DENY in ``ENFORCE`` mode must halt the run — the evaluator
-    raises :class:`GovernanceBlockException` and the wrapper propagates
-    it rather than swallowing.
+async def test_execute_governance_block_returns_faulted() -> None:
+    """A DENY in ``ENFORCE`` mode must halt the run — the wrapper catches
+    the :class:`GovernanceBlockException` and returns a FAULTED result
+    with error code ``Governance.PolicyViolation``.
     """
     from uipath.core.governance.exceptions import GovernanceBlockException
+
+    from uipath.runtime.result import UiPathRuntimeStatus
 
     evaluator = _CapturingEvaluator()
     evaluator.before_raises = GovernanceBlockException("policy denied")
@@ -497,12 +499,14 @@ async def test_execute_propagates_governance_block_exception() -> None:
         evaluator=evaluator,  # type: ignore[arg-type]
     )
 
-    with pytest.raises(GovernanceBlockException):
-        await runtime.execute({"x": 1})
+    result = await runtime.execute({"x": 1})
+    assert result.status == UiPathRuntimeStatus.FAULTED
+    assert result.error is not None
+    assert result.error.code == "Governance.PolicyViolation"
 
 
-async def test_after_agent_block_exception_also_propagates() -> None:
-    """The re-raise contract holds for AFTER_AGENT too, not just
+async def test_after_agent_block_also_returns_faulted() -> None:
+    """The FAULTED-result contract holds for AFTER_AGENT too, not just
     BEFORE_AGENT.
 
     Even though DENY on output is a rarer configuration (most policies
@@ -511,6 +515,8 @@ async def test_after_agent_block_exception_also_propagates() -> None:
     run, not just the input side.
     """
     from uipath.core.governance.exceptions import GovernanceBlockException
+
+    from uipath.runtime.result import UiPathRuntimeStatus
 
     evaluator = _CapturingEvaluator()
     evaluator.after_raises = GovernanceBlockException("output policy denied")
@@ -522,8 +528,10 @@ async def test_after_agent_block_exception_also_propagates() -> None:
         evaluator=evaluator,  # type: ignore[arg-type]
     )
 
-    with pytest.raises(GovernanceBlockException):
-        await runtime.execute({"x": 1})
+    result = await runtime.execute({"x": 1})
+    assert result.status == UiPathRuntimeStatus.FAULTED
+    assert result.error is not None
+    assert result.error.code == "Governance.PolicyViolation"
 
 
 async def test_execute_swallows_unexpected_evaluator_errors() -> None:

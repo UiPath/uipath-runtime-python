@@ -16,7 +16,10 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 from functools import cache, lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from uipath.runtime.governance.rego.evaluator import RegoEvaluator
 
 from uipath.core.governance import EnforcementMode
 from uipath.core.governance.exceptions import GovernanceBlockException
@@ -303,6 +306,22 @@ class GovernanceEvaluator:
         self._enforcement_mode = enforcement_mode
         self._audit_manager = audit_manager
         self._compensator = compensator
+        self._rego_evaluator: RegoEvaluator | None = None
+
+    def set_rego_evaluator(self, rego_evaluator: RegoEvaluator | None) -> None:
+        """Wire a Rego evaluator to run alongside per-step hooks.
+
+        Called by :class:`~uipath.runtime.governance.runtime.UiPathGovernedRuntime`
+        after the callback handler has already been constructed with a
+        reference to this evaluator. Mutating in place means the handler
+        sees Rego evaluation on the next hook invocation without
+        requiring any changes to the framework adapter.
+
+        Only fires on per-step hooks (BEFORE_MODEL, AFTER_MODEL,
+        TOOL_CALL, AFTER_TOOL). BEFORE_AGENT / AFTER_AGENT are owned by
+        the runtime wrapper and are skipped here to avoid double-firing.
+        """
+        self._rego_evaluator = rego_evaluator
 
     @property
     def policy_index(self) -> PolicyIndex:
@@ -712,7 +731,21 @@ class GovernanceEvaluator:
             messages=messages or [],
             metadata=kwargs.get("metadata", {}),
         )
-        return self.evaluate(context)
+        result = self.evaluate(context)
+        if self._rego_evaluator is not None:
+            try:
+                self._rego_evaluator.evaluate_before_model(
+                    model_input=model_input,
+                    agent_name=agent_name,
+                    runtime_id=runtime_id,
+                    messages=messages,
+                    model_name=model_name,
+                )
+            except GovernanceBlockException:
+                raise
+            except Exception as exc:
+                logger.warning("Rego BEFORE_MODEL evaluation failed: %s", exc)
+        return result
 
     def evaluate_after_model(
         self,
@@ -729,7 +762,19 @@ class GovernanceEvaluator:
             model_output=model_output,
             metadata=kwargs.get("metadata", {}),
         )
-        return self.evaluate(context)
+        result = self.evaluate(context)
+        if self._rego_evaluator is not None:
+            try:
+                self._rego_evaluator.evaluate_after_model(
+                    model_output=model_output,
+                    agent_name=agent_name,
+                    runtime_id=runtime_id,
+                )
+            except GovernanceBlockException:
+                raise
+            except Exception as exc:
+                logger.warning("Rego AFTER_MODEL evaluation failed: %s", exc)
+        return result
 
     def evaluate_tool_call(
         self,
@@ -750,7 +795,21 @@ class GovernanceEvaluator:
             session_state=session_state or {},
             metadata=kwargs.get("metadata", {}),
         )
-        return self.evaluate(context)
+        result = self.evaluate(context)
+        if self._rego_evaluator is not None:
+            try:
+                self._rego_evaluator.evaluate_tool_call(
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    agent_name=agent_name,
+                    runtime_id=runtime_id,
+                    session_state=session_state,
+                )
+            except GovernanceBlockException:
+                raise
+            except Exception as exc:
+                logger.warning("Rego TOOL_CALL evaluation failed: %s", exc)
+        return result
 
     def evaluate_after_tool(
         self,
@@ -769,7 +828,20 @@ class GovernanceEvaluator:
             tool_result=tool_result,
             metadata=kwargs.get("metadata", {}),
         )
-        return self.evaluate(context)
+        result = self.evaluate(context)
+        if self._rego_evaluator is not None:
+            try:
+                self._rego_evaluator.evaluate_after_tool(
+                    tool_name=tool_name,
+                    tool_result=tool_result,
+                    agent_name=agent_name,
+                    runtime_id=runtime_id,
+                )
+            except GovernanceBlockException:
+                raise
+            except Exception as exc:
+                logger.warning("Rego AFTER_TOOL evaluation failed: %s", exc)
+        return result
 
     def _evaluate_rule(self, rule: Rule, context: CheckContext) -> RuleEvaluation:
         """Evaluate a single rule against the context."""
