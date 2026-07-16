@@ -13,8 +13,11 @@ from uipath.core.governance.models import Action, LifecycleHook
 
 from uipath.runtime.governance.rego.evaluator import (
     RegoEvaluator,
+    _WASM_MAGIC,
     _extract_data_json_from_bundle,
     _extract_wasm_from_bundle,
+    _find_wasm_in_tar,
+    _load_engine,
     _pack_name_from_rule_id,
     context_to_input,
 )
@@ -200,8 +203,9 @@ def test_context_to_input_other_hooks_no_messages_synthesis() -> None:
 # ---------------------------------------------------------------------------
 
 def test_extract_wasm_from_bundle(tmp_path: Path) -> None:
-    p = _write_bundle(tmp_path / "b.tar.gz", wasm=b"fake-wasm")
-    assert _extract_wasm_from_bundle(p) == b"fake-wasm"
+    wasm = b"\x00asm\x01\x00\x00\x00"  # valid WASM magic
+    p = _write_bundle(tmp_path / "b.tar.gz", wasm=wasm)
+    assert _extract_wasm_from_bundle(p) == wasm
 
 
 def test_extract_data_json_from_bundle(tmp_path: Path) -> None:
@@ -421,3 +425,222 @@ def test_evaluate_after_model() -> None:
     )
     record = ev.evaluate_after_model("output", "agent", "run-1")
     assert record.hook == LifecycleHook.AFTER_MODEL
+
+
+# ---------------------------------------------------------------------------
+# WASM bundle extraction — direct, gzip, inner-tar formats
+# ---------------------------------------------------------------------------
+
+import gzip as _gzip
+
+_FAKE_WASM = _WASM_MAGIC + b"\x01\x00\x00\x00"  # minimal valid WASM magic
+
+
+def _make_outer_bundle(content: bytes, member_name: str = "policy.wasm") -> bytes:
+    """Build a .tar.gz where <member_name> has <content>."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo(name=member_name)
+        info.size = len(content)
+        tf.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+def test_extract_wasm_from_bundle_direct_wasm(tmp_path: Path) -> None:
+    p = tmp_path / "b.tar.gz"
+    p.write_bytes(_make_outer_bundle(_FAKE_WASM))
+    assert _extract_wasm_from_bundle(p) == _FAKE_WASM
+
+
+def test_extract_wasm_from_bundle_gzip_compressed_wasm(tmp_path: Path) -> None:
+    gz_wasm = _gzip.compress(_FAKE_WASM)
+    p = tmp_path / "b.tar.gz"
+    p.write_bytes(_make_outer_bundle(gz_wasm))
+    assert _extract_wasm_from_bundle(p) == _FAKE_WASM
+
+
+def test_extract_wasm_from_bundle_inner_tar_production_format(tmp_path: Path) -> None:
+    # Production OPA format: outer.tar.gz → policy.wasm (gzip'd inner tar) → /policy.wasm
+    inner_buf = io.BytesIO()
+    with tarfile.open(fileobj=inner_buf, mode="w") as inner_tf:
+        info = tarfile.TarInfo(name="/policy.wasm")
+        info.size = len(_FAKE_WASM)
+        inner_tf.addfile(info, io.BytesIO(_FAKE_WASM))
+    gz_inner = _gzip.compress(inner_buf.getvalue())
+    p = tmp_path / "b.tar.gz"
+    p.write_bytes(_make_outer_bundle(gz_inner))
+    assert _extract_wasm_from_bundle(p) == _FAKE_WASM
+
+
+def test_extract_wasm_from_bundle_raises_when_no_valid_wasm(tmp_path: Path) -> None:
+    p = tmp_path / "b.tar.gz"
+    p.write_bytes(_make_outer_bundle(b"not-wasm-or-gzip"))
+    with pytest.raises(ValueError, match="No valid policy.wasm found"):
+        _extract_wasm_from_bundle(p)
+
+
+# ---------------------------------------------------------------------------
+# _find_wasm_in_tar — fallback to non-standard .wasm member path
+# ---------------------------------------------------------------------------
+
+def test_find_wasm_in_tar_standard_path() -> None:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo(name="policy.wasm")
+        info.size = len(_FAKE_WASM)
+        tf.addfile(info, io.BytesIO(_FAKE_WASM))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r") as tf:
+        assert _find_wasm_in_tar(tf) == _FAKE_WASM
+
+
+def test_find_wasm_in_tar_fallback_nonstandard_path() -> None:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo(name="rules/policy.wasm")
+        info.size = len(_FAKE_WASM)
+        tf.addfile(info, io.BytesIO(_FAKE_WASM))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r") as tf:
+        assert _find_wasm_in_tar(tf) == _FAKE_WASM
+
+
+def test_find_wasm_in_tar_returns_none_when_no_wasm() -> None:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo(name="data.json")
+        content = b"{}"
+        info.size = len(content)
+        tf.addfile(info, io.BytesIO(content))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r") as tf:
+        assert _find_wasm_in_tar(tf) is None
+
+
+def test_find_wasm_in_tar_skips_invalid_wasm_bytes() -> None:
+    bad_wasm = b"not-wasm"
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        info = tarfile.TarInfo(name="policy.wasm")
+        info.size = len(bad_wasm)
+        tf.addfile(info, io.BytesIO(bad_wasm))
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r") as tf:
+        assert _find_wasm_in_tar(tf) is None
+
+
+# ---------------------------------------------------------------------------
+# _load_engine — via sys.modules mock
+# ---------------------------------------------------------------------------
+
+def test_load_engine_writes_temp_file_and_calls_opa_policy(tmp_path: Path) -> None:
+    import sys
+
+    mock_policy_instance = MagicMock()
+    mock_opa_module = MagicMock()
+    mock_opa_module.OPAPolicy = MagicMock(return_value=mock_policy_instance)
+
+    p = tmp_path / "b.tar.gz"
+    p.write_bytes(_make_outer_bundle(_FAKE_WASM))
+
+    with patch.dict(sys.modules, {"opa_wasmtime": mock_opa_module}):
+        result = _load_engine(p)
+
+    assert result is mock_policy_instance
+    assert mock_opa_module.OPAPolicy.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# RegoEvaluator.__init__ — hook_data / set_data / generic exception paths
+# ---------------------------------------------------------------------------
+
+def test_init_with_hook_data_calls_set_data() -> None:
+    engine = _make_engine()
+    data = {"required_features": ["sentiment"], "rule_messages": {}}
+    with patch("uipath.runtime.governance.rego.evaluator._load_engine", return_value=engine):
+        ev = RegoEvaluator(
+            hook_wasm_paths={LifecycleHook.BEFORE_MODEL: Path("/fake")},
+            hook_data={LifecycleHook.BEFORE_MODEL: data},
+            enforcement_mode=EnforcementMode.ENFORCE,
+        )
+    engine.set_data.assert_called_once_with(data)
+    assert ev._feature_plans.get(LifecycleHook.BEFORE_MODEL) == ["sentiment"]
+
+
+def test_init_set_data_exception_continues_loading() -> None:
+    engine = _make_engine()
+    engine.set_data.side_effect = RuntimeError("set_data failed")
+    data = {"required_features": ["sentiment"]}
+    with patch("uipath.runtime.governance.rego.evaluator._load_engine", return_value=engine):
+        ev = RegoEvaluator(
+            hook_wasm_paths={LifecycleHook.BEFORE_MODEL: Path("/fake")},
+            hook_data={LifecycleHook.BEFORE_MODEL: data},
+            enforcement_mode=EnforcementMode.ENFORCE,
+        )
+    assert LifecycleHook.BEFORE_MODEL in ev._engines
+
+
+def test_init_generic_exception_skips_hook() -> None:
+    with patch(
+        "uipath.runtime.governance.rego.evaluator._load_engine",
+        side_effect=OSError("disk error"),
+    ):
+        ev = RegoEvaluator(
+            hook_wasm_paths={LifecycleHook.BEFORE_MODEL: Path("/fake")},
+            enforcement_mode=EnforcementMode.ENFORCE,
+        )
+    assert LifecycleHook.BEFORE_MODEL not in ev._engines
+
+
+# ---------------------------------------------------------------------------
+# evaluate() — dict raw result branch
+# ---------------------------------------------------------------------------
+
+def test_evaluate_dict_raw_result() -> None:
+    engine = MagicMock()
+    engine.evaluate.return_value = {"deny": False, "fired_allow": ["pack/rule"]}
+    with patch("uipath.runtime.governance.rego.evaluator._load_engine", return_value=engine):
+        ev = RegoEvaluator(
+            hook_wasm_paths={LifecycleHook.BEFORE_MODEL: Path("/fake")},
+            enforcement_mode=EnforcementMode.ENFORCE,
+        )
+    record = ev.evaluate(_make_context())
+    assert record.final_action == Action.ALLOW
+    assert any(e.rule_id == "pack/rule" for e in record.evaluations)
+
+
+# ---------------------------------------------------------------------------
+# _emit_audit — None manager, swallowed emit exceptions
+# ---------------------------------------------------------------------------
+
+def test_emit_audit_none_manager_does_not_raise() -> None:
+    ev, _ = _make_evaluator(engine_result={"deny": False})
+    ev._audit_manager = None
+    record = ev.evaluate(_make_context())
+    assert record.final_action == Action.ALLOW
+
+
+def test_emit_audit_rule_evaluation_exception_swallowed() -> None:
+    from uipath.runtime.governance._audit.base import AuditManager
+
+    manager = MagicMock(spec=AuditManager)
+    manager.emit_rule_evaluation.side_effect = RuntimeError("emit blew up")
+    manager.emit_hook_summary.return_value = None
+
+    ev, _ = _make_evaluator(engine_result={"deny": False, "fired_allow": ["pack/safe"]})
+    ev._audit_manager = manager
+    record = ev.evaluate(_make_context())
+    assert record.final_action == Action.ALLOW
+
+
+def test_emit_audit_hook_summary_exception_swallowed() -> None:
+    from uipath.runtime.governance._audit.base import AuditManager
+
+    manager = MagicMock(spec=AuditManager)
+    manager.emit_rule_evaluation.return_value = None
+    manager.emit_hook_summary.side_effect = RuntimeError("summary blew up")
+
+    ev, _ = _make_evaluator(engine_result={"deny": False})
+    ev._audit_manager = manager
+    record = ev.evaluate(_make_context())
+    assert record.final_action == Action.ALLOW
