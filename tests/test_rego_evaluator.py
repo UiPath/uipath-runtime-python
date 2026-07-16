@@ -33,7 +33,7 @@ import json
 import tarfile
 
 
-def _make_bundle(wasm: bytes = b"\x00asm", data: dict | None = None) -> bytes:
+def _make_bundle(wasm: bytes = b"\x00asm", data: dict[str, object] | None = None) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         for name, content in [("policy.wasm", wasm)] + (
@@ -64,7 +64,7 @@ def _make_context(
     )
 
 
-def _make_engine(result: dict | None = None) -> MagicMock:
+def _make_engine(result: dict[str, object] | None = None) -> MagicMock:
     """Return a fake OPA engine whose evaluate() returns a single-item list."""
     engine = MagicMock()
     engine.evaluate.return_value = [{"result": result or {"deny": False}}]
@@ -73,7 +73,7 @@ def _make_engine(result: dict | None = None) -> MagicMock:
 
 def _make_evaluator(
     hook: LifecycleHook = LifecycleHook.BEFORE_MODEL,
-    engine_result: dict | None = None,
+    engine_result: dict[str, object] | None = None,
     enforcement_mode: EnforcementMode = EnforcementMode.ENFORCE,
     bundle_path: Path | None = None,
 ) -> tuple[RegoEvaluator, MagicMock]:
@@ -318,6 +318,7 @@ def test_evaluate_populates_rule_evaluations() -> None:
         ev.evaluate(ctx)
     # The audit record is embedded in the exception
     record = exc_info.value.audit_record
+    assert record is not None
     deny_evals = [e for e in record.evaluations if e.action == Action.DENY]
     allow_evals = [e for e in record.evaluations if e.action == Action.ALLOW]
     assert len(deny_evals) == 1
@@ -615,7 +616,7 @@ def test_evaluate_dict_raw_result() -> None:
 
 def test_emit_audit_none_manager_does_not_raise() -> None:
     ev, _ = _make_evaluator(engine_result={"deny": False})
-    ev._audit_manager = None
+    ev._audit_manager = None  # type: ignore[assignment]
     record = ev.evaluate(_make_context())
     assert record.final_action == Action.ALLOW
 

@@ -28,7 +28,7 @@ def _make_tar_gz(files: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
-def _fake_bundle(wasm: bytes = b"\x00asm\x01\x00\x00\x00", data: dict | None = None) -> bytes:
+def _fake_bundle(wasm: bytes = b"\x00asm\x01\x00\x00\x00", data: dict[str, object] | None = None) -> bytes:
     """Build a minimal OPA .tar.gz bundle."""
     import json
     files: dict[str, bytes] = {"policy.wasm": wasm}

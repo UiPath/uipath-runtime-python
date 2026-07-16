@@ -79,7 +79,7 @@ class ConsoleAuditSink(AuditSink):
         matched = data.get("matched_rules", 0)
         action = data.get("final_action", "allow").upper()
         mode = data.get("enforcement_mode")
-        mode_str = mode.value if hasattr(mode, "value") else str(mode or "audit")
+        mode_str = mode.value if mode is not None and hasattr(mode, "value") else str(mode or "audit")
 
         if mode_str == "audit" and action == "DENY":
             action = "AUDIT (would deny)"
@@ -95,7 +95,7 @@ class ConsoleAuditSink(AuditSink):
         data = event.data
         packs = data.get("packs", [])
         mode = data.get("enforcement_mode")
-        mode_str = mode.value if hasattr(mode, "value") else str(mode or "audit")
+        mode_str = mode.value if mode is not None and hasattr(mode, "value") else str(mode or "audit")
         _logger.info(
             "[GOVERNANCE] Session started | agent=%s | packs=%s | mode=%s",
             event.agent_name, ",".join(packs), mode_str,

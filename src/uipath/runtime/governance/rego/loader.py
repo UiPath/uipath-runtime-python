@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from uipath.core.governance.models import LifecycleHook
 
@@ -82,7 +82,7 @@ async def _build_rego_evaluator_async_inner(
         )
         return None
 
-    response = await service.retrieve_all_policies_async()  # type: ignore[union-attr]
+    response = await service.retrieve_all_policies_async()  # type: ignore[attr-defined]
     if not response.hook_bundles:
         logger.warning(
             "Rego build skipped: all-policies returned no WASM bundles for "
@@ -94,7 +94,7 @@ async def _build_rego_evaluator_async_inner(
 
     cache_dir = get_cache_dir(org_id, tenant_id)
     hook_wasm_paths: dict[LifecycleHook, Path] = {}
-    hook_data: dict[LifecycleHook, dict] = {}
+    hook_data: dict[LifecycleHook, dict[str, Any]] = {}
 
     for bundle in response.hook_bundles:
         hook_type = bundle.hook_type
@@ -102,7 +102,7 @@ async def _build_rego_evaluator_async_inner(
         cached_path = get_cached_bundle_path(cache_dir, hook_type)
 
         if cached_etag != bundle.etag or cached_path is None:
-            raw = await service.download_bundle_async(bundle.bundle_url)  # type: ignore[union-attr]
+            raw = await service.download_bundle_async(bundle.bundle_url)  # type: ignore[attr-defined]
             save_bundle(cache_dir, hook_type, raw, bundle.etag)
 
         path = get_cached_bundle_path(cache_dir, hook_type)

@@ -100,7 +100,7 @@ def _compile_regex(pattern: str) -> re.Pattern[str] | None:
 def _get_vader_analyzer() -> Any:
     """Return a cached SentimentIntensityAnalyzer, or None if unavailable."""
     try:
-        from vaderSentiment.vaderSentiment import (  # type: ignore[import-untyped]
+        from vaderSentiment.vaderSentiment import (
             SentimentIntensityAnalyzer,
         )
 

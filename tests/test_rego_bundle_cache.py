@@ -98,12 +98,16 @@ def test_different_hook_types_are_isolated(tmp_path: Path) -> None:
 
 def test_get_cached_etag_handles_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     save_bundle(tmp_path, "before_model", b"wasm", "etag-1")
-    # Make the etag file unreadable
-    hook_dir = tmp_path / "hooks" / "before_model"
-    etag_file = hook_dir / "etag.txt"
-    etag_file.chmod(0o000)
-    try:
-        result = get_cached_etag(tmp_path, "before_model")
-        assert result is None
-    finally:
-        etag_file.chmod(0o644)
+    # Simulate an OSError on read (chmod(0o000) is a no-op on Windows)
+    from pathlib import Path as _Path
+
+    real_read_text = _Path.read_text
+
+    def raise_oserror(self: _Path, *args: object, **kwargs: object) -> str:
+        if self.name == "etag.txt":
+            raise OSError("permission denied")
+        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_Path, "read_text", raise_oserror)
+    result = get_cached_etag(tmp_path, "before_model")
+    assert result is None

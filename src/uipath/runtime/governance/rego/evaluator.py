@@ -194,7 +194,7 @@ def _extract_data_json_from_bundle(bundle_path: Path) -> dict[str, Any] | None:
 
 def _load_engine(bundle_path: Path) -> Any:
     """Load a WASM bundle via opa-wasmtime. Raises on any failure."""
-    from opa_wasmtime import OPAPolicy  # type: ignore[import]
+    from opa_wasmtime import OPAPolicy
 
     wasm_bytes = _extract_wasm_from_bundle(bundle_path)
     with tempfile.NamedTemporaryFile(suffix=".wasm", delete=False) as tmp:
