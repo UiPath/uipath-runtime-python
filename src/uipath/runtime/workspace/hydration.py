@@ -1,7 +1,7 @@
 """Runtime wrapper for workspace hydration."""
 
 from enum import Enum
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable, overload
 
 from uipath.runtime.base import (
     UiPathExecuteOptions,
@@ -27,6 +27,7 @@ class HydrationPolicy(str, Enum):
 class HydrationRuntime:
     """Wraps a runtime with hydrate-before and dehydrate-after behavior."""
 
+    @overload
     def __init__(
         self,
         delegate: UiPathRuntimeProtocol,
@@ -34,14 +35,49 @@ class HydrationRuntime:
         workspace: Workspace,
         hydrator: WorkspaceHydrator,
         registry_store: WorkspaceRegistryStore,
+        hydrator_factory: None = None,
         policy: HydrationPolicy = HydrationPolicy.SUSPEND_ONLY,
-    ):
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        delegate: UiPathRuntimeProtocol,
+        *,
+        workspace: Workspace,
+        hydrator: None = None,
+        registry_store: WorkspaceRegistryStore,
+        hydrator_factory: Callable[[], WorkspaceHydrator],
+        policy: HydrationPolicy = HydrationPolicy.SUSPEND_ONLY,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        delegate: UiPathRuntimeProtocol,
+        *,
+        workspace: Workspace,
+        hydrator: WorkspaceHydrator | None = None,
+        registry_store: WorkspaceRegistryStore,
+        hydrator_factory: Callable[[], WorkspaceHydrator] | None = None,
+        policy: HydrationPolicy = HydrationPolicy.SUSPEND_ONLY,
+    ) -> None:
         """Initialize the hydration wrapper."""
+        if (hydrator is None) == (hydrator_factory is None):
+            raise ValueError("Provide exactly one of hydrator or hydrator_factory")
+
         self.delegate = delegate
         self.workspace = workspace
         self.hydrator = hydrator
+        self._hydrator_factory = hydrator_factory
         self.registry_store = registry_store
         self.policy = policy
+
+    def _get_hydrator(self) -> WorkspaceHydrator:
+        if self.hydrator is None:
+            if self._hydrator_factory is None:  # pragma: no cover - constructor guard
+                raise RuntimeError("Hydrator is not configured")
+            self.hydrator = self._hydrator_factory()
+        return self.hydrator
 
     async def execute(
         self,
@@ -96,7 +132,7 @@ class HydrationRuntime:
 
     async def _hydrate(self) -> None:
         registry = await self.registry_store.load()
-        hydrated = await self.hydrator.hydrate(registry)
+        hydrated = await self._get_hydrator().hydrate(registry)
         if hydrated != registry:
             await self.registry_store.save(hydrated)
 
@@ -106,7 +142,7 @@ class HydrationRuntime:
 
     async def _persist(self) -> None:
         registry = await self.registry_store.load()
-        dehydrated = await self.hydrator.dehydrate(registry)
+        dehydrated = await self._get_hydrator().dehydrate(registry)
         await self.registry_store.save(dehydrated)
 
     def _should_dehydrate(self, result: UiPathRuntimeResult) -> bool:

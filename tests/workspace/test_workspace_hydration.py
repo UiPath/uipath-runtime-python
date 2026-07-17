@@ -125,6 +125,20 @@ class WritingRuntime:
         self.disposed = True
 
 
+class SchemaRuntime(WritingRuntime):
+    def __init__(self, workspace_path: Path) -> None:
+        super().__init__(workspace_path, UiPathRuntimeStatus.SUCCESSFUL)
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        return UiPathRuntimeSchema(
+            filePath="agent.py",
+            uniqueId="agent",
+            type="agent",
+            input={},
+            output={},
+        )
+
+
 @pytest.mark.asyncio
 async def test_dehydrate_uploads_changed_files_and_saves_registry(
     tmp_path: Path,
@@ -156,6 +170,94 @@ async def test_dehydrate_uploads_changed_files_and_saves_registry(
     assert registry["notes.txt"]["attachment_name"] == ".uipath-workspace~1notes.txt"
     assert attachments.uploads == 1
     assert len(jobs.links) == 1
+
+
+@pytest.mark.asyncio
+async def test_hydrator_factory_is_deferred_and_cached(tmp_path: Path) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    attachments = FakeAttachments()
+    storage = MemoryStorage()
+    factory_calls = 0
+
+    def create_hydrator() -> WorkspaceHydrator:
+        nonlocal factory_calls
+        factory_calls += 1
+        return WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=attachments,
+        )
+
+    runtime = HydrationRuntime(
+        SchemaRuntime(workspace.path),
+        workspace=workspace,
+        hydrator_factory=create_hydrator,
+        registry_store=WorkspaceRegistryStore(storage, "runtime-1"),
+    )
+
+    await runtime.get_schema()
+    assert factory_calls == 0
+    assert runtime.hydrator is None
+
+    await runtime.execute({})
+    assert [event async for event in runtime.stream({})]
+
+    assert factory_calls == 1
+    assert runtime.hydrator is not None
+    assert runtime.hydrator.attachments is attachments
+
+
+@pytest.mark.asyncio
+async def test_dispose_does_not_create_hydrator(tmp_path: Path) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    factory_calls = 0
+
+    def create_hydrator() -> WorkspaceHydrator:
+        nonlocal factory_calls
+        factory_calls += 1
+        return WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        )
+
+    delegate = SchemaRuntime(workspace.path)
+    runtime = HydrationRuntime(
+        delegate,
+        workspace=workspace,
+        hydrator_factory=create_hydrator,
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    await runtime.dispose()
+
+    assert delegate.disposed
+    assert factory_calls == 0
+
+
+def test_hydration_runtime_requires_exactly_one_hydrator_source(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    hydrator = WorkspaceHydrator(
+        workspace_path=workspace.path,
+        attachments=FakeAttachments(),
+    )
+    registry_store = WorkspaceRegistryStore(MemoryStorage(), "runtime-1")
+
+    with pytest.raises(ValueError, match="exactly one"):
+        HydrationRuntime(  # type: ignore[call-overload]
+            WritingRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+            workspace=workspace,
+            registry_store=registry_store,
+        )
+
+    with pytest.raises(ValueError, match="exactly one"):
+        HydrationRuntime(  # type: ignore[call-overload]
+            WritingRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+            workspace=workspace,
+            hydrator=hydrator,
+            hydrator_factory=lambda: hydrator,
+            registry_store=registry_store,
+        )
 
 
 @pytest.mark.asyncio
