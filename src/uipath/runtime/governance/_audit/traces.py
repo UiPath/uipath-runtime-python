@@ -1,6 +1,6 @@
 """OpenTelemetry traces audit sink for governance events.
 
-Emits an OpenTelemetry span per rule evaluation and per hook summary.
+Emits an OpenTelemetry span per rule evaluation.
 This sink emits spans only — it does not resolve or stamp
 job-execution metadata (organization, tenant, folder, job, trace id)
 onto them. That resolution is owned by the platform-side OTel
@@ -39,12 +39,15 @@ SCHEMA_VERSION = _package_version()
 # governance span. Local to the runtime trace contract — kept as a
 # string literal (not a cross-package import) so the runtime stays
 # self-contained.
-SPAN_TYPE_AGENT_RUN = "agentRun"
+SPAN_TYPE_GOVERNANCE = "governance"
 
 # Set as the ``source`` attribute on every governance span. Lets
 # consumers identify which producer emitted a given span when more
 # than one governance producer feeds the same trace backend.
 GOVERNANCE_SOURCE = "governance-checker-python"
+
+# Value of the root ``uipath.source`` span attribute.
+UIPATH_SOURCE = "Governance"
 
 # Shared attribute namespace for every governance span attribute.
 # Concatenated into each ``span.set_attribute`` call so the prefix
@@ -155,55 +158,9 @@ class TracesAuditSink(AuditSink):
         return self._tracer if self._tracer else None
 
     def emit(self, event: AuditEvent) -> None:
-        """Create a span for RULE_EVALUATION or HOOK_END events; drop others."""
+        """Create a span for RULE_EVALUATION events; drop others."""
         if event.event_type == EventType.RULE_EVALUATION:
             self._emit_rule_span(event)
-        elif event.event_type == EventType.HOOK_END:
-            self._emit_hook_span(event)
-
-    def _emit_hook_span(self, event: AuditEvent) -> None:
-        """Create a span for a hook summary (always emitted for each governance check)."""
-        tracer = self._get_tracer()
-        if tracer is None:
-            return
-
-        try:
-            data = event.data
-            hook = event.hook or "unknown"
-            span_name = f"governance.{hook.lower()}"
-
-            # Sink dispatch runs on the caller's thread (see
-            # :meth:`AuditManager.emit`), so the current OTel context
-            # is the agent's live span — the governance span attaches
-            # as its child without any cross-thread plumbing.
-            with tracer.start_as_current_span(span_name) as span:
-                span.set_attribute("type", SPAN_TYPE_AGENT_RUN)
-                span.set_attribute("span_type", SPAN_TYPE_AGENT_RUN)
-                span.set_attribute("uipath.custom_instrumentation", True)
-                span.set_attribute(f"{NS}.source", GOVERNANCE_SOURCE)
-
-                # Mode travels on the event so parallel runtimes running
-                # different per-instance modes don't cross-contaminate.
-                mode = _resolve_mode(event)
-                final_action = data.get("final_action", "allow")
-                _, action_applied = _derive_results(
-                    matched=final_action.lower() != "allow",
-                    configured_action=final_action,
-                    mode=mode,
-                )
-                span.set_attribute(f"{NS}.hook", hook)
-                span.set_attribute(f"{NS}.action_applied", action_applied)
-                span.set_attribute(f"{NS}.mode", mode.value.upper())
-
-                # Hook spans are summary containers — severity lives on
-                # the per-rule spans. Marking the hook ERROR would paint
-                # the whole lifecycle phase as failed when only one rule
-                # fired beneath it.
-
-                self._spans_created += 1
-
-        except Exception as e:
-            logger.warning("Failed to create governance hook span: %s", e)
 
     def _emit_rule_span(self, event: AuditEvent) -> None:
         """Create a span for a rule evaluation."""
@@ -216,13 +173,15 @@ class TracesAuditSink(AuditSink):
             policy_id = data.get("policy_id", "unknown")
             span_name = f"{NS}.rule.{policy_id}"
 
-            # See _emit_hook_span: sync dispatch on the caller's
-            # thread means the current OTel context is the agent's
-            # live span, so this rule span attaches as its child.
+            # Sink dispatch runs on the caller's thread (see
+            # :meth:`AuditManager.emit`), so the current OTel context
+            # is the agent's live span — this rule span attaches as
+            # its child without any cross-thread plumbing.
             with tracer.start_as_current_span(span_name) as span:
-                span.set_attribute("type", SPAN_TYPE_AGENT_RUN)
-                span.set_attribute("span_type", SPAN_TYPE_AGENT_RUN)
+                span.set_attribute("type", SPAN_TYPE_GOVERNANCE)
+                span.set_attribute("span_type", SPAN_TYPE_GOVERNANCE)
                 span.set_attribute("uipath.custom_instrumentation", True)
+                span.set_attribute("uipath.source", UIPATH_SOURCE)
                 span.set_attribute(f"{NS}.source", GOVERNANCE_SOURCE)
 
                 # Single source of truth for the emitted attributes

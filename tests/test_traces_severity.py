@@ -1,10 +1,10 @@
 """Tests for trace-span verbosity / status semantics.
 
-``TracesAuditSink`` emits an OpenTelemetry span for every governance
-hook end and every rule evaluation. The verdict is split into
-``evaluator_result`` (what the rule decided, mode-independent) and
-``action_applied`` (what actually happened, derived from
-evaluator_result + mode).
+``TracesAuditSink`` emits an OpenTelemetry span for every rule
+evaluation. HOOK_END events are dropped — no hook-summary span. The
+verdict is split into ``evaluator_result`` (what the rule decided,
+mode-independent) and ``action_applied`` (what actually happened,
+derived from evaluator_result + mode).
 
 Mode travels with the event (set by the emitter from its
 per-instance ``EnforcementMode``) so parallel runtimes running
@@ -17,8 +17,6 @@ different modes don't cross-contaminate the sink's view.
   outcomes (``action_applied`` in ``{AUDIT, HITL}``). HITL is its own
   bucket — escalation pauses for human review, it doesn't fail the
   run, so it stays Warning even in ENFORCE mode.
-- Hook spans never set Status, regardless of mode or final_action.
-  They're summary containers; severity belongs on the per-rule span.
 - ``ALLOW`` / ``NONE`` results leave verbosityLevel unset (consumers
   apply their default) and never call set_status.
 """
@@ -31,7 +29,11 @@ import pytest
 from uipath.core.governance import EnforcementMode
 
 from uipath.runtime.governance._audit.base import AuditEvent, EventType
-from uipath.runtime.governance._audit.traces import TracesAuditSink
+from uipath.runtime.governance._audit.traces import (
+    SPAN_TYPE_GOVERNANCE,
+    UIPATH_SOURCE,
+    TracesAuditSink,
+)
 
 
 @pytest.fixture
@@ -89,7 +91,7 @@ def _span_attrs(span: MagicMock) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# Hook span — never marked ERROR
+# Hook span — dropped; no span is emitted for HOOK_END
 # ---------------------------------------------------------------------------
 
 
@@ -103,16 +105,46 @@ def _span_attrs(span: MagicMock) -> dict[str, object]:
         ("allow", EnforcementMode.AUDIT),
     ],
 )
-def test_hook_span_never_sets_error(
+def test_hook_end_emits_no_span(
     captured_span: MagicMock, final_action: str, mode: EnforcementMode
 ) -> None:
-    """Hook spans are summary containers — they never carry an ERROR Status."""
+    """HOOK_END events are dropped — the sink emits spans per rule only.
+
+    No span is started and the counter stays at zero regardless of the
+    hook's final_action or mode.
+    """
     sink = TracesAuditSink()
     sink.emit(_hook_event(final_action=final_action, mode=mode))
-    assert not captured_span.set_status.called, (
-        f"Hook span should never set_status; called with "
-        f"final_action={final_action!r}, mode={mode!r}"
-    )
+
+    # The tracer is never asked to start a span for HOOK_END — the drop
+    # happens in ``emit`` before any span work.
+    tracer = sink._get_tracer()
+    tracer.start_as_current_span.assert_not_called()
+    assert not captured_span.set_attribute.called
+    assert not captured_span.set_status.called
+    assert sink.spans_created == 0
+
+
+# ---------------------------------------------------------------------------
+# Rule span — OTEL-contract attributes (span type + source)
+# ---------------------------------------------------------------------------
+
+
+def test_rule_span_sets_governance_type_and_source(captured_span: MagicMock) -> None:
+    """Governance rule spans carry the governance span type and source.
+
+    This is the OTEL-contract change the PR exists to make: spans must no
+    longer look like agent runs (``agentRun`` / CodedAgents). Guards
+    against a regression that recreates the span but mis-types/mis-sources
+    it.
+    """
+    sink = TracesAuditSink()
+    sink.emit(_rule_event(matched=True, action="deny", mode=EnforcementMode.ENFORCE))
+
+    attrs = _span_attrs(captured_span)
+    assert attrs.get("type") == SPAN_TYPE_GOVERNANCE
+    assert attrs.get("span_type") == SPAN_TYPE_GOVERNANCE
+    assert attrs.get("uipath.source") == UIPATH_SOURCE
 
 
 # ---------------------------------------------------------------------------
@@ -324,13 +356,13 @@ def test_emit_is_a_noop_when_tracer_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When ``_get_tracer`` returns None, ``emit`` short-circuits inside
-    both ``_emit_rule_span`` and ``_emit_hook_span`` without touching
-    the tracer. Regression guard for the early-return branch.
+    ``_emit_rule_span`` without touching the tracer. Regression guard
+    for the early-return branch.
     """
     sink = TracesAuditSink()
     monkeypatch.setattr(sink, "_get_tracer", lambda: None)
 
-    # Both event types — must not raise, must not create spans.
+    # Rule events must not raise, must not create spans; HOOK_END is dropped.
     sink.emit(_hook_event(final_action="deny", mode=EnforcementMode.ENFORCE))
     sink.emit(_rule_event(matched=True, action="deny", mode=EnforcementMode.ENFORCE))
     assert sink.spans_created == 0
@@ -353,6 +385,9 @@ def test_spans_created_increments_per_successful_emit(
     assert sink.spans_created == 0
     sink.emit(_rule_event(matched=True, action="deny", mode=EnforcementMode.ENFORCE))
     assert sink.spans_created == 1
+    # A second rule increments; HOOK_END events are dropped and never do.
+    sink.emit(_rule_event(matched=True, action="deny", mode=EnforcementMode.ENFORCE))
+    assert sink.spans_created == 2
     sink.emit(_hook_event(final_action="deny", mode=EnforcementMode.ENFORCE))
     assert sink.spans_created == 2
 
@@ -466,7 +501,6 @@ def test_rule_span_exception_is_swallowed(
 
     # Must not raise.
     sink.emit(_rule_event(matched=True, action="deny", mode=EnforcementMode.ENFORCE))
-    sink.emit(_hook_event(final_action="deny", mode=EnforcementMode.ENFORCE))
 
     # And no span was successfully created.
     assert sink.spans_created == 0
