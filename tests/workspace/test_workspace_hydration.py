@@ -17,7 +17,9 @@ from uipath.runtime import (
     Workspace,
     WorkspaceHydrator,
     WorkspaceRegistryStore,
+    get_workspace_path,
 )
+from uipath.runtime.errors import UiPathErrorCategory, UiPathRuntimeError
 from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeStateEvent
 from uipath.runtime.schema import UiPathRuntimeSchema
 
@@ -139,6 +141,25 @@ class SchemaRuntime(WritingRuntime):
         )
 
 
+class ContextAwareRuntime(WritingRuntime):
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        assert get_workspace_path() == self.workspace_path
+        return await super().execute(input, options)
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        assert get_workspace_path() == self.workspace_path
+        async for event in super().stream(input, options):
+            yield event
+
+
 @pytest.mark.asyncio
 async def test_dehydrate_uploads_changed_files_and_saves_registry(
     tmp_path: Path,
@@ -170,6 +191,57 @@ async def test_dehydrate_uploads_changed_files_and_saves_registry(
     assert registry["notes.txt"]["attachment_name"] == ".uipath-workspace~1notes.txt"
     assert attachments.uploads == 1
     assert len(jobs.links) == 1
+
+
+def test_get_workspace_path_requires_a_managed_execution() -> None:
+    with pytest.raises(UiPathRuntimeError, match="No managed workspace") as error:
+        get_workspace_path()
+
+    assert error.value.error_info.code == "Python.MANAGED_WORKSPACE_UNAVAILABLE"
+    assert error.value.error_info.category == UiPathErrorCategory.USER
+
+
+@pytest.mark.asyncio
+async def test_workspace_path_is_available_only_during_execution(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    runtime = HydrationRuntime(
+        ContextAwareRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    await runtime.execute({})
+
+    with pytest.raises(UiPathRuntimeError, match="No managed workspace"):
+        get_workspace_path()
+
+
+@pytest.mark.asyncio
+async def test_workspace_path_is_available_during_streaming(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    runtime = HydrationRuntime(
+        ContextAwareRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    events = [event async for event in runtime.stream({})]
+
+    assert isinstance(events[-1], UiPathRuntimeResult)
+    with pytest.raises(UiPathRuntimeError, match="No managed workspace"):
+        get_workspace_path()
 
 
 @pytest.mark.asyncio

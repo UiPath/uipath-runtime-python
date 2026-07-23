@@ -1,5 +1,6 @@
 """Workspace persistence primitives for runtime implementations."""
 
+from uipath.runtime.workspace.context import get_workspace_path
 from uipath.runtime.workspace.hydration import (
     HydrationPolicy,
     HydrationRuntime,
@@ -15,6 +16,7 @@ __all__ = [
     "AttachmentRegistryEntry",
     "HydrationPolicy",
     "HydrationRuntime",
+    "get_workspace_path",
     "Workspace",
     "WorkspaceHydrator",
     "WorkspaceRegistryStore",
