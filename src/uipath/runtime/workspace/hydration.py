@@ -11,6 +11,7 @@ from uipath.runtime.base import (
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 from uipath.runtime.schema import UiPathRuntimeSchema
+from uipath.runtime.workspace.context import _workspace_execution
 from uipath.runtime.workspace.hydrator import WorkspaceHydrator
 from uipath.runtime.workspace.registry_store import WorkspaceRegistryStore
 from uipath.runtime.workspace.workspace import Workspace
@@ -85,15 +86,16 @@ class HydrationRuntime:
         options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         """Hydrate, execute, then persist files according to policy."""
-        await self._hydrate()
-        try:
-            result = await self.delegate.execute(input, options=options)
-        except Exception:
-            if self.policy == HydrationPolicy.ALWAYS:
-                await self._persist()
-            raise
-        await self._dehydrate(result)
-        return result
+        with _workspace_execution(self.workspace.path):
+            await self._hydrate()
+            try:
+                result = await self.delegate.execute(input, options=options)
+            except Exception:
+                if self.policy == HydrationPolicy.ALWAYS:
+                    await self._persist()
+                raise
+            await self._dehydrate(result)
+            return result
 
     async def stream(
         self,
@@ -101,23 +103,24 @@ class HydrationRuntime:
         options: UiPathStreamOptions | None = None,
     ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
         """Hydrate, stream delegate events, then persist files according to policy."""
-        await self._hydrate()
-        final_result: UiPathRuntimeResult | None = None
+        with _workspace_execution(self.workspace.path):
+            await self._hydrate()
+            final_result: UiPathRuntimeResult | None = None
 
-        try:
-            async for event in self.delegate.stream(input, options=options):
-                if isinstance(event, UiPathRuntimeResult):
-                    final_result = event
-                else:
-                    yield event
-        except Exception:
-            if self.policy == HydrationPolicy.ALWAYS:
-                await self._persist()
-            raise
+            try:
+                async for event in self.delegate.stream(input, options=options):
+                    if isinstance(event, UiPathRuntimeResult):
+                        final_result = event
+                    else:
+                        yield event
+            except Exception:
+                if self.policy == HydrationPolicy.ALWAYS:
+                    await self._persist()
+                raise
 
-        if final_result is not None:
-            await self._dehydrate(final_result)
-            yield final_result
+            if final_result is not None:
+                await self._dehydrate(final_result)
+                yield final_result
 
     async def get_schema(self) -> UiPathRuntimeSchema:
         """Passthrough schema from delegate runtime."""

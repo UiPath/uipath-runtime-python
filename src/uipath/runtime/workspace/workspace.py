@@ -1,5 +1,6 @@
 """Disk workspace lifecycle helpers."""
 
+import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -44,4 +45,4 @@ class Workspace:
     async def dispose(self) -> None:
         """Remove the workspace directory when configured to do so."""
         if self.cleanup and self.path.exists():
-            shutil.rmtree(self.path)
+            await asyncio.to_thread(shutil.rmtree, self.path)

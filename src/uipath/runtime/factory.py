@@ -23,6 +23,9 @@ class UiPathRuntimeFactorySettings(BaseModel):
 
     agent_framework: str | None = None
 
+    managed_workspace: bool = False
+    """Whether this runtime can use host-managed persistent workspace storage."""
+
 
 class UiPathRuntimeFactoryProtocol(
     UiPathDisposableProtocol,

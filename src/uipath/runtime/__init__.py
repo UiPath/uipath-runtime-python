@@ -50,6 +50,7 @@ from uipath.runtime.workspace import (
     Workspace,
     WorkspaceHydrator,
     WorkspaceRegistryStore,
+    get_workspace_path,
 )
 
 __all__ = [
@@ -84,6 +85,7 @@ __all__ = [
     "AttachmentRegistryEntry",
     "HydrationPolicy",
     "HydrationRuntime",
+    "get_workspace_path",
     "Workspace",
     "WorkspaceHydrator",
     "WorkspaceRegistryStore",
