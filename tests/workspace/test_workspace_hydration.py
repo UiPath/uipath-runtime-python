@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 import uuid
 from pathlib import Path
@@ -70,6 +71,18 @@ class FakeAttachments:
         Path(destination_path).write_bytes(content)
         self.downloads += 1
         return name
+
+
+class FailingDownloadAttachments(FakeAttachments):
+    async def download_async(
+        self,
+        *,
+        key: uuid.UUID,
+        destination_path: str,
+        folder_key: str | None = None,
+        folder_path: str | None = None,
+    ) -> str:
+        raise RuntimeError("download failed")
 
 
 class FakeJobs:
@@ -160,6 +173,68 @@ class ContextAwareRuntime(WritingRuntime):
             yield event
 
 
+class ChildTaskRuntime(WritingRuntime):
+    def __init__(self, workspace_path: Path, release: asyncio.Event) -> None:
+        super().__init__(workspace_path, UiPathRuntimeStatus.SUCCESSFUL)
+        self.release = release
+        self.task: asyncio.Task[Path] | None = None
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        async def access_workspace_after_execution() -> Path:
+            await self.release.wait()
+            return get_workspace_path()
+
+        self.task = asyncio.create_task(access_workspace_after_execution())
+        return await super().execute(input, options)
+
+
+class StreamingChildTaskRuntime(WritingRuntime):
+    def __init__(self, workspace_path: Path, release: asyncio.Event) -> None:
+        super().__init__(workspace_path, UiPathRuntimeStatus.SUCCESSFUL)
+        self.release = release
+        self.task: asyncio.Task[Path] | None = None
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        async def access_workspace_during_stream() -> Path:
+            await self.release.wait()
+            return get_workspace_path()
+
+        self.task = asyncio.create_task(access_workspace_during_stream())
+        yield UiPathRuntimeStateEvent(payload={"started": True})
+        await self.release.wait()
+        assert self.task is not None
+        assert await self.task == self.workspace_path
+        yield UiPathRuntimeResult(status=self.status, output={"ok": True})
+
+
+class FinalChildTaskRuntime(WritingRuntime):
+    def __init__(self, workspace_path: Path, release: asyncio.Event) -> None:
+        super().__init__(workspace_path, UiPathRuntimeStatus.SUCCESSFUL)
+        self.release = release
+        self.task: asyncio.Task[Path] | None = None
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        async def access_workspace_after_final_result() -> Path:
+            await self.release.wait()
+            return get_workspace_path()
+
+        self.task = asyncio.create_task(access_workspace_after_final_result())
+        yield UiPathRuntimeStateEvent(payload={"started": True})
+        yield UiPathRuntimeResult(status=self.status, output={"ok": True})
+
+
 @pytest.mark.asyncio
 async def test_dehydrate_uploads_changed_files_and_saves_registry(
     tmp_path: Path,
@@ -198,6 +273,7 @@ def test_get_workspace_path_requires_a_managed_execution() -> None:
         get_workspace_path()
 
     assert error.value.error_info.code == "Python.MANAGED_WORKSPACE_UNAVAILABLE"
+    assert "not from module-level initialization" in str(error.value)
     assert error.value.error_info.category == UiPathErrorCategory.USER
 
 
@@ -242,6 +318,221 @@ async def test_workspace_path_is_available_during_streaming(
     assert isinstance(events[-1], UiPathRuntimeResult)
     with pytest.raises(UiPathRuntimeError, match="No managed workspace"):
         get_workspace_path()
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_expose_workspace_to_the_consumer(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    runtime = HydrationRuntime(
+        ContextAwareRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    stream = runtime.stream({})
+    assert isinstance(await anext(stream), UiPathRuntimeStateEvent)
+    with pytest.raises(UiPathRuntimeError, match="No managed workspace"):
+        get_workspace_path()
+
+    await stream.aclose()
+    with pytest.raises(UiPathRuntimeError, match="No managed workspace"):
+        get_workspace_path()
+
+
+@pytest.mark.asyncio
+async def test_breaking_after_the_final_stream_result_resets_workspace_access(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    runtime = HydrationRuntime(
+        ContextAwareRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    stream = runtime.stream({})
+    async for event in stream:
+        if isinstance(event, UiPathRuntimeResult):
+            break
+
+    await stream.aclose()
+
+    with pytest.raises(UiPathRuntimeError, match="No managed workspace"):
+        get_workspace_path()
+
+
+@pytest.mark.asyncio
+async def test_stream_supports_task_wrapped_iterator_resumes(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    runtime = HydrationRuntime(
+        ContextAwareRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    stream = runtime.stream({})
+    first = await asyncio.wait_for(anext(stream), timeout=1)
+    result = await asyncio.wait_for(anext(stream), timeout=1)
+
+    assert isinstance(first, UiPathRuntimeStateEvent)
+    assert isinstance(result, UiPathRuntimeResult)
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_child_tasks_keep_workspace_access_between_events(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    release = asyncio.Event()
+    delegate = StreamingChildTaskRuntime(workspace.path, release)
+    runtime = HydrationRuntime(
+        delegate,
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    stream = runtime.stream({})
+    assert isinstance(await anext(stream), UiPathRuntimeStateEvent)
+    release.set()
+    assert isinstance(await anext(stream), UiPathRuntimeResult)
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_retry_failed_final_persistence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    runtime = HydrationRuntime(
+        WritingRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+        policy=HydrationPolicy.ALWAYS,
+    )
+    persist_calls = 0
+
+    async def fail_persist() -> None:
+        nonlocal persist_calls
+        persist_calls += 1
+        raise RuntimeError("persist failed")
+
+    monkeypatch.setattr(runtime, "_persist", fail_persist)
+
+    with pytest.raises(RuntimeError, match="persist failed"):
+        [event async for event in runtime.stream({})]
+
+    assert persist_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_hydration_failure_preserves_the_workspace_registry(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    storage = MemoryStorage()
+    store = WorkspaceRegistryStore(storage, "runtime-1")
+    registry = {
+        "notes.txt": {
+            "attachment_key": str(uuid.uuid4()),
+            "sha256": "0" * 64,
+            "size": 1,
+            "uploaded_at": "2026-01-01T00:00:00+00:00",
+        }
+    }
+    await store.save(registry)
+    runtime = HydrationRuntime(
+        WritingRuntime(workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FailingDownloadAttachments(),
+        ),
+        registry_store=store,
+        policy=HydrationPolicy.ALWAYS,
+    )
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        [event async for event in runtime.stream({})]
+
+    assert await store.load() == registry
+
+
+@pytest.mark.asyncio
+async def test_stream_revokes_workspace_before_yielding_final_result(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    release = asyncio.Event()
+    delegate = FinalChildTaskRuntime(workspace.path, release)
+    runtime = HydrationRuntime(
+        delegate,
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    stream = runtime.stream({})
+    assert isinstance(await anext(stream), UiPathRuntimeStateEvent)
+    assert isinstance(await anext(stream), UiPathRuntimeResult)
+    release.set()
+
+    assert delegate.task is not None
+    with pytest.raises(UiPathRuntimeError, match="No managed workspace"):
+        await delegate.task
+
+
+@pytest.mark.asyncio
+async def test_child_tasks_cannot_access_workspace_after_execution(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    release = asyncio.Event()
+    delegate = ChildTaskRuntime(workspace.path, release)
+    runtime = HydrationRuntime(
+        delegate,
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path,
+            attachments=FakeAttachments(),
+        ),
+        registry_store=WorkspaceRegistryStore(MemoryStorage(), "runtime-1"),
+    )
+
+    await runtime.execute({})
+    release.set()
+
+    assert delegate.task is not None
+    with pytest.raises(UiPathRuntimeError, match="No managed workspace"):
+        await delegate.task
 
 
 @pytest.mark.asyncio

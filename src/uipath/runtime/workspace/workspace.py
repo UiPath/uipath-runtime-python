@@ -44,5 +44,7 @@ class Workspace:
 
     async def dispose(self) -> None:
         """Remove the workspace directory when configured to do so."""
-        if self.cleanup and self.path.exists():
-            await asyncio.to_thread(shutil.rmtree, self.path)
+        if not self.cleanup:
+            return
+
+        await asyncio.to_thread(shutil.rmtree, self.path)
