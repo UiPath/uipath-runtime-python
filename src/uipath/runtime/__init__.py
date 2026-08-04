@@ -15,7 +15,7 @@ from uipath.runtime.base import (
     UiPathStreamNotSupportedError,
     UiPathStreamOptions,
 )
-from uipath.runtime.chat.protocol import UiPathChatProtocol
+from uipath.runtime.chat.protocol import UiPathChatMetaEventProtocol, UiPathChatProtocol
 from uipath.runtime.chat.runtime import UiPathChatRuntime
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
@@ -45,6 +45,7 @@ from uipath.runtime.schema import UiPathRuntimeSchema
 from uipath.runtime.storage import UiPathRuntimeStorageProtocol
 from uipath.runtime.workspace import (
     AttachmentRegistryEntry,
+    ConversationalWorkspaceRuntime,
     HydrationPolicy,
     HydrationRuntime,
     Workspace,
@@ -80,9 +81,11 @@ __all__ = [
     "UiPathBreakpointResult",
     "UiPathStreamNotSupportedError",
     "UiPathResumeTriggerName",
+    "UiPathChatMetaEventProtocol",
     "UiPathChatProtocol",
     "UiPathChatRuntime",
     "AttachmentRegistryEntry",
+    "ConversationalWorkspaceRuntime",
     "HydrationPolicy",
     "HydrationRuntime",
     "get_workspace_path",

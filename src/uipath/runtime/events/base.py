@@ -10,6 +10,7 @@ class UiPathRuntimeEventType(str, Enum):
     """Types of events that can be emitted during execution."""
 
     RUNTIME_MESSAGE = "runtime_message"
+    CONVERSATION_META = "conversation_meta"
     RUNTIME_STATE = "runtime_state"
     RUNTIME_ERROR = "runtime_error"
     RUNTIME_RESULT = "runtime_result"

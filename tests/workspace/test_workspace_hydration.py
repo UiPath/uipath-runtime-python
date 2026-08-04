@@ -7,8 +7,13 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import pytest
+from uipath.core.chat import (
+    UiPathConversationMessageEndEvent,
+    UiPathConversationMessageEvent,
+)
 
 from uipath.runtime import (
+    ConversationalWorkspaceRuntime,
     HydrationPolicy,
     HydrationRuntime,
     UiPathExecuteOptions,
@@ -21,7 +26,12 @@ from uipath.runtime import (
     get_workspace_path,
 )
 from uipath.runtime.errors import UiPathErrorCategory, UiPathRuntimeError
-from uipath.runtime.events import UiPathRuntimeEvent, UiPathRuntimeStateEvent
+from uipath.runtime.events import (
+    UiPathRuntimeConversationMetaEvent,
+    UiPathRuntimeEvent,
+    UiPathRuntimeMessageEvent,
+    UiPathRuntimeStateEvent,
+)
 from uipath.runtime.schema import UiPathRuntimeSchema
 
 
@@ -108,6 +118,18 @@ class FakeJobs:
         folder_path: str | None = None,
     ) -> None:
         self.links.append((job_key, attachment_key))
+
+
+@pytest.mark.asyncio
+async def test_registry_store_distinguishes_missing_from_saved_empty() -> None:
+    store = WorkspaceRegistryStore(MemoryStorage(), "runtime-1")
+
+    assert await store.try_load() is None
+
+    await store.save({})
+
+    assert await store.try_load() == {}
+    assert await store.load() == {}
 
 
 class WritingRuntime:
@@ -233,6 +255,35 @@ class FinalChildTaskRuntime(WritingRuntime):
         self.task = asyncio.create_task(access_workspace_after_final_result())
         yield UiPathRuntimeStateEvent(payload={"started": True})
         yield UiPathRuntimeResult(status=self.status, output={"ok": True})
+
+
+class ReadingRuntime(WritingRuntime):
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        assert (self.workspace_path / "notes.txt").read_text(
+            encoding="utf-8"
+        ) == "hello"
+        (self.workspace_path / "notes.txt").write_text(
+            "hello after resume", encoding="utf-8"
+        )
+        return UiPathRuntimeResult(status=self.status, output={"ok": True})
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        message_id = "assistant-1"
+        yield UiPathRuntimeMessageEvent(
+            payload=UiPathConversationMessageEvent(
+                message_id=message_id,
+                end=UiPathConversationMessageEndEvent(),
+            )
+        )
+        yield await self.execute(input, options)
 
 
 @pytest.mark.asyncio
@@ -624,6 +675,37 @@ def test_hydration_runtime_requires_exactly_one_hydrator_source(
 
 
 @pytest.mark.asyncio
+async def test_conversational_resume_reuses_registry_persisted_on_suspend(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    attachments = FakeAttachments()
+    store = WorkspaceRegistryStore(MemoryStorage(), "runtime-1")
+    hydrator = WorkspaceHydrator(
+        workspace_path=workspace.path,
+        attachments=attachments,
+    )
+    delegate = WritingRuntime(workspace.path, UiPathRuntimeStatus.SUSPENDED)
+    hydration_runtime = HydrationRuntime(
+        delegate,
+        workspace=workspace,
+        hydrator=hydrator,
+        registry_store=store,
+    )
+    runtime = ConversationalWorkspaceRuntime(
+        hydration_runtime,
+        hydrator=hydrator,
+        registry_store=store,
+    )
+
+    await runtime.execute({})
+    delegate.status = UiPathRuntimeStatus.SUCCESSFUL
+    await runtime.execute({}, options=UiPathExecuteOptions(resume=True))
+
+    assert attachments.uploads == 1
+
+
+@pytest.mark.asyncio
 async def test_successful_completion_persists_when_policy_allows(
     tmp_path: Path,
 ) -> None:
@@ -648,7 +730,9 @@ async def test_successful_completion_persists_when_policy_allows(
 
 
 @pytest.mark.asyncio
-async def test_hydrate_downloads_missing_registry_files(tmp_path: Path) -> None:
+async def test_hydrate_compatibility_api_downloads_registry_files(
+    tmp_path: Path,
+) -> None:
     workspace = Workspace.create(tmp_path / "workspace")
     attachments = FakeAttachments()
     key = uuid.uuid4()
@@ -698,7 +782,68 @@ async def test_stream_persists_on_suspend(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_hydrate_skips_unchanged_local_file(tmp_path: Path) -> None:
+async def test_conversational_suspend_restores_in_new_workspace(tmp_path: Path) -> None:
+    attachments = FakeAttachments()
+    storage = MemoryStorage()
+    first_workspace = Workspace.create(tmp_path / "first", cleanup=False)
+    first_hydrator = WorkspaceHydrator(
+        workspace_path=first_workspace.path,
+        attachments=attachments,
+    )
+    suspended_runtime = HydrationRuntime(
+        WritingRuntime(first_workspace.path, UiPathRuntimeStatus.SUSPENDED),
+        workspace=first_workspace,
+        hydrator=first_hydrator,
+        registry_store=WorkspaceRegistryStore(storage, "runtime-1"),
+    )
+    conversation_runtime = ConversationalWorkspaceRuntime(
+        suspended_runtime,
+        hydrator=first_hydrator,
+    )
+
+    events = [event async for event in conversation_runtime.stream({"messages": []})]
+
+    assert isinstance(events[-1], UiPathRuntimeResult)
+    assert attachments.uploads == 1
+
+    second_workspace = Workspace.create(tmp_path / "second", cleanup=False)
+    second_hydrator = WorkspaceHydrator(
+        workspace_path=second_workspace.path,
+        attachments=attachments,
+    )
+    second_registry_store = WorkspaceRegistryStore(storage, "runtime-1")
+    resumed_runtime = HydrationRuntime(
+        ReadingRuntime(second_workspace.path, UiPathRuntimeStatus.SUCCESSFUL),
+        workspace=second_workspace,
+        hydrator=second_hydrator,
+        registry_store=second_registry_store,
+    )
+    resumed_conversation_runtime = ConversationalWorkspaceRuntime(
+        resumed_runtime,
+        hydrator=second_hydrator,
+        registry_store=second_registry_store,
+    )
+
+    resumed_events = [
+        event async for event in resumed_conversation_runtime.stream({"messages": []})
+    ]
+
+    assert isinstance(resumed_events[-1], UiPathRuntimeResult)
+    assert attachments.downloads == 1
+    assert attachments.uploads == 2
+    workspace_snapshots = [
+        event.payload
+        for event in resumed_events
+        if isinstance(event, UiPathRuntimeConversationMetaEvent)
+    ]
+    assert len(workspace_snapshots) == 1
+    assert workspace_snapshots[0]["workspaceFiles"][0]["path"] == "notes.txt"
+
+
+@pytest.mark.asyncio
+async def test_hydrate_from_registry_skips_unchanged_local_file(
+    tmp_path: Path,
+) -> None:
     workspace = Workspace.create(tmp_path / "workspace")
     attachments = FakeAttachments()
     (workspace.path / "notes.txt").write_text("same", encoding="utf-8")
@@ -717,7 +862,7 @@ async def test_hydrate_skips_unchanged_local_file(tmp_path: Path) -> None:
         }
     }
 
-    await hydrator.hydrate(registry)
+    await hydrator.hydrate_from_registry(registry)
 
     assert attachments.downloads == 0
 

@@ -1139,21 +1139,21 @@ wheels = [
 
 [[package]]
 name = "uipath-core"
-version = "0.5.28"
+version = "0.5.31"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4c/f9/8d2f1d98cbebbcf059cf4561f38f34ad4cd58423e4f15cad22bd297a2563/uipath_core-0.5.28.tar.gz", hash = "sha256:942987f6b612c64f93d612ad7b242276ed75f129fdd8f25bc71c24ec8887e388", size = 130578, upload-time = "2026-06-30T14:04:48.841Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1d/b2/518fcb7d466a39c675194c492e8accbffdc7fd6b280d89b21ed11700a7bd/uipath_core-0.5.31.tar.gz", hash = "sha256:6abb443582d9a8ab6a504791296d49f524fb430f66d8dfaf6d6d1849958700bb", size = 130979, upload-time = "2026-07-15T06:56:03.867Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/1e/385bb166232a57ebe938cc57ad2717f350bc922bb5d2ce31af84306b7569/uipath_core-0.5.28-py3-none-any.whl", hash = "sha256:b952a46a21710073cbc16d6d5684e9aa645c107f57a636b778cfb94aa81a1e48", size = 54980, upload-time = "2026-06-30T14:04:47.374Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/37/47a4e12bc7bdcfab4bd4e8e1f2a5c083bd59fca42fd431026a3f14c642a3/uipath_core-0.5.31-py3-none-any.whl", hash = "sha256:3dff5ecb236bf46af683c34d79bb2cf458a942ec041e1cbf7b4825ae246ff00c", size = 55040, upload-time = "2026-07-15T06:56:02.446Z" },
 ]
 
 [[package]]
 name = "uipath-runtime"
-version = "0.12.7"
+version = "0.13.0"
 source = { editable = "." }
 dependencies = [
     { name = "chardet" },
@@ -1179,7 +1179,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "chardet", specifier = ">=5.2.0,<8.0" },
-    { name = "uipath-core", specifier = ">=0.5.28,<0.6.0" },
+    { name = "uipath-core", specifier = ">=0.5.31,<0.6.0" },
     { name = "vadersentiment", specifier = ">=3.3.2,<4.0" },
 ]
 

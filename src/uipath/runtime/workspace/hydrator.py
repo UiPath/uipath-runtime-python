@@ -50,7 +50,14 @@ class WorkspaceHydrator:
         self,
         registry: dict[str, dict[str, Any]],
     ) -> dict[str, dict[str, Any]]:
-        """Download registry files into the workspace.
+        """Restore a registry using the original public API."""
+        return await self.hydrate_from_registry(registry)
+
+    async def hydrate_from_registry(
+        self,
+        registry: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Restore registry attachments into the workspace.
 
         Files with matching SHA-256 are left untouched.
         """
@@ -67,6 +74,38 @@ class WorkspaceHydrator:
                 folder_path=self.folder_path,
             )
         return self._dump_registry(normalized)
+
+    async def hydrate_from_attachments(
+        self,
+        attachment_keys_by_path: dict[str, str],
+    ) -> dict[str, dict[str, Any]]:
+        """Replace the workspace with an attachment snapshot."""
+        attachments_by_path: dict[str, UUID] = {}
+        for virtual_path, raw_attachment_key in attachment_keys_by_path.items():
+            normalized_path = self._virtual_path(
+                self._resolve_workspace_path(virtual_path)
+            )
+            attachments_by_path[normalized_path] = UUID(raw_attachment_key)
+
+        registry: dict[str, AttachmentRegistryEntry] = {}
+        for virtual_path, parsed_attachment_key in attachments_by_path.items():
+            target = self._resolve_workspace_path(virtual_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            await self.attachments.download_async(
+                key=parsed_attachment_key,
+                destination_path=str(target),
+                folder_key=self.folder_key,
+                folder_path=self.folder_path,
+            )
+            registry[virtual_path] = AttachmentRegistryEntry(
+                attachment_key=str(parsed_attachment_key),
+                sha256=self._sha256(target),
+                size=target.stat().st_size,
+                uploaded_at=datetime.now(timezone.utc).isoformat(),
+                attachment_name=self._attachment_name_for_virtual_path(virtual_path),
+            )
+        self._remove_files_not_in(set(registry))
+        return self._dump_registry(registry)
 
     async def dehydrate(
         self,
@@ -146,6 +185,11 @@ class WorkspaceHydrator:
     def _virtual_path(self, path: Path) -> str:
         return path.relative_to(self.workspace_path).as_posix()
 
+    def _remove_files_not_in(self, virtual_paths: set[str]) -> None:
+        for path in self._iter_files():
+            if self._virtual_path(path) not in virtual_paths:
+                path.unlink()
+
     @staticmethod
     def _escape(value: str) -> str:
         # json-pointer escaping; escape ~ before / so they can't collide
@@ -173,7 +217,6 @@ class WorkspaceHydrator:
     ) -> dict[str, AttachmentRegistryEntry]:
         normalized: dict[str, AttachmentRegistryEntry] = {}
         for virtual_path, entry in registry.items():
-            self._resolve_workspace_path(virtual_path)
             normalized[virtual_path] = AttachmentRegistryEntry.model_validate(entry)
         return normalized
 

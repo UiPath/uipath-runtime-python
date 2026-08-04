@@ -25,11 +25,11 @@ class WorkspaceRegistryStore:
         self.namespace = namespace
         self.key = key
 
-    async def load(self) -> dict[str, dict[str, Any]]:
-        """Load registry entries keyed by workspace-relative path."""
+    async def try_load(self) -> dict[str, dict[str, Any]] | None:
+        """Load the registry, or return ``None`` when it has not been saved."""
         value = await self.storage.get_value(self.runtime_id, self.namespace, self.key)
         if value is None:
-            return {}
+            return None
         if not isinstance(value, dict):
             raise TypeError("Workspace registry payload must be a dictionary.")
 
@@ -38,6 +38,11 @@ class WorkspaceRegistryStore:
             if isinstance(path, str) and isinstance(entry, dict):
                 registry[path] = entry
         return registry
+
+    async def load(self) -> dict[str, dict[str, Any]]:
+        """Load registry entries, defaulting to an empty registry."""
+        registry = await self.try_load()
+        return registry if registry is not None else {}
 
     async def save(self, registry: dict[str, dict[str, Any]]) -> None:
         """Persist registry entries."""

@@ -14,6 +14,7 @@ from uipath.runtime.events.base import (
     UiPathRuntimeStatePhase,
 )
 from uipath.runtime.events.state import (
+    UiPathRuntimeConversationMetaEvent,
     UiPathRuntimeMessageEvent,
     UiPathRuntimeStateEvent,
 )
@@ -26,4 +27,5 @@ __all__ = [
     # Runtime events
     "UiPathRuntimeStateEvent",
     "UiPathRuntimeMessageEvent",
+    "UiPathRuntimeConversationMetaEvent",
 ]
