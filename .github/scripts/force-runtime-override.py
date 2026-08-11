@@ -37,7 +37,8 @@ def _add_override(pyproject_path: Path, override: str) -> None:
         body,
     )
     if override_match:
-        items = override_match.group("items").strip()
+        # A trailing comma must not survive the join below, or it yields `[..,, ..]`
+        items = override_match.group("items").strip().rstrip(",").strip()
         if quoted_override in items:
             return
 
