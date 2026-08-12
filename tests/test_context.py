@@ -1,9 +1,11 @@
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 from uipath.core.errors import ErrorCategory, UiPathFaultedTriggerError
+from uipath.core.triggers import UiPathResumeTrigger
 
 from uipath.runtime.context import UiPathRuntimeContext
 from uipath.runtime.errors import (
@@ -427,3 +429,274 @@ def test_from_config_accepts_maestro_flow_voice_mode(tmp_path: Path) -> None:
     ctx = UiPathRuntimeContext.from_config(str(config_path))
 
     assert ctx.voice_mode == "maestro_flow"
+
+
+def test_from_config_maps_split_output_arguments(tmp_path: Path) -> None:
+    """runtime.splitOutputArguments should map onto the knob."""
+    cfg = {"runtime": {"splitOutputArguments": True}}
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.split_output_arguments is True
+
+
+def test_split_output_arguments_defaults_off_when_config_key_absent(
+    tmp_path: Path,
+) -> None:
+    """The split stays off when the config omits the key."""
+    cfg = {"runtime": {"outputFile": "my_output.json"}}
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.split_output_arguments is False
+
+
+def test_output_arguments_file_is_a_sibling_of_the_result_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The arguments file lands next to the result file, never in the process CWD.
+
+    The host names the directory once, through runtime_dir, and both files follow
+    it. The filename is not configurable, so the knob has exactly one encoding and
+    the two files cannot be pointed at different directories.
+    """
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    runtime_dir = tmp_path / "runtime"
+    ctx = UiPathRuntimeContext(
+        job_id="job-sibling",
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+        split_output_arguments=True,
+    )
+
+    arguments_path = Path(ctx.resolved_output_arguments_file_path)
+    assert arguments_path.parent == Path(ctx.resolved_result_file_path).parent
+    assert arguments_path.parent == runtime_dir
+    assert arguments_path.name == "result.args.json"
+    assert arguments_path.is_absolute()
+    assert cwd not in arguments_path.parents
+
+
+def test_output_arguments_file_cannot_collide_with_the_result_file(
+    tmp_path: Path,
+) -> None:
+    """The suffix goes before the extension, so the two names can never converge.
+
+    Naming the result file after the arguments file used to produce one path for
+    both: the envelope overwrote the arguments and then pointed at itself.
+    """
+    ctx = UiPathRuntimeContext(
+        job_id="job-collide",
+        runtime_dir=str(tmp_path / "runtime"),
+        result_file="output.args.json",
+        split_output_arguments=True,
+    )
+
+    assert Path(ctx.resolved_output_arguments_file_path).name == "output.args.args.json"
+    assert ctx.resolved_output_arguments_file_path != os.path.abspath(
+        ctx.resolved_result_file_path
+    )
+
+
+def test_output_arguments_file_not_written_without_a_job(tmp_path: Path) -> None:
+    """No job means no envelope, so the pointer would have no reader and no file.
+
+    A local `uipath run` has no UIPATH_JOB_KEY; writing the payload there would
+    leave a full copy on disk that nothing references.
+    """
+    runtime_dir = tmp_path / "runtime"
+    ctx = UiPathRuntimeContext(
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+        split_output_arguments=True,
+    )
+
+    with ctx:
+        ctx.result = UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUCCESSFUL,
+            output={"foo": "bar"},
+        )
+
+    assert not Path(ctx.resolved_output_arguments_file_path).exists()
+    assert not Path(ctx.resolved_result_file_path).exists()
+
+
+def test_result_file_keeps_output_inline_when_split_disabled(
+    tmp_path: Path,
+) -> None:
+    """Without the knob, the result file is byte-identical to the legacy envelope."""
+    runtime_dir = tmp_path / "runtime"
+    ctx = UiPathRuntimeContext(
+        job_id="job-inline",
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+    )
+
+    with ctx:
+        ctx.result = UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUCCESSFUL,
+            output={"foo": "bar"},
+        )
+
+    result_path = Path(ctx.resolved_result_file_path)
+    # The envelope is written in text mode, so json's newline reaches disk as os.linesep
+    expected = json.dumps(
+        {"output": {"foo": "bar"}, "status": "successful"}, indent=2
+    ).replace("\n", os.linesep)
+    assert result_path.read_bytes() == expected.encode()
+
+    content = json.loads(result_path.read_bytes())
+    assert "outputArgumentsFilePath" not in content
+    assert not Path(ctx.resolved_output_arguments_file_path).exists()
+
+
+def test_output_arguments_written_to_separate_file(tmp_path: Path) -> None:
+    """With the knob, the arguments move out and the envelope carries the path."""
+    runtime_dir = tmp_path / "nested" / "runtime"
+    ctx = UiPathRuntimeContext(
+        job_id="job-split",
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+        split_output_arguments=True,
+    )
+
+    with ctx:
+        ctx.result = UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUCCESSFUL,
+            output={"foo": "bar"},
+        )
+
+    arguments_path = Path(ctx.resolved_output_arguments_file_path)
+    # Parent directory is created on demand
+    assert json.loads(arguments_path.read_text()) == {"foo": "bar"}
+
+    content = json.loads(Path(ctx.resolved_result_file_path).read_text())
+    assert "output" not in content
+    assert content["status"] == UiPathRuntimeStatus.SUCCESSFUL.value
+    assert content["outputArgumentsFilePath"] == str(arguments_path)
+    assert Path(content["outputArgumentsFilePath"]).is_absolute()
+
+
+def test_output_file_receives_bare_arguments_when_split_enabled(
+    tmp_path: Path,
+) -> None:
+    """--output-file keeps receiving the bare arguments when both are set."""
+    runtime_dir = tmp_path / "runtime"
+    output_path = tmp_path / "output.json"
+    ctx = UiPathRuntimeContext(
+        job_id="job-both",
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+        output_file=str(output_path),
+        split_output_arguments=True,
+    )
+
+    with ctx:
+        ctx.result = UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUCCESSFUL,
+            output={"foo": "bar"},
+        )
+
+    assert json.loads(output_path.read_text()) == {"foo": "bar"}
+    arguments_path = Path(ctx.resolved_output_arguments_file_path)
+    assert json.loads(arguments_path.read_text()) == {"foo": "bar"}
+
+
+def test_faulted_run_keeps_status_and_error_inline_when_split_enabled(
+    tmp_path: Path,
+) -> None:
+    """status and error stay in the envelope when the arguments are split out."""
+    runtime_dir = tmp_path / "runtime"
+    ctx = UiPathRuntimeContext(
+        job_id="job-faulted-split",
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+        split_output_arguments=True,
+    )
+
+    with pytest.raises(RuntimeError, match="Stream blew up"):
+        with ctx:
+            raise RuntimeError("Stream blew up")
+
+    content = json.loads(Path(ctx.resolved_result_file_path).read_text())
+    assert content["status"] == UiPathRuntimeStatus.FAULTED.value
+    assert content["error"]["code"] == "ERROR_RuntimeError"
+    assert "Stream blew up" in content["error"]["detail"]
+    assert "output" not in content
+
+    # The pointer must never advertise a file that was not actually written
+    arguments_path = Path(content["outputArgumentsFilePath"])
+    assert arguments_path.exists()
+    assert json.loads(arguments_path.read_text()) == {}
+
+
+def test_resume_triggers_stay_inline_when_split_enabled(tmp_path: Path) -> None:
+    """resume and resumeTriggers must never be moved out of the envelope.
+
+    They are what makes a suspended job resumable, so a split that swept them
+    into the arguments file would strand the job.
+    """
+    runtime_dir = tmp_path / "runtime"
+    ctx = UiPathRuntimeContext(
+        job_id="job-suspended-split",
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+        split_output_arguments=True,
+    )
+
+    trigger = UiPathResumeTrigger(item_key="k")
+    with ctx:
+        ctx.result = UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUSPENDED,
+            output={"foo": "bar"},
+            trigger=trigger,
+            triggers=[trigger],
+        )
+
+    content = json.loads(Path(ctx.resolved_result_file_path).read_text())
+    assert content["status"] == UiPathRuntimeStatus.SUSPENDED.value
+    assert content["resume"]["itemKey"] == "k"
+    assert len(content["resumeTriggers"]) == 1
+    assert content["resumeTriggers"][0]["itemKey"] == "k"
+    # Only the output moved out
+    assert "output" not in content
+    arguments_path = Path(content["outputArgumentsFilePath"])
+    assert json.loads(arguments_path.read_text()) == {"foo": "bar"}
+
+
+def test_failed_arguments_write_faults_the_run(tmp_path: Path) -> None:
+    """A failing arguments write faults the run, like every other write in __exit__.
+
+    Falling back to the inline value would write the same bytes to the same volume,
+    so it cannot rescue the failure that actually matters, and it would hand the
+    consumer the payload the split exists to keep out of its heap.
+    """
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    # A directory cannot be opened for writing, so the split write fails
+    (runtime_dir / "result.args.json").mkdir()
+    ctx = UiPathRuntimeContext(
+        job_id="job-failed-write",
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+        split_output_arguments=True,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        with ctx:
+            ctx.result = UiPathRuntimeResult(
+                status=UiPathRuntimeStatus.SUCCESSFUL,
+                output={"foo": "bar"},
+            )
+
+    assert "RUNTIME_SHUTDOWN_ERROR" in str(excinfo.value)
+
+    content = json.loads(Path(ctx.resolved_result_file_path).read_text())
+    assert content["status"] == UiPathRuntimeStatus.FAULTED.value
+    assert content["error"]["code"] == "RUNTIME_SHUTDOWN_ERROR"

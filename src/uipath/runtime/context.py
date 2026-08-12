@@ -23,6 +23,8 @@ from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 logger = logging.getLogger(__name__)
 
+OUTPUT_ARGUMENTS_SUFFIX = ".args"
+
 _EXECUTION_SOURCE_BY_COMMAND: dict[str, str] = {
     "run": "runtime",
     "debug": "playground",
@@ -85,6 +87,14 @@ class UiPathRuntimeContext(BaseModel):
             "Full path override for the result file. "
             "When specified, takes priority over runtime_dir + result_file. "
             "If not specified, path is constructed from runtime_dir and result_file."
+        ),
+    )
+    split_output_arguments: bool = Field(
+        False,
+        description=(
+            "Write the output arguments to their own file alongside the result file, "
+            "and carry an 'outputArgumentsFilePath' pointer in the result file "
+            "instead of the inline 'output' value."
         ),
     )
     state_file: str = Field("state.db", description="Filename for the state database")
@@ -275,6 +285,21 @@ class UiPathRuntimeContext(BaseModel):
 
             content = self.result.to_dict()
 
+            # Read, not popped: output_file needs the arguments even when the split
+            # does not run, and popping to re-insert would move "output" after
+            # "status" in the envelope
+            output_payload = content.get("output", {})
+
+            # Gated on job_id like the envelope write below: the pointer only has a
+            # reader when there is a job, so without one there is nothing to point at it
+            if self.split_output_arguments and self.job_id:
+                output_arguments_path = self.resolved_output_arguments_file_path
+                os.makedirs(os.path.dirname(output_arguments_path), exist_ok=True)
+                with open(output_arguments_path, "w") as f:
+                    json.dump(output_payload, f, default=str)
+                content.pop("output", None)
+                content["outputArgumentsFilePath"] = output_arguments_path
+
             # Always write output file at runtime, except for inner runtimes
             # Inner runtimes have execution_id
             if self.job_id:
@@ -283,7 +308,6 @@ class UiPathRuntimeContext(BaseModel):
 
             # Write the execution output to file if requested
             if self.output_file:
-                output_payload = content.get("output", {})
                 with open(self.output_file, "w") as f:
                     json.dump(output_payload, f, default=str)
 
@@ -342,6 +366,21 @@ class UiPathRuntimeContext(BaseModel):
             os.makedirs(self.runtime_dir, exist_ok=True)
             return os.path.join(self.runtime_dir, self.result_file)
         return os.path.join("__uipath", "output.json")
+
+    @cached_property
+    def resolved_output_arguments_file_path(self) -> str:
+        """Get the full path to the output arguments file.
+
+        Derived from the result file, not configured: the host cannot put the two
+        in different places, and inserting the suffix before the extension keeps
+        them distinct whatever the result file is called.
+        """
+        result_path = Path(os.path.abspath(self.resolved_result_file_path))
+        return str(
+            result_path.with_name(
+                f"{result_path.stem}{OUTPUT_ARGUMENTS_SUFFIX}{result_path.suffix}"
+            )
+        )
 
     @cached_property
     def resolved_state_file_path(self) -> str:
@@ -406,6 +445,7 @@ class UiPathRuntimeContext(BaseModel):
         mapping = {
             "dir": "runtime_dir",
             "outputFile": "result_file",  # we need this to maintain back-compat with serverless runtime
+            "splitOutputArguments": "split_output_arguments",
             "stateFile": "state_file",
             "logsFile": "logs_file",
         }
