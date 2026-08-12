@@ -285,7 +285,9 @@ class UiPathRuntimeContext(BaseModel):
 
             content = self.result.to_dict()
 
-            # Captured before the pop below, so output_file still gets the real args
+            # Read, not popped: output_file needs the arguments even when the split
+            # does not run, and popping to re-insert would move "output" after
+            # "status" in the envelope
             output_payload = content.get("output", {})
 
             # Gated on job_id like the envelope write below: the pointer only has a
