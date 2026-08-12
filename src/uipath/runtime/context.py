@@ -23,7 +23,7 @@ from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_ARGUMENTS_FILE_NAME = "output.args.json"
+OUTPUT_ARGUMENTS_SUFFIX = ".args"
 
 _EXECUTION_SOURCE_BY_COMMAND: dict[str, str] = {
     "run": "runtime",
@@ -288,7 +288,9 @@ class UiPathRuntimeContext(BaseModel):
             # Captured before the pop below, so output_file still gets the real args
             output_payload = content.get("output", {})
 
-            if self.split_output_arguments:
+            # Gated on job_id like the envelope write below: the pointer only has a
+            # reader when there is a job, so without one there is nothing to point at it
+            if self.split_output_arguments and self.job_id:
                 output_arguments_path = self.resolved_output_arguments_file_path
                 os.makedirs(os.path.dirname(output_arguments_path), exist_ok=True)
                 with open(output_arguments_path, "w") as f:
@@ -367,13 +369,15 @@ class UiPathRuntimeContext(BaseModel):
     def resolved_output_arguments_file_path(self) -> str:
         """Get the full path to the output arguments file.
 
-        Derived, not configured: the name is fixed and the directory is the result
-        file's, so the host cannot put the two files in different places and the
-        knob has exactly one encoding.
+        Derived from the result file, not configured: the host cannot put the two
+        in different places, and inserting the suffix before the extension keeps
+        them distinct whatever the result file is called.
         """
-        return os.path.join(
-            os.path.dirname(os.path.abspath(self.resolved_result_file_path)),
-            OUTPUT_ARGUMENTS_FILE_NAME,
+        result_path = Path(os.path.abspath(self.resolved_result_file_path))
+        return str(
+            result_path.with_name(
+                f"{result_path.stem}{OUTPUT_ARGUMENTS_SUFFIX}{result_path.suffix}"
+            )
         )
 
     @cached_property

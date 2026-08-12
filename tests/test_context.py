@@ -478,9 +478,53 @@ def test_output_arguments_file_is_a_sibling_of_the_result_file(
     arguments_path = Path(ctx.resolved_output_arguments_file_path)
     assert arguments_path.parent == Path(ctx.resolved_result_file_path).parent
     assert arguments_path.parent == runtime_dir
-    assert arguments_path.name == "output.args.json"
+    assert arguments_path.name == "result.args.json"
     assert arguments_path.is_absolute()
     assert cwd not in arguments_path.parents
+
+
+def test_output_arguments_file_cannot_collide_with_the_result_file(
+    tmp_path: Path,
+) -> None:
+    """The suffix goes before the extension, so the two names can never converge.
+
+    Naming the result file after the arguments file used to produce one path for
+    both: the envelope overwrote the arguments and then pointed at itself.
+    """
+    ctx = UiPathRuntimeContext(
+        job_id="job-collide",
+        runtime_dir=str(tmp_path / "runtime"),
+        result_file="output.args.json",
+        split_output_arguments=True,
+    )
+
+    assert Path(ctx.resolved_output_arguments_file_path).name == "output.args.args.json"
+    assert ctx.resolved_output_arguments_file_path != os.path.abspath(
+        ctx.resolved_result_file_path
+    )
+
+
+def test_output_arguments_file_not_written_without_a_job(tmp_path: Path) -> None:
+    """No job means no envelope, so the pointer would have no reader and no file.
+
+    A local `uipath run` has no UIPATH_JOB_KEY; writing the payload there would
+    leave a full copy on disk that nothing references.
+    """
+    runtime_dir = tmp_path / "runtime"
+    ctx = UiPathRuntimeContext(
+        runtime_dir=str(runtime_dir),
+        result_file="result.json",
+        split_output_arguments=True,
+    )
+
+    with ctx:
+        ctx.result = UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUCCESSFUL,
+            output={"foo": "bar"},
+        )
+
+    assert not Path(ctx.resolved_output_arguments_file_path).exists()
+    assert not Path(ctx.resolved_result_file_path).exists()
 
 
 def test_result_file_keeps_output_inline_when_split_disabled(
@@ -636,7 +680,7 @@ def test_failed_arguments_write_faults_the_run(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
     # A directory cannot be opened for writing, so the split write fails
-    (runtime_dir / "output.args.json").mkdir()
+    (runtime_dir / "result.args.json").mkdir()
     ctx = UiPathRuntimeContext(
         job_id="job-failed-write",
         runtime_dir=str(runtime_dir),
