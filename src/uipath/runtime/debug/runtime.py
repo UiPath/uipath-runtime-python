@@ -123,11 +123,12 @@ class UiPathDebugRuntime:
         try:
             await asyncio.wait_for(self.debug_bridge.wait_for_resume(), timeout=60.0)
         except asyncio.TimeoutError:
+            # Debug bridge likely disconnected: proceed unattended
+            # instead of failing the job.
             logger.warning(
-                "Initial resume wait timed out after 60s, assuming debug bridge disconnected"
+                "Initial resume wait timed out after 60s, assuming debug bridge "
+                "disconnected; continuing execution without debug commands"
             )
-            yield UiPathRuntimeResult(status=UiPathRuntimeStatus.FAULTED)
-            return
         except UiPathDebugQuitError:
             logger.info("Debug session quit by user before execution started")
             yield UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)

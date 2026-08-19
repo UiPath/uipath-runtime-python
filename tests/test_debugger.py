@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncGenerator, Sequence, cast
 from unittest.mock import AsyncMock, Mock
 
@@ -210,6 +211,30 @@ async def test_debug_runtime_streams_and_handles_breakpoints_and_state():
     assert (
         cast(AsyncMock, bridge.wait_for_resume).await_count == 2
     )  # initial + after breakpoint
+
+
+@pytest.mark.asyncio
+async def test_debug_runtime_continues_when_initial_resume_wait_times_out():
+    """If no resume command arrives before the initial wait times out,
+    execution should continue unattended instead of faulting."""
+
+    runtime_impl = StreamingMockRuntime(node_sequence=["node-1", "node-2"])
+    bridge = make_debug_bridge_mock()
+
+    # Initial resume wait times out (debug bridge disconnected)
+    cast(AsyncMock, bridge.wait_for_resume).side_effect = asyncio.TimeoutError()
+    cast(Mock, bridge.get_breakpoints).return_value = []
+
+    debug_runtime = UiPathDebugRuntime(
+        delegate=runtime_impl,
+        debug_bridge=bridge,
+    )
+
+    result = await debug_runtime.execute({})
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert result.output == {"visited_nodes": ["node-1", "node-2"]}
+    cast(AsyncMock, bridge.emit_execution_completed).assert_awaited_once_with(result)
 
 
 @pytest.mark.asyncio
