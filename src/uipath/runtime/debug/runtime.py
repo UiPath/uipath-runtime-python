@@ -35,6 +35,8 @@ from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)
 
+INITIAL_RESUME_TIMEOUT_SECONDS = 60.0
+
 
 class UiPathDebugRuntime:
     """Specialized runtime for debug runs that streams events to a debug bridge."""
@@ -121,13 +123,16 @@ class UiPathDebugRuntime:
 
         # Starting in paused state - wait for breakpoints and resume
         try:
-            await asyncio.wait_for(self.debug_bridge.wait_for_resume(), timeout=60.0)
+            await asyncio.wait_for(
+                self.debug_bridge.wait_for_resume(),
+                timeout=INITIAL_RESUME_TIMEOUT_SECONDS,
+            )
         except asyncio.TimeoutError:
             # Debug bridge likely disconnected: proceed unattended
             # instead of failing the job.
             logger.warning(
-                "Initial resume wait timed out after 60s, assuming debug bridge "
-                "disconnected; continuing execution without debug commands"
+                f"Initial resume wait timed out after {INITIAL_RESUME_TIMEOUT_SECONDS:g}s, "
+                "assuming debug bridge disconnected; continuing execution without debug commands"
             )
         except UiPathDebugQuitError:
             logger.info("Debug session quit by user before execution started")
