@@ -25,18 +25,20 @@ logger = logging.getLogger(__name__)
 
 OUTPUT_ARGUMENTS_SUFFIX = ".args"
 
-# Recognized spellings for a stringified boolean. Some producers deliver
-# fpsProperties as a string->string map, so a JSON boolean can arrive as text.
-_FALSY_STRINGS = frozenset({"false", "0", "no", "off", ""})
-_TRUTHY_STRINGS = frozenset({"true", "1", "yes", "on"})
+# Spellings a stringified boolean actually arrives as. Some producers deliver
+# fpsProperties as a string->string map, so a JSON boolean becomes text. Kept
+# deliberately narrow -- only what a serializer emits for a bool, plus the
+# empty string -- so nothing else gets second-guessed.
+_FALSE_STRINGS = frozenset({"false", ""})
+_TRUE_STRINGS = frozenset({"true"})
 
 
 def _parse_bool_like(value: str) -> bool | None:
     """Parse a stringified boolean, returning None when it isn't one."""
     token = value.strip().lower()
-    if token in _FALSY_STRINGS:
+    if token in _FALSE_STRINGS:
         return False
-    if token in _TRUTHY_STRINGS:
+    if token in _TRUE_STRINGS:
         return True
     return None
 
@@ -514,15 +516,18 @@ class UiPathRuntimeContext(BaseModel):
                     ):
                         parsed = _parse_bool_like(value)
                         if parsed is None:
+                            # Not a spelling we recognize. Pass it through
+                            # untouched rather than guessing at intent. The
+                            # value is external input, so it is kept out of
+                            # the log.
                             logger.warning(
-                                "Ignoring fpsProperties[%s]=%r: not a recognizable "
-                                "boolean for %s; keeping the default.",
+                                "fpsProperties[%s] is not a recognizable boolean "
+                                "for %s; leaving it unchanged.",
                                 config_key,
-                                value,
                                 attr_name,
                             )
-                            continue
-                        value = parsed
+                        else:
+                            value = parsed
                     attributes_set.add(attr_name)
                     setattr(instance, attr_name, value)
 

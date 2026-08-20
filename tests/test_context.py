@@ -322,15 +322,10 @@ def test_end_exchange_defaults_true_when_fps_property_absent(tmp_path: Path) -> 
         ("false", False),
         ("False", False),
         ("FALSE", False),
-        ("0", False),
-        ("no", False),
-        ("off", False),
         ("", False),
         ("true", True),
         ("True", True),
-        ("1", True),
-        ("yes", True),
-        ("on", True),
+        ("TRUE", True),
     ],
 )
 def test_from_config_coerces_stringified_bool_fps_property(
@@ -394,13 +389,18 @@ def test_from_config_leaves_non_bool_fps_properties_untouched(tmp_path: Path) ->
     assert ctx.exchange_id == "0"
 
 
-def test_from_config_keeps_default_for_unparseable_bool_fps_property(
-    tmp_path: Path,
+@pytest.mark.parametrize("raw", ["banana", "0", "1", "yes", "no", "off", "on"])
+def test_from_config_passes_through_unrecognized_bool_fps_property(
+    tmp_path: Path, raw: str
 ) -> None:
-    """An uninterpretable value keeps the field default rather than guessing."""
+    """Only "true"/"false"/"" are parsed; anything else is left untouched.
+
+    Coercing spellings a serializer never emits for a boolean would be guessing
+    at intent, so unrecognized values keep the behavior they have always had.
+    """
     cfg = {
         "fpsProperties": {
-            "conversationalService.endExchange": "banana",
+            "conversationalService.endExchange": raw,
         }
     }
     config_path = tmp_path / "uipath.json"
@@ -408,7 +408,7 @@ def test_from_config_keeps_default_for_unparseable_bool_fps_property(
 
     ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
 
-    assert ctx.end_exchange is True
+    assert ctx.end_exchange == raw
 
 
 def test_from_config_still_accepts_real_bool_fps_property(tmp_path: Path) -> None:
