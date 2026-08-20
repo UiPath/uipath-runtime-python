@@ -25,6 +25,22 @@ logger = logging.getLogger(__name__)
 
 OUTPUT_ARGUMENTS_SUFFIX = ".args"
 
+# Recognized spellings for a stringified boolean. Some producers deliver
+# fpsProperties as a string->string map, so a JSON boolean can arrive as text.
+_FALSY_STRINGS = frozenset({"false", "0", "no", "off", ""})
+_TRUTHY_STRINGS = frozenset({"true", "1", "yes", "on"})
+
+
+def _parse_bool_like(value: str) -> bool | None:
+    """Parse a stringified boolean, returning None when it isn't one."""
+    token = value.strip().lower()
+    if token in _FALSY_STRINGS:
+        return False
+    if token in _TRUTHY_STRINGS:
+        return True
+    return None
+
+
 _EXECUTION_SOURCE_BY_COMMAND: dict[str, str] = {
     "run": "runtime",
     "debug": "playground",
@@ -486,8 +502,29 @@ class UiPathRuntimeContext(BaseModel):
             # Handle fpsProperties mapping
             for config_key, attr_name in fps_mappings.items():
                 if config_key in fps_config and hasattr(instance, attr_name):
+                    value = fps_config[config_key]
+                    field = cls.model_fields.get(attr_name)
+                    # setattr bypasses validation, so a stringified boolean would be
+                    # stored as-is. "false" is a truthy non-empty string, which
+                    # silently inverts every guard reading the field.
+                    if (
+                        isinstance(value, str)
+                        and field is not None
+                        and field.annotation is bool
+                    ):
+                        parsed = _parse_bool_like(value)
+                        if parsed is None:
+                            logger.warning(
+                                "Ignoring fpsProperties[%s]=%r: not a recognizable "
+                                "boolean for %s; keeping the default.",
+                                config_key,
+                                value,
+                                attr_name,
+                            )
+                            continue
+                        value = parsed
                     attributes_set.add(attr_name)
-                    setattr(instance, attr_name, fps_config[config_key])
+                    setattr(instance, attr_name, value)
 
         for _, attr_name in mapping.items():
             if attr_name in kwargs and hasattr(instance, attr_name):

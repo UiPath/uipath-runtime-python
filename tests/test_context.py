@@ -316,6 +316,118 @@ def test_end_exchange_defaults_true_when_fps_property_absent(tmp_path: Path) -> 
     assert ctx.end_exchange is True
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("false", False),
+        ("False", False),
+        ("FALSE", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+        ("", False),
+        ("true", True),
+        ("True", True),
+        ("1", True),
+        ("yes", True),
+        ("on", True),
+    ],
+)
+def test_from_config_coerces_stringified_bool_fps_property(
+    tmp_path: Path, raw: str, expected: bool
+) -> None:
+    """Stringified booleans must be parsed, not stored raw.
+
+    Some producers deliver fpsProperties as a string->string map, so a boolean
+    false arrives as "false". Stored raw on a bool field it stays a non-empty
+    string, which is truthy — silently inverting every guard that reads it.
+    """
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.conversationId": "conv-123",
+            "conversationalService.endExchange": raw,
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.end_exchange is expected
+
+
+def test_from_config_coerces_every_stringified_bool_fps_property(
+    tmp_path: Path,
+) -> None:
+    """The coercion covers all bool-typed fps keys, not just endExchange."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.endExchange": "false",
+            "conversationalService.enableOutputs": "false",
+            "conversationalService.runAsMe": "false",
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.end_exchange is False
+    assert ctx.conversational_outputs_enabled is False
+    assert ctx.conversational_run_as_me is False
+
+
+def test_from_config_leaves_non_bool_fps_properties_untouched(tmp_path: Path) -> None:
+    """Only bool-typed targets are coerced; str fields keep their raw value."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.conversationId": "false",
+            "conversationalService.exchangeId": "0",
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.conversation_id == "false"
+    assert ctx.exchange_id == "0"
+
+
+def test_from_config_keeps_default_for_unparseable_bool_fps_property(
+    tmp_path: Path,
+) -> None:
+    """An uninterpretable value keeps the field default rather than guessing."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.endExchange": "banana",
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.end_exchange is True
+
+
+def test_from_config_still_accepts_real_bool_fps_property(tmp_path: Path) -> None:
+    """A genuine JSON boolean keeps working unchanged."""
+    cfg = {
+        "fpsProperties": {
+            "conversationalService.endExchange": False,
+            "conversationalService.enableOutputs": True,
+        }
+    }
+    config_path = tmp_path / "uipath.json"
+    config_path.write_text(json.dumps(cfg))
+
+    ctx = UiPathRuntimeContext.from_config(config_path=str(config_path))
+
+    assert ctx.end_exchange is False
+    assert ctx.conversational_outputs_enabled is True
+
+
 def test_result_file_written_on_faulted_trigger_error(tmp_path: Path) -> None:
     runtime_dir = tmp_path / "runtime"
     ctx = UiPathRuntimeContext(
