@@ -120,7 +120,6 @@ class UiPathDebugRuntime:
         """Stream events from inner runtime and handle debug interactions."""
         final_result: UiPathRuntimeResult
         execution_completed = False
-        bridge_disconnected = False
 
         # Starting in paused state - wait for breakpoints and resume
         try:
@@ -129,21 +128,32 @@ class UiPathDebugRuntime:
                 timeout=INITIAL_RESUME_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
-            # Debug bridge likely disconnected: proceed unattended
-            # instead of failing the job. Drop the bridge entirely so a stale
-            # breakpoint set or a late command can never pause the run, and any
-            # further wait on debug commands would hang forever.
+            # Debug bridge likely disconnected: proceed unattended instead of
+            # failing the job. Drop the bridge so a stale breakpoint set or a
+            # late command can never pause the run, then run the delegate in a
+            # single pass-through: no breakpoints, no inline resume handling,
+            # and a suspension is terminal (the platform resumes it via the
+            # real trigger).
             logger.warning(
                 f"Initial resume wait timed out after {INITIAL_RESUME_TIMEOUT_SECONDS:g}s, "
                 "assuming debug bridge disconnected; disconnecting the bridge and "
                 "continuing execution unattended"
             )
-            bridge_disconnected = True
             try:
                 await self.debug_bridge.disconnect()
                 logger.info("Debug bridge disconnected")
             except Exception as e:
                 logger.warning(f"Error disconnecting debug bridge: {e}")
+
+            async for event in self.delegate.stream(
+                input,
+                options=UiPathStreamOptions(
+                    resume=options.resume if options else False,
+                    breakpoints=None,
+                ),
+            ):
+                yield event
+            return
         except UiPathDebugQuitError:
             logger.info("Debug session quit by user before execution started")
             yield UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
@@ -158,11 +168,8 @@ class UiPathDebugRuntime:
 
         # Keep streaming until execution completes (not just paused at breakpoint)
         while not execution_completed:
-            # Update breakpoints from debug bridge; with the bridge disconnected
-            # run without breakpoints so the delegate can never pause on them
-            debug_options.breakpoints = (
-                None if bridge_disconnected else self.debug_bridge.get_breakpoints()
-            )
+            # Update breakpoints from debug bridge
+            debug_options.breakpoints = self.debug_bridge.get_breakpoints()
 
             # Stream events from inner runtime
             async for event in self.delegate.stream(
@@ -196,20 +203,8 @@ class UiPathDebugRuntime:
                     else:
                         # Normal completion or suspension with dynamic interrupt
 
-                        if (
-                            bridge_disconnected
-                            and final_result.status == UiPathRuntimeStatus.SUSPENDED
-                        ):
-                            # Bridge is gone, so debug commands or inline polling
-                            # can never resume this run: end as suspended and let
-                            # the platform resume it via the real trigger
-                            logger.info(
-                                "Execution suspended with debug bridge disconnected, "
-                                "completing as suspended"
-                            )
-                            execution_completed = True
                         # Check if this is a suspended execution that needs polling
-                        elif (
+                        if (
                             (resumable_runtime := self.get_resumable_runtime())
                             and self.trigger_poll_interval > 0
                             and final_result.status == UiPathRuntimeStatus.SUSPENDED
