@@ -216,14 +216,16 @@ async def test_debug_runtime_streams_and_handles_breakpoints_and_state():
 @pytest.mark.asyncio
 async def test_debug_runtime_continues_when_initial_resume_wait_times_out():
     """If no resume command arrives before the initial wait times out,
-    execution should continue unattended instead of faulting."""
+    execution should disconnect the bridge and continue unattended
+    instead of faulting."""
 
     runtime_impl = StreamingMockRuntime(node_sequence=["node-1", "node-2"])
     bridge = make_debug_bridge_mock()
 
     # Initial resume wait times out (debug bridge disconnected)
     cast(AsyncMock, bridge.wait_for_resume).side_effect = asyncio.TimeoutError()
-    cast(Mock, bridge.get_breakpoints).return_value = []
+    # Stale breakpoints must not be honored once the bridge is dropped
+    cast(Mock, bridge.get_breakpoints).return_value = ["node-1", "node-2"]
 
     debug_runtime = UiPathDebugRuntime(
         delegate=runtime_impl,
@@ -234,7 +236,41 @@ async def test_debug_runtime_continues_when_initial_resume_wait_times_out():
 
     assert result.status == UiPathRuntimeStatus.SUCCESSFUL
     assert result.output == {"visited_nodes": ["node-1", "node-2"]}
+    cast(AsyncMock, bridge.disconnect).assert_awaited_once()
+    cast(Mock, bridge.get_breakpoints).assert_not_called()
+    cast(AsyncMock, bridge.emit_breakpoint_hit).assert_not_awaited()
     cast(AsyncMock, bridge.emit_execution_completed).assert_awaited_once_with(result)
+
+
+@pytest.mark.asyncio
+async def test_debug_runtime_completes_as_suspended_after_resume_wait_timeout():
+    """After the initial resume wait times out, a suspension must be terminal
+    (the platform resumes via the real trigger) instead of waiting on debug
+    commands from the disconnected bridge."""
+
+    trigger = UiPathResumeTrigger(
+        interrupt_id="api-interrupt",
+        trigger_type=UiPathResumeTriggerType.API,
+    )
+    runtime_impl = SuspendedThenSuccessfulRuntime(trigger)
+    bridge = make_debug_bridge_mock()
+    cast(AsyncMock, bridge.wait_for_resume).side_effect = asyncio.TimeoutError()
+
+    debug_runtime = UiPathDebugRuntime(
+        delegate=runtime_impl,
+        debug_bridge=bridge,
+    )
+    debug_runtime.get_resumable_runtime = Mock(  # type: ignore[method-assign]
+        return_value=Mock(trigger_manager=Mock())
+    )
+
+    result = await debug_runtime.execute({})
+
+    assert result.status == UiPathRuntimeStatus.SUSPENDED
+    assert result.trigger is trigger
+    # Only the initial wait; no resume wait for the suspension
+    assert cast(AsyncMock, bridge.wait_for_resume).await_count == 1
+    cast(AsyncMock, bridge.emit_execution_suspended).assert_not_awaited()
 
 
 @pytest.mark.asyncio
