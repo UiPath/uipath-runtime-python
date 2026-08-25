@@ -117,6 +117,10 @@ class FakeJobs:
         folder_key: str | None = None,
         folder_path: str | None = None,
     ) -> None:
+        linked_attachments = self.attachments.setdefault(str(job_key), [])
+        if str(attachment_key) in linked_attachments:
+            raise RuntimeError("The association already exists")
+        linked_attachments.append(str(attachment_key))
         self.links.append((job_key, attachment_key))
 
 
@@ -930,6 +934,60 @@ async def test_dehydrate_relinks_unchanged_file_without_reupload(
     assert attachments.uploads == 0
     assert result["notes.txt"]["attachment_key"] == str(key)
     assert jobs.links == [(current_job, key)]
+
+
+@pytest.mark.asyncio
+async def test_dehydrate_does_not_relink_attachment_already_linked_to_job(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    attachments = FakeAttachments()
+    jobs = FakeJobs()
+    current_job = uuid.uuid4()
+    (workspace.path / "notes.txt").write_text("same", encoding="utf-8")
+
+    first_hydrator = WorkspaceHydrator(
+        workspace_path=workspace.path,
+        attachments=attachments,
+        jobs=jobs,
+        current_job_key=str(current_job),
+    )
+    registry = await first_hydrator.dehydrate({})
+
+    resumed_hydrator = WorkspaceHydrator(
+        workspace_path=workspace.path,
+        attachments=attachments,
+        jobs=jobs,
+        current_job_key=str(current_job),
+    )
+    result = await resumed_hydrator.dehydrate(registry)
+
+    assert result == registry
+    assert attachments.uploads == 1
+    assert jobs.links == [
+        (current_job, uuid.UUID(registry["notes.txt"]["attachment_key"]))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_link_attachment_does_not_relink_when_already_associated(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    jobs = FakeJobs()
+    current_job = uuid.uuid4()
+    attachment_key = uuid.uuid4()
+    hydrator = WorkspaceHydrator(
+        workspace_path=workspace.path,
+        attachments=FakeAttachments(),
+        jobs=jobs,
+        current_job_key=str(current_job),
+    )
+
+    await hydrator.link_attachment(str(attachment_key))
+    await hydrator.link_attachment(str(attachment_key))
+
+    assert jobs.links == [(current_job, attachment_key)]
 
 
 @pytest.mark.asyncio

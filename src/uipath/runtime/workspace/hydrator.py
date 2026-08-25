@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -126,8 +127,6 @@ class WorkspaceHydrator:
 
             if existing and existing.sha256 == digest and existing.size == size:
                 current[virtual_path] = existing
-                if self.current_job_key:
-                    await self.link_attachment(existing.attachment_key)
                 continue
 
             attachment_name = self._attachment_name_for_virtual_path(virtual_path)
@@ -146,22 +145,44 @@ class WorkspaceHydrator:
             )
             current[virtual_path] = entry
 
-            if self.current_job_key:
-                await self.link_attachment(entry.attachment_key)
+        await self._link_attachments(entry.attachment_key for entry in current.values())
 
         return self._dump_registry(current)
 
     async def link_attachment(self, attachment_key: str) -> None:
-        """Link an already uploaded attachment to the current job."""
+        """Link an attachment unless it is already associated with the current job."""
+        await self._link_attachments((attachment_key,))
+
+    async def _link_attachments(self, attachment_keys: Iterable[str]) -> None:
         if self.jobs is None or not self.current_job_key:
             return
 
-        await self.jobs.link_attachment_async(
-            job_key=UUID(self.current_job_key),
-            attachment_key=UUID(attachment_key),
-            folder_key=self.folder_key,
-            folder_path=self.folder_path,
+        requested_attachment_keys = list(
+            dict.fromkeys(UUID(key) for key in attachment_keys)
         )
+        if not requested_attachment_keys:
+            return
+
+        job_key = UUID(self.current_job_key)
+        linked_attachment_keys = {
+            UUID(key)
+            for key in await self.jobs.list_attachments_async(
+                job_key=job_key,
+                folder_key=self.folder_key,
+                folder_path=self.folder_path,
+            )
+        }
+        for attachment_key in requested_attachment_keys:
+            if attachment_key in linked_attachment_keys:
+                continue
+
+            await self.jobs.link_attachment_async(
+                job_key=job_key,
+                attachment_key=attachment_key,
+                folder_key=self.folder_key,
+                folder_path=self.folder_path,
+            )
+            linked_attachment_keys.add(attachment_key)
 
     def _iter_files(self) -> list[Path]:
         if not self.workspace_path.exists():
