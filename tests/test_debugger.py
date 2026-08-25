@@ -243,6 +243,28 @@ async def test_debug_runtime_continues_when_initial_resume_wait_times_out():
 
 
 @pytest.mark.asyncio
+async def test_debug_runtime_survives_disconnect_error_after_resume_wait_timeout():
+    """A failing bridge disconnect after the timeout must not fault the run."""
+
+    runtime_impl = StreamingMockRuntime(node_sequence=["node-1"])
+    bridge = make_debug_bridge_mock()
+    cast(AsyncMock, bridge.wait_for_resume).side_effect = asyncio.TimeoutError()
+    cast(AsyncMock, bridge.disconnect).side_effect = RuntimeError(
+        "socket already closed"
+    )
+
+    debug_runtime = UiPathDebugRuntime(
+        delegate=runtime_impl,
+        debug_bridge=bridge,
+    )
+
+    result = await debug_runtime.execute({})
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert result.output == {"visited_nodes": ["node-1"]}
+
+
+@pytest.mark.asyncio
 async def test_debug_runtime_completes_as_suspended_after_resume_wait_timeout():
     """After the initial resume wait times out, a suspension must be terminal
     (the platform resumes via the real trigger) instead of waiting on debug
