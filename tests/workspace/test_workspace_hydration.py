@@ -970,6 +970,27 @@ async def test_dehydrate_does_not_relink_attachment_already_linked_to_job(
 
 
 @pytest.mark.asyncio
+async def test_link_attachment_does_not_relink_when_already_associated(
+    tmp_path: Path,
+) -> None:
+    workspace = Workspace.create(tmp_path / "workspace")
+    jobs = FakeJobs()
+    current_job = uuid.uuid4()
+    attachment_key = uuid.uuid4()
+    hydrator = WorkspaceHydrator(
+        workspace_path=workspace.path,
+        attachments=FakeAttachments(),
+        jobs=jobs,
+        current_job_key=str(current_job),
+    )
+
+    await hydrator.link_attachment(str(attachment_key))
+    await hydrator.link_attachment(str(attachment_key))
+
+    assert jobs.links == [(current_job, attachment_key)]
+
+
+@pytest.mark.asyncio
 async def test_attachment_names_are_single_segment_for_nested_files(
     tmp_path: Path,
 ) -> None:
