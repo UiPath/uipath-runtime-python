@@ -22,6 +22,7 @@ happened" cases into a single hook summary cuts that to 1.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Callable
 
 from uipath.core.governance import EnforcementMode
@@ -75,6 +76,25 @@ def _resolve_operation_id() -> str | None:
     if not span_ctx.is_valid:
         return None
     return f"{span_ctx.trace_id:032x}"
+
+
+_UIPATH_TRACE_ID_ENV = "UIPATH_TRACE_ID"
+
+
+def _resolve_trace_id() -> str | None:
+    """The run's trace id as a dashed GUID, matching the span store's TraceId.
+
+    Prefers ``UIPATH_TRACE_ID`` (what the exporter binds spans to), else the
+    live OTel span. Resolved on the hook thread so it survives the background
+    telemetry dispatch. ``None`` when neither yields a valid 32-hex id.
+    """
+    for raw in (os.environ.get(_UIPATH_TRACE_ID_ENV), _resolve_operation_id()):
+        if not raw:
+            continue
+        hex_id = raw.replace("-", "").lower()
+        if len(hex_id) == 32 and all(c in "0123456789abcdef" for c in hex_id):
+            return f"{hex_id[0:8]}-{hex_id[8:12]}-{hex_id[12:16]}-{hex_id[16:20]}-{hex_id[20:32]}"
+    return None
 
 
 def _mode_str(mode: Any) -> str:
@@ -272,6 +292,9 @@ class TrackEventAuditSink(AuditSink):
         payload["agent_name"] = event.agent_name
         payload["hook"] = event.hook
         payload["timestamp"] = event.timestamp.isoformat()
+        trace_id = _resolve_trace_id()
+        if trace_id is not None:
+            payload["trace_id"] = trace_id
         return payload
 
     def _emit_rule_denied(self, event: AuditEvent) -> None:

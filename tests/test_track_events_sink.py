@@ -414,3 +414,60 @@ def test_operation_id_none_when_no_active_span(
     """No live OTel span → ``operation_id=None`` (consumer fills in its own)."""
     sink.emit(_rule_event(matched=True))
     assert capture.calls[0]["operation_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# trace_id payload field — the id the LLMOps span store persists/fetches by
+# (UIPATH_TRACE_ID when set, else the live OTel span), as a dashed GUID
+# ---------------------------------------------------------------------------
+
+
+def test_rule_denied_trace_id_prefers_uipath_trace_id(
+    sink: TrackEventAuditSink, capture: _Capture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``data.trace_id`` = UIPATH_TRACE_ID (dashed) — the exact id the span
+    exporter binds spans to, so the event and its spans share one id.
+    """
+    monkeypatch.setenv("UIPATH_TRACE_ID", "406d33561ff4450382a877a4fba3f838")
+    sink.emit(_rule_event(matched=True))
+    assert (
+        capture.calls[0]["data"]["trace_id"] == "406d3356-1ff4-4503-82a8-77a4fba3f838"
+    )
+
+
+def test_rule_denied_trace_id_falls_back_to_live_span(
+    sink: TrackEventAuditSink, capture: _Capture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No UIPATH_TRACE_ID → the live OTel span's trace id, dashed to a GUID."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    monkeypatch.delenv("UIPATH_TRACE_ID", raising=False)
+    tracer = TracerProvider().get_tracer("test")
+    with tracer.start_as_current_span("agent-run") as span:
+        hex_id = f"{span.get_span_context().trace_id:032x}"
+        sink.emit(_rule_event(matched=True))
+
+    expected = (
+        f"{hex_id[0:8]}-{hex_id[8:12]}-{hex_id[12:16]}-{hex_id[16:20]}-{hex_id[20:32]}"
+    )
+    assert capture.calls[0]["data"]["trace_id"] == expected
+
+
+def test_hook_summary_payload_carries_trace_id(
+    sink: TrackEventAuditSink, capture: _Capture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The trace id is stamped on hook summaries too (shared ``_common_payload``)."""
+    monkeypatch.setenv("UIPATH_TRACE_ID", "406d33561ff4450382a877a4fba3f838")
+    sink.emit(_hook_event())
+    assert (
+        capture.calls[0]["data"]["trace_id"] == "406d3356-1ff4-4503-82a8-77a4fba3f838"
+    )
+
+
+def test_trace_id_absent_when_no_env_and_no_active_span(
+    sink: TrackEventAuditSink, capture: _Capture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No UIPATH_TRACE_ID and no live span → ``trace_id`` omitted (never null)."""
+    monkeypatch.delenv("UIPATH_TRACE_ID", raising=False)
+    sink.emit(_rule_event(matched=True))
+    assert "trace_id" not in capture.calls[0]["data"]
