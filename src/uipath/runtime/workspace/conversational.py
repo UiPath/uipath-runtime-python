@@ -150,7 +150,8 @@ class ConversationalWorkspaceRuntime:
         return await self.delegate.get_schema()
 
     async def dispose(self) -> None:
-        """Release resources owned by this wrapper."""
+        """Dispose the delegate."""
+        await self.delegate.dispose()
 
     async def _hydrate(self, input: Mapping[str, object] | None) -> None:
         if self._hydrated:
