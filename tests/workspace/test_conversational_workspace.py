@@ -532,7 +532,9 @@ async def test_attachment_upload_failure_propagates(
 
 
 @pytest.mark.asyncio
-async def test_dispose_does_not_dispose_injected_dependencies(tmp_path: Path) -> None:
+async def test_dispose_disposes_delegate_but_not_injected_dependencies(
+    tmp_path: Path,
+) -> None:
     delegate = ScriptedRuntime(
         events=[],
         result=UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL),
@@ -548,8 +550,7 @@ async def test_dispose_does_not_dispose_injected_dependencies(tmp_path: Path) ->
 
     await runtime.dispose()
 
-    assert not delegate.disposed
+    assert delegate.disposed
     assert workspace.path.exists()
 
-    await delegate.dispose()
     await workspace.dispose()
