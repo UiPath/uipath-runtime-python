@@ -35,6 +35,8 @@ from uipath.runtime.schema import UiPathRuntimeSchema
 
 logger = logging.getLogger(__name__)
 
+INITIAL_RESUME_TIMEOUT_SECONDS = 60.0
+
 
 class UiPathDebugRuntime:
     """Specialized runtime for debug runs that streams events to a debug bridge."""
@@ -121,12 +123,36 @@ class UiPathDebugRuntime:
 
         # Starting in paused state - wait for breakpoints and resume
         try:
-            await asyncio.wait_for(self.debug_bridge.wait_for_resume(), timeout=60.0)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Initial resume wait timed out after 60s, assuming debug bridge disconnected"
+            await asyncio.wait_for(
+                self.debug_bridge.wait_for_resume(),
+                timeout=INITIAL_RESUME_TIMEOUT_SECONDS,
             )
-            yield UiPathRuntimeResult(status=UiPathRuntimeStatus.FAULTED)
+        except asyncio.TimeoutError:
+            # Debug bridge likely disconnected: proceed unattended instead of
+            # failing the job. Drop the bridge so a stale breakpoint set or a
+            # late command can never pause the run, then run the delegate in a
+            # single pass-through: no breakpoints, no inline resume handling,
+            # and a suspension is terminal (the platform resumes it via the
+            # real trigger).
+            logger.warning(
+                f"Initial resume wait timed out after {INITIAL_RESUME_TIMEOUT_SECONDS:g}s, "
+                "assuming debug bridge disconnected; disconnecting the bridge and "
+                "continuing execution unattended"
+            )
+            try:
+                await self.debug_bridge.disconnect()
+                logger.info("Debug bridge disconnected")
+            except Exception as e:
+                logger.warning(f"Error disconnecting debug bridge: {e}")
+
+            async for event in self.delegate.stream(
+                input,
+                options=UiPathStreamOptions(
+                    resume=options.resume if options else False,
+                    breakpoints=None,
+                ),
+            ):
+                yield event
             return
         except UiPathDebugQuitError:
             logger.info("Debug session quit by user before execution started")
