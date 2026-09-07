@@ -18,6 +18,9 @@ from uipath.runtime.errors import (
     UiPathErrorContract,
     UiPathRuntimeError,
 )
+from uipath.runtime.jobapi.client import IpcJobApiClient
+from uipath.runtime.jobapi.log_handler import IpcSendLogHandler, PooledIpcSendLogHandler
+from uipath.runtime.jobapi.pooled import get_pooled_log_sink
 from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
@@ -120,8 +123,37 @@ class UiPathRuntimeContext(BaseModel):
     keep_state_file: bool = Field(
         False, description="Prevents deletion of state file before running."
     )
+    ipc_endpoint: str | None = Field(
+        None,
+        description=(
+            "uipath-ipc endpoint (UIPATH_JOB_API_IPC_ENDPOINT) for streaming logs to "
+            "the handler in place of execution.log. The result stays on output.json."
+        ),
+    )
+    ipc_job_id: str | None = Field(
+        None,
+        description="Handler job id (UIPATH_JOB_ID) used to route the IPC calls.",
+    )
+    ipc_client: Any = Field(default=None, exclude=True, repr=False)
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+    @property
+    def ipc_active(self) -> bool:
+        """Whether logs flow over a per-job IPC pipe (non-pooled) instead of to files."""
+        return bool(self.ipc_endpoint and self.ipc_job_id)
+
+    @property
+    def pooled_ipc_active(self) -> bool:
+        """Whether logs stream over the pooled server's callback rather than a per-job pipe.
+
+        True when there is a job id but no endpoint, and the pooled server registered its sink.
+        """
+        return (
+            bool(self.ipc_job_id)
+            and not self.ipc_endpoint
+            and get_pooled_log_sink() is not None
+        )
 
     def _apply_execution_source(self) -> None:
         """Derive execution_source from the command, if not already set.
@@ -240,11 +272,27 @@ class UiPathRuntimeContext(BaseModel):
         """
         # Intercept all stdout/stderr/logs
         # Write to file (runtime), stdout (debug) or log handler (if provided)
+        log_handler: logging.Handler | None = None
+        if self.ipc_active:
+            assert self.ipc_endpoint is not None and self.ipc_job_id is not None
+            self.ipc_client = IpcJobApiClient(
+                self.ipc_endpoint, self.ipc_job_id, logger
+            )
+            self.ipc_client.start()
+            log_handler = IpcSendLogHandler(self.ipc_client)
+            log_handler.setFormatter(logging.Formatter("%(message)s"))
+        elif self.pooled_ipc_active:
+            sink = get_pooled_log_sink()
+            assert self.ipc_job_id is not None and sink is not None
+            log_handler = PooledIpcSendLogHandler(self.ipc_job_id, sink)
+            log_handler.setFormatter(logging.Formatter("%(message)s"))
+
         self.logs_interceptor = UiPathRuntimeLogsInterceptor(
             min_level=self.logs_min_level,
             dir=self.runtime_dir,
             file=self.logs_file,
             job_id=self.job_id,
+            log_handler=log_handler,
         )
         self.logs_interceptor.setup()
 
@@ -354,6 +402,8 @@ class UiPathRuntimeContext(BaseModel):
             # Restore original logging
             if hasattr(self, "logs_interceptor"):
                 self.logs_interceptor.teardown()
+            if self.ipc_client is not None:
+                self.ipc_client.close()
 
     @cached_property
     def resolved_result_file_path(self) -> str:
@@ -418,6 +468,8 @@ class UiPathRuntimeContext(BaseModel):
         base.tenant_id = os.environ.get("UIPATH_TENANT_ID")
         base.process_key = os.environ.get("UIPATH_PROCESS_UUID")
         base.folder_key = os.environ.get("UIPATH_FOLDER_KEY")
+        base.ipc_endpoint = os.environ.get("UIPATH_JOB_API_IPC_ENDPOINT")
+        base.ipc_job_id = os.environ.get("UIPATH_JOB_ID")
 
         # Override with kwargs
         for k, v in kwargs.items():
