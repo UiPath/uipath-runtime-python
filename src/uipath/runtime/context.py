@@ -18,10 +18,8 @@ from uipath.runtime.errors import (
     UiPathErrorContract,
     UiPathRuntimeError,
 )
-from uipath.runtime.jobapi.client import IpcJobApiClient
-from uipath.runtime.jobapi.log_handler import IpcSendLogHandler, PooledIpcSendLogHandler
-from uipath.runtime.jobapi.pooled import get_pooled_log_sink
 from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
+from uipath.runtime.output_sinks import ResultSink, get_log_handler, get_result_sink
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 logger = logging.getLogger(__name__)
@@ -123,37 +121,7 @@ class UiPathRuntimeContext(BaseModel):
     keep_state_file: bool = Field(
         False, description="Prevents deletion of state file before running."
     )
-    ipc_endpoint: str | None = Field(
-        None,
-        description=(
-            "uipath-ipc endpoint (UIPATH_JOB_API_IPC_ENDPOINT) for streaming logs to "
-            "the handler in place of execution.log. The result stays on output.json."
-        ),
-    )
-    ipc_job_id: str | None = Field(
-        None,
-        description="Handler job id (UIPATH_JOB_ID) used to route the IPC calls.",
-    )
-    ipc_client: Any = Field(default=None, exclude=True, repr=False)
-
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
-
-    @property
-    def ipc_active(self) -> bool:
-        """Whether logs flow over a per-job IPC pipe (non-pooled) instead of to files."""
-        return bool(self.ipc_endpoint and self.ipc_job_id)
-
-    @property
-    def pooled_ipc_active(self) -> bool:
-        """Whether logs stream over the pooled server's callback rather than a per-job pipe.
-
-        True when there is a job id but no endpoint, and the pooled server registered its sink.
-        """
-        return (
-            bool(self.ipc_job_id)
-            and not self.ipc_endpoint
-            and get_pooled_log_sink() is not None
-        )
 
     def _apply_execution_source(self) -> None:
         """Derive execution_source from the command, if not already set.
@@ -270,22 +238,8 @@ class UiPathRuntimeContext(BaseModel):
         Returns:
             The runtime context instance
         """
-        # Intercept all stdout/stderr/logs
-        # Write to file (runtime), stdout (debug) or log handler (if provided)
-        log_handler: logging.Handler | None = None
-        if self.ipc_active:
-            assert self.ipc_endpoint is not None and self.ipc_job_id is not None
-            self.ipc_client = IpcJobApiClient(
-                self.ipc_endpoint, self.ipc_job_id, logger
-            )
-            self.ipc_client.start()
-            log_handler = IpcSendLogHandler(self.ipc_client)
-            log_handler.setFormatter(logging.Formatter("%(message)s"))
-        elif self.pooled_ipc_active:
-            sink = get_pooled_log_sink()
-            assert self.ipc_job_id is not None and sink is not None
-            log_handler = PooledIpcSendLogHandler(self.ipc_job_id, sink)
-            log_handler.setFormatter(logging.Formatter("%(message)s"))
+        # Use an installed log handler if the caller set one; otherwise the interceptor's default.
+        log_handler = get_log_handler()
 
         self.logs_interceptor = UiPathRuntimeLogsInterceptor(
             min_level=self.logs_min_level,
@@ -359,6 +313,18 @@ class UiPathRuntimeContext(BaseModel):
                 with open(self.output_file, "w") as f:
                     json.dump(output_payload, f, default=str)
 
+            # Best-effort side channel: a sink failure must NOT reach the catch-all below, which would
+            # rewrite the already-good output.json as FAULTED.
+            result_sink = get_result_sink()
+            if result_sink is not None and self.result.status in (
+                UiPathRuntimeStatus.SUCCESSFUL,
+                UiPathRuntimeStatus.FAULTED,
+            ):
+                try:
+                    self._deliver_result(result_sink, output_payload)
+                except Exception:
+                    logger.exception("Failed to deliver result to sink")
+
             # Don't suppress exceptions
             return False
 
@@ -402,8 +368,16 @@ class UiPathRuntimeContext(BaseModel):
             # Restore original logging
             if hasattr(self, "logs_interceptor"):
                 self.logs_interceptor.teardown()
-            if self.ipc_client is not None:
-                self.ipc_client.close()
+
+    def _deliver_result(self, sink: "ResultSink", output_payload: Any) -> None:
+        """Spill the output arguments to a file, then hand the result + that path to the sink."""
+        args_path = self.resolved_output_arguments_file_path
+        # Avoid re-spilling if split_output_arguments already wrote this file.
+        if not (self.split_output_arguments and self.job_id):
+            os.makedirs(os.path.dirname(args_path), exist_ok=True)
+            with open(args_path, "w") as f:
+                json.dump(output_payload, f, default=str)
+        sink(self.result, args_path)
 
     @cached_property
     def resolved_result_file_path(self) -> str:
@@ -468,8 +442,6 @@ class UiPathRuntimeContext(BaseModel):
         base.tenant_id = os.environ.get("UIPATH_TENANT_ID")
         base.process_key = os.environ.get("UIPATH_PROCESS_UUID")
         base.folder_key = os.environ.get("UIPATH_FOLDER_KEY")
-        base.ipc_endpoint = os.environ.get("UIPATH_JOB_API_IPC_ENDPOINT")
-        base.ipc_job_id = os.environ.get("UIPATH_JOB_ID")
 
         # Override with kwargs
         for k, v in kwargs.items():

@@ -153,6 +153,45 @@ class TestInterceptorTeardownOrder:
         assert call_order.index("detach") < call_order.index("handler_close")
 
 
+class TestInterceptorWithHostHandler:
+    """A host-provided log_handler is USED but not OWNED: records reach it, teardown must not close it.
+
+    This is the load-bearing invariant for the IPC output path — the host installs a handler that
+    forwards records to its own sink and reuses it across jobs, so the interceptor closing it would
+    break delivery.
+    """
+
+    def test_host_handler_receives_records_and_survives_teardown(self):
+        records: list[logging.LogRecord] = []
+        closed = {"value": False}
+
+        class _HostHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
+            def close(self) -> None:
+                closed["value"] = True
+                super().close()
+
+        handler = _HostHandler()
+        interceptor = UiPathRuntimeLogsInterceptor(
+            min_level="INFO", job_id="job-1", log_handler=handler
+        )
+        # A host-provided handler is not owned by the interceptor.
+        assert interceptor._owns_handler is False
+
+        interceptor.setup()
+        try:
+            logging.getLogger("runtime").info("hello from the job")
+        finally:
+            interceptor.teardown()
+
+        # setup() attached the host handler and a record flowed through it...
+        assert any(r.getMessage() == "hello from the job" for r in records)
+        # ...and teardown did NOT close a handler it does not own.
+        assert closed["value"] is False
+
+
 class TestInterceptorWithJobId:
     """When job_id is set, a file handler is used — no utf8_stdout wrapper."""
 
