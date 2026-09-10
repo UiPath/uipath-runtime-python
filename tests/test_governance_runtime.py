@@ -650,12 +650,12 @@ def _recording_tracer_provider() -> Iterator[Any]:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
-    original = trace.get_tracer_provider()
-    trace._TRACER_PROVIDER = provider  # type: ignore[attr-defined]
+    original = trace._TRACER_PROVIDER
+    trace._TRACER_PROVIDER = provider
     try:
         yield exporter
     finally:
-        trace._TRACER_PROVIDER = original  # type: ignore[attr-defined]
+        trace._TRACER_PROVIDER = original
 
 
 def _exported_names(exporter: Any) -> set[str]:
@@ -663,25 +663,29 @@ def _exported_names(exporter: Any) -> set[str]:
     return {span.name for span in exporter.get_finished_spans()}
 
 
+def _exported_span(exporter: Any, name: str) -> Any:
+    """Return the single exported span with ``name``."""
+    spans = [span for span in exporter.get_finished_spans() if span.name == name]
+    assert len(spans) == 1
+    return spans[0]
+
+
 async def test_execute_opens_no_span_under_a_host_span() -> None:
     """Under a host span the wrapper stays out of the tree entirely."""
     from opentelemetry import trace
 
     class _SpanOpeningDelegate(_StubDelegate):
-        """Records the parent the agent's own span is given."""
-
-        def __init__(self) -> None:
-            super().__init__()
-            self.agent_span_parent: Any = None
+        """Opens a span the way a framework adapter would."""
 
         async def execute(self, input: Any = None, options: Any = None) -> Any:
             tracer = trace.get_tracer("test.agent")
-            with tracer.start_as_current_span("agent run") as agent_span:
-                self.agent_span_parent = agent_span.parent
+            with tracer.start_as_current_span("agent run"):
+                pass
             return await super().execute(input, options)
 
-    delegate = _SpanOpeningDelegate()
-    runtime = UiPathGovernedRuntime(delegate, PolicyIndex(), EnforcementMode.AUDIT)
+    runtime = UiPathGovernedRuntime(
+        _SpanOpeningDelegate(), PolicyIndex(), EnforcementMode.AUDIT
+    )
 
     with _recording_tracer_provider() as exporter:
         host_tracer = trace.get_tracer("test.host")
@@ -690,10 +694,11 @@ async def test_execute_opens_no_span_under_a_host_span() -> None:
             assert await runtime.execute({"x": 1}) == "result"
 
         exported = _exported_names(exporter)
+        agent_span = _exported_span(exporter, "agent run")
 
     assert "uipath.governance.run" not in exported
-    assert delegate.agent_span_parent is not None
-    assert delegate.agent_span_parent.span_id == host_span_id
+    assert agent_span.parent is not None
+    assert agent_span.parent.span_id == host_span_id
 
 
 async def test_execute_opens_a_root_span_with_no_host_span() -> None:

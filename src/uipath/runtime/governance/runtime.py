@@ -79,10 +79,11 @@ def _governance_root_span(agent_name: str, runtime_id: str) -> Iterator[None]:
 
     Behavior matrix:
 
-    - **OTel installed + host opened a parent span**: no-op — the
-      host's span already supplies the ``trace_id``, and a span
-      inserted here is dropped by host-side export filters, orphaning
-      everything below it.
+    - **OTel installed + a valid span context is already current**
+      (host-opened or remotely propagated): no-op — that context
+      already supplies the ``trace_id``, and a span inserted here is
+      dropped by host-side export filters, orphaning everything
+      below it.
     - **OTel installed + no parent span**: this becomes the root
       span of a fresh trace; everything below it shares the new
       ``trace_id``.
@@ -101,8 +102,7 @@ def _governance_root_span(agent_name: str, runtime_id: str) -> Iterator[None]:
         yield
         return
 
-    current = trace.get_current_span()
-    if current is not None and current.get_span_context().is_valid:
+    if trace.get_current_span().get_span_context().is_valid:
         yield
         return
 
