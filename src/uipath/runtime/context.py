@@ -7,7 +7,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from uipath.core.errors import UiPathFaultedTriggerError
 from uipath.core.tracing import UiPathTraceManager
 
@@ -19,6 +19,7 @@ from uipath.runtime.errors import (
     UiPathRuntimeError,
 )
 from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
+from uipath.runtime.output_sinks import ResultSink, get_log_handler, get_result_sink
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 
 logger = logging.getLogger(__name__)
@@ -120,8 +121,12 @@ class UiPathRuntimeContext(BaseModel):
     keep_state_file: bool = Field(
         False, description="Prevents deletion of state file before running."
     )
-
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+    # Snapshot of the result sink taken at __enter__ and reused at __exit__, so the same sink that was
+    # installed when the context started is the one that receives the result — even if the registry is
+    # changed in between or __exit__ runs on a different event loop.
+    _result_sink: ResultSink | None = PrivateAttr(default=None)
 
     def _apply_execution_source(self) -> None:
         """Derive execution_source from the command, if not already set.
@@ -238,13 +243,17 @@ class UiPathRuntimeContext(BaseModel):
         Returns:
             The runtime context instance
         """
-        # Intercept all stdout/stderr/logs
-        # Write to file (runtime), stdout (debug) or log handler (if provided)
+        # Snapshot both caller-installed sinks now, at context start. The log handler is consumed here;
+        # the result sink is stashed for __exit__ so the two are read at the same moment (same context).
+        log_handler = get_log_handler()
+        self._result_sink = get_result_sink()
+
         self.logs_interceptor = UiPathRuntimeLogsInterceptor(
             min_level=self.logs_min_level,
             dir=self.runtime_dir,
             file=self.logs_file,
             job_id=self.job_id,
+            log_handler=log_handler,
         )
         self.logs_interceptor.setup()
 
@@ -311,6 +320,19 @@ class UiPathRuntimeContext(BaseModel):
                 with open(self.output_file, "w") as f:
                     json.dump(output_payload, f, default=str)
 
+            # Best-effort side channel: a sink failure must NOT reach the catch-all below, which would
+            # rewrite the already-good output.json as FAULTED. Reuse the __enter__ snapshot, not a fresh
+            # read, so the sink is the one that was installed when the context started.
+            result_sink = self._result_sink
+            if result_sink is not None and self.result.status in (
+                UiPathRuntimeStatus.SUCCESSFUL,
+                UiPathRuntimeStatus.FAULTED,
+            ):
+                try:
+                    self._deliver_result(result_sink, output_payload)
+                except Exception:
+                    logger.exception("Failed to deliver result to sink")
+
             # Don't suppress exceptions
             return False
 
@@ -354,6 +376,16 @@ class UiPathRuntimeContext(BaseModel):
             # Restore original logging
             if hasattr(self, "logs_interceptor"):
                 self.logs_interceptor.teardown()
+
+    def _deliver_result(self, sink: ResultSink, output_payload: Any) -> None:
+        """Spill the output arguments to a file, then hand the result + that path to the sink."""
+        args_path = self.resolved_output_arguments_file_path
+        # Avoid re-spilling if split_output_arguments already wrote this file.
+        if not (self.split_output_arguments and self.job_id):
+            os.makedirs(os.path.dirname(args_path), exist_ok=True)
+            with open(args_path, "w") as f:
+                json.dump(output_payload, f, default=str)
+        sink(self.result, args_path)
 
     @cached_property
     def resolved_result_file_path(self) -> str:
