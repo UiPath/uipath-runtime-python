@@ -79,9 +79,11 @@ def _governance_root_span(agent_name: str, runtime_id: str) -> Iterator[None]:
 
     Behavior matrix:
 
-    - **OTel installed + host opened a parent span**: this becomes a
-      child of the host's span and inherits its ``trace_id`` — the
-      host's outer correlation context is preserved end-to-end.
+    - **OTel installed + a valid span context is already current**
+      (host-opened or remotely propagated): no-op — that context
+      already supplies the ``trace_id``, and a span inserted here is
+      dropped by host-side export filters, orphaning everything
+      below it.
     - **OTel installed + no parent span**: this becomes the root
       span of a fresh trace; everything below it shares the new
       ``trace_id``.
@@ -100,11 +102,11 @@ def _governance_root_span(agent_name: str, runtime_id: str) -> Iterator[None]:
         yield
         return
 
+    if trace.get_current_span().get_span_context().is_valid:
+        yield
+        return
+
     tracer = trace.get_tracer("uipath.runtime.governance")
-    # No explicit ``context=`` → OTel picks up the ambient context.
-    # If the host wrapped this call in its own span, we become its
-    # child (same trace_id). Otherwise we open a root span (new
-    # trace_id).
     with tracer.start_as_current_span("uipath.governance.run") as span:
         # Span attributes for downstream consumers. ``agent_name``
         # and ``runtime_id`` are the primary keys an operator

@@ -10,7 +10,8 @@ delegate.
 
 from __future__ import annotations
 
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 import pytest
 from uipath.core.governance import EnforcementMode
@@ -628,3 +629,117 @@ async def test_execute_still_runs_when_opentelemetry_is_unavailable(
 
     assert result == "result"
     assert delegate.execute_calls == [({"x": 1}, None)]
+
+
+# ---------------------------------------------------------------------------
+# _governance_root_span — parent-span handling
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _recording_tracer_provider() -> Iterator[Any]:
+    """Install an in-memory tracer provider globally and yield its exporter."""
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    original = trace._TRACER_PROVIDER
+    trace._TRACER_PROVIDER = provider
+    try:
+        yield exporter
+    finally:
+        trace._TRACER_PROVIDER = original
+
+
+def _exported_names(exporter: Any) -> set[str]:
+    """Return the names of every span the exporter received."""
+    return {span.name for span in exporter.get_finished_spans()}
+
+
+def _exported_span(exporter: Any, name: str) -> Any:
+    """Return the single exported span with ``name``."""
+    spans = [span for span in exporter.get_finished_spans() if span.name == name]
+    assert len(spans) == 1
+    return spans[0]
+
+
+async def test_execute_opens_no_span_under_a_host_span() -> None:
+    """Under a host span the wrapper stays out of the tree entirely."""
+    from opentelemetry import trace
+
+    class _SpanOpeningDelegate(_StubDelegate):
+        """Opens a span the way a framework adapter would."""
+
+        async def execute(self, input: Any = None, options: Any = None) -> Any:
+            tracer = trace.get_tracer("test.agent")
+            with tracer.start_as_current_span("agent run"):
+                pass
+            return await super().execute(input, options)
+
+    runtime = UiPathGovernedRuntime(
+        _SpanOpeningDelegate(), PolicyIndex(), EnforcementMode.AUDIT
+    )
+
+    with _recording_tracer_provider() as exporter:
+        host_tracer = trace.get_tracer("test.host")
+        with host_tracer.start_as_current_span("host exchange") as host_span:
+            host_span_id = host_span.get_span_context().span_id
+            assert await runtime.execute({"x": 1}) == "result"
+
+        exported = _exported_names(exporter)
+        agent_span = _exported_span(exporter, "agent run")
+
+    assert "uipath.governance.run" not in exported
+    assert agent_span.parent is not None
+    assert agent_span.parent.span_id == host_span_id
+
+
+async def test_execute_opens_a_root_span_with_no_host_span() -> None:
+    """With no ambient span the wrapper still opens one to unify the trace."""
+    runtime = UiPathGovernedRuntime(
+        _StubDelegate(),
+        PolicyIndex(),
+        EnforcementMode.AUDIT,
+        agent_name="HR Assistant",
+        runtime_id="rt-1",
+    )
+
+    with _recording_tracer_provider() as exporter:
+        assert await runtime.execute({"x": 1}) == "result"
+        spans = [
+            s
+            for s in exporter.get_finished_spans()
+            if s.name == "uipath.governance.run"
+        ]
+
+    assert len(spans) == 1
+    assert spans[0].parent is None
+    attributes = spans[0].attributes or {}
+    assert attributes["uipath_governance.agent_name"] == "HR Assistant"
+    assert attributes["uipath_governance.runtime_id"] == "rt-1"
+
+
+async def test_stream_opens_no_span_under_a_host_span() -> None:
+    """``stream`` takes the same no-op path as ``execute``."""
+    from opentelemetry import trace
+
+    runtime = UiPathGovernedRuntime(
+        _StubDelegate(), PolicyIndex(), EnforcementMode.AUDIT
+    )
+
+    with _recording_tracer_provider() as exporter:
+        host_tracer = trace.get_tracer("test.host")
+        with host_tracer.start_as_current_span("host exchange"):
+            events = [event async for event in runtime.stream({"x": 1})]
+
+        exported = _exported_names(exporter)
+
+    assert events == ["a", "b"]
+    assert "uipath.governance.run" not in exported
