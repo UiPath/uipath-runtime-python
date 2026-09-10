@@ -13,29 +13,29 @@ from typing import Any, Callable
 # (result, output_arguments_file_path) -> None
 ResultSink = Callable[[Any, str], None]
 
-_log_handler: "ContextVar[logging.Handler | None]" = ContextVar(
+_log_handler: ContextVar[logging.Handler | None] = ContextVar(
     "uipath_log_handler", default=None
 )
-_result_sink: "ContextVar[ResultSink | None]" = ContextVar(
+_result_sink: ContextVar[ResultSink | None] = ContextVar(
     "uipath_result_sink", default=None
 )
 
 
-def set_log_handler(handler: "logging.Handler | None") -> None:
+def set_log_handler(handler: logging.Handler | None) -> None:
     """Install the log handler (``None`` clears)."""
     _log_handler.set(handler)
 
 
-def get_log_handler() -> "logging.Handler | None":
+def get_log_handler() -> logging.Handler | None:
     """The installed log handler, or None."""
     return _log_handler.get()
 
 
-def set_result_sink(sink: "ResultSink | None") -> None:
+def set_result_sink(sink: ResultSink | None) -> None:
     """Install the result sink (``None`` clears)."""
     _result_sink.set(sink)
 
 
-def get_result_sink() -> "ResultSink | None":
+def get_result_sink() -> ResultSink | None:
     """The installed result sink, or None."""
     return _result_sink.get()

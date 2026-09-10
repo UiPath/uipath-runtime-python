@@ -369,7 +369,7 @@ class UiPathRuntimeContext(BaseModel):
             if hasattr(self, "logs_interceptor"):
                 self.logs_interceptor.teardown()
 
-    def _deliver_result(self, sink: "ResultSink", output_payload: Any) -> None:
+    def _deliver_result(self, sink: ResultSink, output_payload: Any) -> None:
         """Spill the output arguments to a file, then hand the result + that path to the sink."""
         args_path = self.resolved_output_arguments_file_path
         # Avoid re-spilling if split_output_arguments already wrote this file.
