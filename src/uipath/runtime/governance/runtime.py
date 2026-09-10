@@ -59,6 +59,10 @@ from uipath.runtime.base import (
     UiPathStreamOptions,
 )
 from uipath.runtime.events import UiPathRuntimeEvent
+from uipath.runtime.governance._audit.traces import (
+    SPAN_TYPE_GOVERNANCE,
+    UIPATH_SOURCE,
+)
 from uipath.runtime.governance.native.evaluator import GovernanceEvaluator
 from uipath.runtime.governance.native.models import PolicyIndex
 from uipath.runtime.result import UiPathRuntimeResult
@@ -106,6 +110,11 @@ def _governance_root_span(agent_name: str, runtime_id: str) -> Iterator[None]:
     # child (same trace_id). Otherwise we open a root span (new
     # trace_id).
     with tracer.start_as_current_span("uipath.governance.run") as span:
+        span.set_attribute("uipath.custom_instrumentation", True)
+        span.set_attribute("type", SPAN_TYPE_GOVERNANCE)
+        span.set_attribute("span_type", SPAN_TYPE_GOVERNANCE)
+        span.set_attribute("uipath.source", UIPATH_SOURCE)
+
         # Span attributes for downstream consumers. ``agent_name``
         # and ``runtime_id`` are the primary keys an operator
         # filters on; ``source`` identifies which producer emitted
