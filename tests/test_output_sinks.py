@@ -209,3 +209,29 @@ def test_sinks_are_isolated_per_context() -> None:
     # ...but not in the caller's context.
     assert get_log_handler() is None
     assert get_result_sink() is None
+
+
+def test_result_sink_is_snapshotted_at_enter(tmp_path: Path) -> None:
+    """The sink captured at __enter__ is the one used at __exit__.
+
+    A registry swap after the context starts (another execution installing its own sink) must not
+    reroute this context's result — it delivers to the sink present when it began.
+    """
+    delivered: list[str] = []
+
+    def _first(result: Any, path: str) -> None:
+        delivered.append("first")
+
+    def _second(result: Any, path: str) -> None:
+        delivered.append("second")
+
+    set_result_sink(_first)
+    ctx = _ctx(tmp_path)
+    with ctx:
+        # Something else replaces the process-global sink mid-run.
+        set_result_sink(_second)
+        ctx.result = UiPathRuntimeResult(
+            status=UiPathRuntimeStatus.SUCCESSFUL, output={"k": "v"}
+        )
+
+    assert delivered == ["first"]
