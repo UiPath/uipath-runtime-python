@@ -16,6 +16,7 @@ class UiPathRuntimeStatus(str, Enum):
     SUCCESSFUL = "successful"
     FAULTED = "faulted"
     SUSPENDED = "suspended"
+    STOPPED = "stopped"
 
 
 class UiPathRuntimeResult(UiPathRuntimeEvent):

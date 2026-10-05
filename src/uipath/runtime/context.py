@@ -1,5 +1,6 @@
 """Context information passed throughout the runtime execution."""
 
+import asyncio
 import json
 import logging
 import os
@@ -21,6 +22,7 @@ from uipath.runtime.errors import (
 from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
 from uipath.runtime.output_sinks import ResultSink, get_log_handler, get_result_sink
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
+from uipath.runtime.stop import StopRequestedProbe, get_stop_requested_probe
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +129,7 @@ class UiPathRuntimeContext(BaseModel):
     # installed when the context started is the one that receives the result — even if the registry is
     # changed in between or __exit__ runs on a different event loop.
     _result_sink: ResultSink | None = PrivateAttr(default=None)
+    _stop_requested_probe: StopRequestedProbe | None = PrivateAttr(default=None)
 
     def _apply_execution_source(self) -> None:
         """Derive execution_source from the command, if not already set.
@@ -247,6 +250,7 @@ class UiPathRuntimeContext(BaseModel):
         # the result sink is stashed for __exit__ so the two are read at the same moment (same context).
         log_handler = get_log_handler()
         self._result_sink = get_result_sink()
+        self._stop_requested_probe = get_stop_requested_probe()
 
         self.logs_interceptor = UiPathRuntimeLogsInterceptor(
             min_level=self.logs_min_level,
@@ -271,7 +275,10 @@ class UiPathRuntimeContext(BaseModel):
             if self.result is None:
                 self.result = UiPathRuntimeResult()
 
-            if exc_type and exc_val:
+            if exc_type and exc_val and self._stopped_on_request(exc_val):
+                self.result.status = UiPathRuntimeStatus.STOPPED
+                self.result.error = None
+            elif exc_type and exc_val:
                 # Create error info from exception
                 match exc_val:
                     case UiPathFaultedTriggerError():
@@ -327,6 +334,7 @@ class UiPathRuntimeContext(BaseModel):
             if result_sink is not None and self.result.status in (
                 UiPathRuntimeStatus.SUCCESSFUL,
                 UiPathRuntimeStatus.FAULTED,
+                UiPathRuntimeStatus.STOPPED,
             ):
                 try:
                     self._deliver_result(result_sink, output_payload)
@@ -376,6 +384,19 @@ class UiPathRuntimeContext(BaseModel):
             # Restore original logging
             if hasattr(self, "logs_interceptor"):
                 self.logs_interceptor.teardown()
+
+    def _stopped_on_request(self, exc: BaseException) -> bool:
+        """Whether the run ended by a cancellation the host asked for."""
+        probe = self._stop_requested_probe
+        if probe is None or not _caused_by_cancellation(exc):
+            return False
+        try:
+            return bool(probe())
+        except Exception:
+            logger.exception(
+                "Stop-requested probe failed; the run is reported as faulted"
+            )
+            return False
 
     def _deliver_result(self, sink: ResultSink, output_payload: Any) -> None:
         """Spill the output arguments to a file, then hand the result + that path to the sink."""
@@ -527,3 +548,14 @@ class UiPathRuntimeContext(BaseModel):
                     setattr(instance, attr_name, kwargs[attr_name])
 
         return instance
+
+
+def _caused_by_cancellation(exc: BaseException | None) -> bool:
+    """Whether ``exc`` is a cancellation, or was raised while handling or because of one."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        if isinstance(exc, asyncio.CancelledError):
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__ or exc.__context__
+    return False
