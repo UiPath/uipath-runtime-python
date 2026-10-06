@@ -638,3 +638,46 @@ async def test_debug_runtime_quit_at_a_breakpoint_yields_one_result():
     ]
 
     assert [r.status for r in results] == [UiPathRuntimeStatus.SUCCESSFUL]
+
+
+class _NonStreamingWorkingRuntime(_WorkingRuntime):
+    """A delegate without streaming that works until it is cancelled."""
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        try:
+            await asyncio.sleep(30)
+            return UiPathRuntimeResult(status=UiPathRuntimeStatus.FAULTED)
+        finally:
+            self.cleaned_up = True
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        raise UiPathStreamNotSupportedError("no streaming")
+        yield
+
+
+@pytest.mark.asyncio
+async def test_debug_runtime_quit_stops_a_delegate_that_cannot_stream():
+    """The quit also reaches a delegate run through the execute() fallback."""
+    runtime_impl = _NonStreamingWorkingRuntime()
+    bridge, quit_event = _bridge_with_quit()
+    debug_runtime = UiPathDebugRuntime(delegate=runtime_impl, debug_bridge=bridge)
+
+    async def quit_soon() -> None:
+        await asyncio.sleep(0.05)
+        quit_event.set()
+
+    quitter = asyncio.create_task(quit_soon())
+    result = await asyncio.wait_for(debug_runtime.execute({}), timeout=5)
+    await quitter
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert runtime_impl.cleaned_up
+    cast(AsyncMock, bridge.emit_execution_completed).assert_awaited_once_with(result)

@@ -60,16 +60,48 @@ class UiPathDebugRuntime:
         if trigger_poll_interval < 0:
             raise ValueError("trigger_poll_interval must be >= 0")
         self.trigger_poll_interval = trigger_poll_interval
-        self._quit_requested = False
 
     async def execute(
         self,
         input: dict[str, Any] | None = None,
         options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
-        """Execute the workflow with debug support."""
+        """Execute the workflow with debug support; a quit while it runs stops it."""
+        run = asyncio.ensure_future(
+            self._run(input, cast(UiPathStreamOptions, options))
+        )
+        terminate = asyncio.ensure_future(self.debug_bridge.wait_for_terminate())
+        try:
+            done, _ = await asyncio.wait(
+                {run, terminate}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if run not in done and not _quit_requested(terminate):
+                done, _ = await asyncio.wait({run})
+        finally:
+            terminate.cancel()
+            if not run.done():
+                run.cancel()
+                await asyncio.wait({run})
+
+        if run in done:
+            return run.result()
+
+        if not run.cancelled() and run.exception():
+            logger.warning(
+                "Delegate failed while stopping on quit", exc_info=run.exception()
+            )
+        logger.info("Debug session quit by user during execution")
+        result = UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+        await self.debug_bridge.emit_execution_completed(result)
+        return result
+
+    async def _run(
+        self,
+        input: dict[str, Any] | None,
+        options: UiPathStreamOptions | None,
+    ) -> UiPathRuntimeResult:
         final_result = None
-        async for event in self.stream(input, cast(UiPathStreamOptions, options)):
+        async for event in self.stream(input, options):
             if isinstance(event, UiPathRuntimeResult):
                 final_result = event
 
@@ -121,7 +153,6 @@ class UiPathDebugRuntime:
         """Stream events from inner runtime and handle debug interactions."""
         final_result: UiPathRuntimeResult
         execution_completed = False
-        self._quit_requested = False
 
         # Starting in paused state - wait for breakpoints and resume
         try:
@@ -174,8 +205,8 @@ class UiPathDebugRuntime:
             debug_options.breakpoints = self.debug_bridge.get_breakpoints()
 
             # Stream events from inner runtime
-            async for event in self._until_quit(
-                self.delegate.stream(current_input, options=debug_options)
+            async for event in self.delegate.stream(
+                current_input, options=debug_options
             ):
                 yield event
 
@@ -261,61 +292,6 @@ class UiPathDebugRuntime:
                 # Handle state update events - send to debug bridge
                 elif isinstance(event, UiPathRuntimeStateEvent):
                     await self.debug_bridge.emit_state_update(event)
-
-            if self._quit_requested and not execution_completed:
-                logger.info("Debug session quit by user during execution")
-                final_result = UiPathRuntimeResult(
-                    status=UiPathRuntimeStatus.SUCCESSFUL,
-                )
-                yield final_result
-                execution_completed = True
-
-    async def _until_quit(
-        self, events: AsyncGenerator[UiPathRuntimeEvent, None]
-    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
-        """Pass the delegate's events through until the debugger quits.
-
-        A quit while the delegate is working cancels it where it waits, as a stop would; one
-        between events ends the stream before the next. Either way the delegate is closed and
-        ``_quit_requested`` is set. A cancellation from anywhere else still propagates.
-        """
-        task = asyncio.current_task()
-        assert task is not None
-        terminate = asyncio.ensure_future(self.debug_bridge.wait_for_terminate())
-        in_delegate = False
-        cancelled = False
-
-        def on_terminate(done: "asyncio.Future[None]") -> None:
-            nonlocal cancelled
-            if in_delegate and _requested(done):
-                cancelled = True
-                task.cancel()
-
-        terminate.add_done_callback(on_terminate)
-        try:
-            while not _requested(terminate):
-                in_delegate = True
-                try:
-                    event = await anext(events)
-                except StopAsyncIteration:
-                    return
-                except asyncio.CancelledError:
-                    if cancelled:
-                        cancelled = False
-                        if task.uncancel() == 0:
-                            break
-                    raise
-                finally:
-                    in_delegate = False
-                yield event
-            self._quit_requested = True
-        finally:
-            terminate.remove_done_callback(on_terminate)
-            if cancelled:
-                # The delegate swallowed the cancellation this sent it.
-                task.uncancel()
-            terminate.cancel()
-            await events.aclose()
 
     def get_resumable_runtime(
         self, max_depth: int = 10
@@ -417,7 +393,5 @@ class UiPathDebugRuntime:
             raise UiPathDebugQuitError("Debugging terminated during polling.")
 
 
-def _requested(terminate: "asyncio.Future[None]") -> bool:
-    return (
-        terminate.done() and not terminate.cancelled() and terminate.exception() is None
-    )
+def _quit_requested(terminate: "asyncio.Future[None]") -> bool:
+    return not terminate.cancelled() and terminate.exception() is None
