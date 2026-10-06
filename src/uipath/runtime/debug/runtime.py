@@ -66,9 +66,42 @@ class UiPathDebugRuntime:
         input: dict[str, Any] | None = None,
         options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
-        """Execute the workflow with debug support."""
+        """Execute the workflow with debug support; a quit while it runs stops it."""
+        run = asyncio.ensure_future(
+            self._run(input, cast(UiPathStreamOptions, options))
+        )
+        terminate = asyncio.ensure_future(self.debug_bridge.wait_for_terminate())
+        try:
+            done, _ = await asyncio.wait(
+                {run, terminate}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if run not in done and not _quit_requested(terminate):
+                done, _ = await asyncio.wait({run})
+        finally:
+            terminate.cancel()
+            if not run.done():
+                run.cancel()
+                await asyncio.wait({run})
+
+        if run in done:
+            return run.result()
+
+        if not run.cancelled() and run.exception():
+            logger.warning(
+                "Delegate failed while stopping on quit", exc_info=run.exception()
+            )
+        logger.info("Debug session quit by user during execution")
+        result = UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+        await self.debug_bridge.emit_execution_completed(result)
+        return result
+
+    async def _run(
+        self,
+        input: dict[str, Any] | None,
+        options: UiPathStreamOptions | None,
+    ) -> UiPathRuntimeResult:
         final_result = None
-        async for event in self.stream(input, cast(UiPathStreamOptions, options)):
+        async for event in self.stream(input, options):
             if isinstance(event, UiPathRuntimeResult):
                 final_result = event
 
@@ -358,3 +391,7 @@ class UiPathDebugRuntime:
 
         if term_task in done:
             raise UiPathDebugQuitError("Debugging terminated during polling.")
+
+
+def _quit_requested(terminate: "asyncio.Future[None]") -> bool:
+    return not terminate.cancelled() and terminate.exception() is None

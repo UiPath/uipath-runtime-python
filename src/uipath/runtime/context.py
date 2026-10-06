@@ -1,5 +1,6 @@
 """Context information passed throughout the runtime execution."""
 
+import asyncio
 import json
 import logging
 import os
@@ -271,7 +272,10 @@ class UiPathRuntimeContext(BaseModel):
             if self.result is None:
                 self.result = UiPathRuntimeResult()
 
-            if exc_type and exc_val:
+            if exc_type and exc_val and _task_is_being_cancelled():
+                self.result.status = UiPathRuntimeStatus.STOPPED
+                self.result.error = None
+            elif exc_type and exc_val:
                 # Create error info from exception
                 match exc_val:
                     case UiPathFaultedTriggerError():
@@ -327,6 +331,7 @@ class UiPathRuntimeContext(BaseModel):
             if result_sink is not None and self.result.status in (
                 UiPathRuntimeStatus.SUCCESSFUL,
                 UiPathRuntimeStatus.FAULTED,
+                UiPathRuntimeStatus.STOPPED,
             ):
                 try:
                     self._deliver_result(result_sink, output_payload)
@@ -527,3 +532,12 @@ class UiPathRuntimeContext(BaseModel):
                     setattr(instance, attr_name, kwargs[attr_name])
 
         return instance
+
+
+def _task_is_being_cancelled() -> bool:
+    """Whether someone called ``cancel()`` on the running task, as opposed to a stray CancelledError."""
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        return False
+    return task is not None and task.cancelling() > 0
