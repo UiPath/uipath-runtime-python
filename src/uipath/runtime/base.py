@@ -195,8 +195,8 @@ class UiPathExecutionRuntime:
         """Stream runtime execution with context.
 
         Args:
-            runtime: The runtime instance
-            context: The runtime context
+            input: The input data for the runtime
+            options: Streaming-specific execution options
 
         Yields:
             UiPathRuntimeEvent instances during execution and final UiPathRuntimeResult
