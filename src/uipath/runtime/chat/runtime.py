@@ -100,8 +100,9 @@ class UiPathChatRuntime:
                         runtime_result = event
 
                         if isinstance(runtime_result, UiPathBreakpointResult):
-                            # A breakpoint pauses the run. The debugger will resume it,
-                            # so keep the exchange open.
+                            # A breakpoint only pauses the run. Ending the exchange
+                            # here would close the turn in CAS before the agent has
+                            # finished replying.
                             yield event
                             execution_completed = True
                         elif (
