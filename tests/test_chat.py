@@ -17,6 +17,7 @@ from uipath.core.triggers import (
 )
 
 from uipath.runtime import (
+    UiPathBreakpointResult,
     UiPathExecuteOptions,
     UiPathRuntimeResult,
     UiPathRuntimeStatus,
@@ -28,6 +29,7 @@ from uipath.runtime.chat import (
     UiPathChatRuntime,
 )
 from uipath.runtime.chat.runtime import _parse_confirmation
+from uipath.runtime.debug import UiPathDebugProtocol, UiPathDebugRuntime
 from uipath.runtime.events import (
     UiPathRuntimeConversationMetaEvent,
     UiPathRuntimeEvent,
@@ -225,6 +227,7 @@ async def test_chat_runtime_streams_and_emits_messages():
     # Bridge lifecycle
     cast(AsyncMock, bridge.connect).assert_awaited_once()
     cast(AsyncMock, bridge.disconnect).assert_awaited_once()
+    cast(AsyncMock, bridge.emit_exchange_end_event).assert_awaited_once()
 
     assert cast(AsyncMock, bridge.emit_message_event).await_count == 3
 
@@ -435,6 +438,101 @@ async def test_chat_runtime_yields_events_during_suspension_flow():
     for event in events:
         if isinstance(event, UiPathRuntimeResult):
             assert event.status != UiPathRuntimeStatus.SUSPENDED
+
+
+class BreakpointMockRuntime:
+    """Mock runtime that pauses at a debug breakpoint before replying."""
+
+    async def dispose(self) -> None:
+        pass
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        raise NotImplementedError()
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        if not (options and options.resume):
+            yield UiPathBreakpointResult(
+                breakpoint_node="agent",
+                breakpoint_type="before",
+                current_state={},
+                next_nodes=["agent"],
+            )
+            return
+
+        yield UiPathRuntimeMessageEvent(
+            payload=UiPathConversationMessageEvent(
+                message_id="msg-0",
+                start=UiPathConversationMessageStartEvent(
+                    role="assistant",
+                    timestamp="2025-01-01T00:00:00.000Z",
+                ),
+            )
+        )
+        yield UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        raise NotImplementedError()
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_keeps_exchange_open_at_breakpoint():
+    """A debug breakpoint pauses the exchange, so it must not end it."""
+    bridge = make_chat_bridge_mock()
+    chat_runtime = UiPathChatRuntime(
+        delegate=BreakpointMockRuntime(), chat_bridge=bridge
+    )
+
+    events = [event async for event in chat_runtime.stream({})]
+
+    assert len(events) == 1
+    assert isinstance(events[0], UiPathBreakpointResult)
+    cast(AsyncMock, bridge.emit_exchange_end_event).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_chat_runtime_under_debugger_ends_exchange_after_reply():
+    """Stepping past a breakpoint ends the exchange once, after the reply."""
+    chat_bridge = make_chat_bridge_mock()
+    debug_bridge: Mock = Mock(spec=UiPathDebugProtocol)
+    debug_bridge.connect = AsyncMock()
+    debug_bridge.emit_execution_started = AsyncMock()
+    debug_bridge.emit_execution_completed = AsyncMock()
+    debug_bridge.emit_breakpoint_hit = AsyncMock()
+    debug_bridge.wait_for_resume = AsyncMock()
+    debug_bridge.get_breakpoints = Mock(return_value="*")
+
+    calls = Mock()
+    calls.attach_mock(
+        cast(AsyncMock, chat_bridge.emit_message_event), "emit_message_event"
+    )
+    calls.attach_mock(
+        cast(AsyncMock, chat_bridge.emit_exchange_end_event), "emit_exchange_end_event"
+    )
+
+    # Same nesting as `uipath debug` for a conversational job.
+    debug_runtime = UiPathDebugRuntime(
+        delegate=UiPathChatRuntime(
+            delegate=BreakpointMockRuntime(), chat_bridge=chat_bridge
+        ),
+        debug_bridge=cast(UiPathDebugProtocol, debug_bridge),
+    )
+
+    result = await debug_runtime.execute({})
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    debug_bridge.emit_breakpoint_hit.assert_awaited_once()
+    assert [name for name, _, _ in calls.mock_calls] == [
+        "emit_message_event",
+        "emit_exchange_end_event",
+    ]
 
 
 class MultiTriggerMockRuntime:

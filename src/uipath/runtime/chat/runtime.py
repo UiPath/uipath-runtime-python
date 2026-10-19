@@ -13,6 +13,7 @@ from uipath.runtime.base import (
     UiPathStreamOptions,
 )
 from uipath.runtime.chat.protocol import UiPathChatMetaEventProtocol, UiPathChatProtocol
+from uipath.runtime.debug import UiPathBreakpointResult
 from uipath.runtime.errors import UiPathBaseRuntimeError
 from uipath.runtime.errors.contract import UiPathErrorCategory
 from uipath.runtime.events import (
@@ -98,7 +99,12 @@ class UiPathChatRuntime:
                     if isinstance(event, UiPathRuntimeResult):
                         runtime_result = event
 
-                        if (
+                        if isinstance(runtime_result, UiPathBreakpointResult):
+                            # Paused by the debugger, which resumes this runtime
+                            # later: the exchange is still in progress.
+                            yield event
+                            execution_completed = True
+                        elif (
                             runtime_result.status == UiPathRuntimeStatus.SUSPENDED
                             and runtime_result.triggers
                         ):
