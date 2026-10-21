@@ -13,6 +13,7 @@ from uipath.runtime.base import (
     UiPathStreamOptions,
 )
 from uipath.runtime.chat.protocol import UiPathChatMetaEventProtocol, UiPathChatProtocol
+from uipath.runtime.debug import UiPathBreakpointResult
 from uipath.runtime.errors import UiPathBaseRuntimeError
 from uipath.runtime.errors.contract import UiPathErrorCategory
 from uipath.runtime.events import (
@@ -98,7 +99,13 @@ class UiPathChatRuntime:
                     if isinstance(event, UiPathRuntimeResult):
                         runtime_result = event
 
-                        if (
+                        if isinstance(runtime_result, UiPathBreakpointResult):
+                            # A breakpoint only pauses the run. Ending the exchange
+                            # here would close the turn in CAS before the agent has
+                            # finished replying.
+                            yield event
+                            execution_completed = True
+                        elif (
                             runtime_result.status == UiPathRuntimeStatus.SUSPENDED
                             and runtime_result.triggers
                         ):
