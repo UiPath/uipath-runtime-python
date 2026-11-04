@@ -4,7 +4,7 @@ import asyncio
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable
 
 import pytest
 from uipath.core.chat import (
@@ -25,6 +25,7 @@ from uipath.runtime import (
     WorkspaceRegistryStore,
     get_workspace_path,
 )
+from uipath.runtime.debug import UiPathBreakpointResult
 from uipath.runtime.errors import UiPathErrorCategory, UiPathRuntimeError
 from uipath.runtime.events import (
     UiPathRuntimeConversationMetaEvent,
@@ -1149,3 +1150,214 @@ async def test_always_policy_persists_on_stream_failure(tmp_path: Path) -> None:
             pass
 
     assert attachments.uploads == 1
+
+
+class _ScriptedDebugRuntime:
+    """Runs one scripted step per call, the way a debugger drives a paused graph."""
+
+    def __init__(self, steps: list[Callable[[Path], UiPathRuntimeResult]]) -> None:
+        self.steps = steps
+
+    async def execute(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathExecuteOptions | None = None,
+    ) -> UiPathRuntimeResult:
+        return self.steps.pop(0)(get_workspace_path())
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        yield await self.execute(input, options)
+
+    async def get_schema(self) -> UiPathRuntimeSchema:
+        raise NotImplementedError
+
+    async def dispose(self) -> None:
+        pass
+
+
+def _paused() -> UiPathBreakpointResult:
+    return UiPathBreakpointResult(
+        breakpoint_node="agent",
+        breakpoint_type="before",
+        current_state={},
+        next_nodes=["agent"],
+    )
+
+
+def _write(
+    content: str, result: UiPathRuntimeResult
+) -> Callable[[Path], UiPathRuntimeResult]:
+    def step(workspace: Path) -> UiPathRuntimeResult:
+        (workspace / "report.md").write_text(content)
+        return result
+
+    return step
+
+
+def _report(workspace: Path) -> UiPathRuntimeResult:
+    report = workspace / "report.md"
+    return UiPathRuntimeResult(
+        output={"report": report.read_text() if report.exists() else None}
+    )
+
+
+def _scripted(
+    tmp_path: Path,
+    steps: list[Callable[[Path], UiPathRuntimeResult]],
+    attachments: FakeAttachments,
+    storage: MemoryStorage,
+    policy: HydrationPolicy = HydrationPolicy.SUSPEND_ONLY,
+    name: str = "workspace",
+) -> HydrationRuntime:
+    workspace = Workspace.create(tmp_path / name)
+    return HydrationRuntime(
+        _ScriptedDebugRuntime(steps),
+        workspace=workspace,
+        hydrator=WorkspaceHydrator(
+            workspace_path=workspace.path, attachments=attachments
+        ),
+        registry_store=WorkspaceRegistryStore(storage, "runtime-1"),
+        policy=policy,
+    )
+
+
+_DEBUGGING = UiPathStreamOptions(breakpoints="*")
+
+
+async def _run(
+    runtime: HydrationRuntime,
+    *,
+    use_stream: bool,
+    options: UiPathStreamOptions | None = _DEBUGGING,
+) -> UiPathRuntimeResult:
+    if not use_stream:
+        return await runtime.execute({}, options=options)
+    events = [event async for event in runtime.stream({}, options=options)]
+    result = events[-1]
+    assert isinstance(result, UiPathRuntimeResult)
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", list(HydrationPolicy))
+async def test_breakpoint_pause_uploads_nothing(
+    tmp_path: Path, policy: HydrationPolicy
+) -> None:
+    attachments = FakeAttachments()
+    runtime = _scripted(
+        tmp_path,
+        [_write("draft", _paused()), _write("draft", _paused())],
+        attachments,
+        MemoryStorage(),
+        policy=policy,
+    )
+
+    executed = await runtime.execute({}, options=_DEBUGGING)
+    streamed = await _run(runtime, use_stream=True)
+
+    assert isinstance(executed, UiPathBreakpointResult)
+    assert isinstance(streamed, UiPathBreakpointResult)
+    assert attachments.uploads == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_stream", [False, True])
+async def test_continue_after_breakpoint_keeps_edits_made_before_it(
+    tmp_path: Path, use_stream: bool
+) -> None:
+    suspended = UiPathRuntimeResult(status=UiPathRuntimeStatus.SUSPENDED)
+    runtime = _scripted(
+        tmp_path,
+        [_write("v1", suspended), _write("v2", _paused()), _report],
+        FakeAttachments(),
+        MemoryStorage(),
+    )
+
+    await _run(runtime, use_stream=use_stream)
+    await _run(runtime, use_stream=use_stream)
+    continued = await _run(runtime, use_stream=use_stream)
+
+    assert continued.output == {"report": "v2"}
+
+
+@pytest.mark.asyncio
+async def test_continue_after_breakpoint_keeps_deleted_files_deleted(
+    tmp_path: Path,
+) -> None:
+    def delete_then_pause(workspace: Path) -> UiPathRuntimeResult:
+        (workspace / "report.md").unlink()
+        return _paused()
+
+    suspended = UiPathRuntimeResult(status=UiPathRuntimeStatus.SUSPENDED)
+    runtime = _scripted(
+        tmp_path,
+        [_write("v1", suspended), delete_then_pause, _report],
+        FakeAttachments(),
+        MemoryStorage(),
+    )
+
+    for _ in range(2):
+        await runtime.execute({}, options=_DEBUGGING)
+    continued = await runtime.execute({}, options=_DEBUGGING)
+
+    assert continued.output == {"report": None}
+
+
+@pytest.mark.asyncio
+async def test_suspend_after_a_breakpoint_is_restored_on_resume(
+    tmp_path: Path,
+) -> None:
+    attachments, storage = FakeAttachments(), MemoryStorage()
+    suspended = UiPathRuntimeResult(status=UiPathRuntimeStatus.SUSPENDED)
+    debug_run = _scripted(
+        tmp_path,
+        [_write("v1", suspended), _write("v2", _paused()), _write("v3", suspended)],
+        attachments,
+        storage,
+    )
+    for _ in range(3):
+        await debug_run.execute({}, options=_DEBUGGING)
+
+    resumed = _scripted(tmp_path, [_report], attachments, storage, name="resumed")
+    result = await resumed.execute({})
+
+    assert result.output == {"report": "v3"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_stream", [False, True])
+async def test_static_interrupt_without_debugger_is_restored_on_resume(
+    tmp_path: Path, use_stream: bool
+) -> None:
+    attachments, storage = FakeAttachments(), MemoryStorage()
+    job = _scripted(tmp_path, [_write("draft", _paused())], attachments, storage)
+    await _run(job, use_stream=use_stream, options=None)
+
+    resumed = _scripted(tmp_path, [_report], attachments, storage, name="resumed")
+    result = await _run(resumed, use_stream=use_stream, options=None)
+
+    assert result.output == {"report": "draft"}
+
+
+@pytest.mark.asyncio
+async def test_only_the_first_call_after_a_breakpoint_skips_hydration(
+    tmp_path: Path,
+) -> None:
+    suspended = UiPathRuntimeResult(status=UiPathRuntimeStatus.SUSPENDED)
+    runtime = _scripted(
+        tmp_path,
+        [_write("v1", _paused()), _write("v2", suspended), _report],
+        FakeAttachments(),
+        MemoryStorage(),
+    )
+    for _ in range(2):
+        await runtime.execute({}, options=_DEBUGGING)
+
+    (runtime.workspace.path / "report.md").unlink()
+    result = await runtime.execute({}, options=_DEBUGGING)
+
+    assert result.output == {"report": "v2"}

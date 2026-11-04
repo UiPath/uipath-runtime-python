@@ -8,6 +8,7 @@ from uipath.runtime.base import (
     UiPathRuntimeProtocol,
     UiPathStreamOptions,
 )
+from uipath.runtime.debug.breakpoint import UiPathBreakpointResult
 from uipath.runtime.events import UiPathRuntimeEvent
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
 from uipath.runtime.schema import UiPathRuntimeSchema
@@ -43,6 +44,7 @@ class HydrationRuntime:
         registry_store: WorkspaceRegistryStore,
         hydrator_factory: None = None,
         policy: HydrationPolicy = HydrationPolicy.SUSPEND_ONLY,
+        runtime_id: str | None = None,
     ) -> None: ...
 
     @overload
@@ -55,6 +57,7 @@ class HydrationRuntime:
         registry_store: WorkspaceRegistryStore,
         hydrator_factory: Callable[[], WorkspaceHydrator],
         policy: HydrationPolicy = HydrationPolicy.SUSPEND_ONLY,
+        runtime_id: str | None = None,
     ) -> None: ...
 
     def __init__(
@@ -66,8 +69,13 @@ class HydrationRuntime:
         registry_store: WorkspaceRegistryStore,
         hydrator_factory: Callable[[], WorkspaceHydrator] | None = None,
         policy: HydrationPolicy = HydrationPolicy.SUSPEND_ONLY,
+        runtime_id: str | None = None,
     ) -> None:
-        """Initialize the hydration wrapper."""
+        """Initialize the hydration wrapper.
+
+        ``runtime_id`` is not used here; it is exposed for outer wrappers that
+        read the identity of the runtime they wrap.
+        """
         if (hydrator is None) == (hydrator_factory is None):
             raise ValueError("Provide exactly one of hydrator or hydrator_factory")
 
@@ -77,6 +85,8 @@ class HydrationRuntime:
         self._hydrator_factory = hydrator_factory
         self.registry_store = registry_store
         self.policy = policy
+        self.runtime_id = runtime_id
+        self._paused_at_breakpoint = False
 
     def _get_hydrator(self) -> WorkspaceHydrator:
         if self.hydrator is None:
@@ -99,7 +109,7 @@ class HydrationRuntime:
                 if self.policy == HydrationPolicy.ALWAYS:
                     await self._persist()
                 raise
-            await self._dehydrate(result)
+            await self._dehydrate(result, options)
             return result
 
     async def stream(
@@ -135,7 +145,7 @@ class HydrationRuntime:
         else:
             if final_result is not None:
                 with _bind_workspace_execution(execution):
-                    await self._dehydrate(final_result)
+                    await self._dehydrate(final_result, options)
         finally:
             try:
                 if delegate_stream is not None:
@@ -159,12 +169,24 @@ class HydrationRuntime:
             await self.workspace.dispose()
 
     async def _hydrate(self) -> None:
+        if self._paused_at_breakpoint:
+            self._paused_at_breakpoint = False
+            return
         registry = await self.registry_store.load()
         hydrated = await self._get_hydrator().hydrate_from_registry(registry)
         if hydrated != registry:
             await self.registry_store.save(hydrated)
 
-    async def _dehydrate(self, result: UiPathRuntimeResult) -> None:
+    async def _dehydrate(
+        self, result: UiPathRuntimeResult, options: UiPathExecuteOptions | None
+    ) -> None:
+        if (
+            isinstance(result, UiPathBreakpointResult)
+            and options is not None
+            and options.breakpoints
+        ):
+            self._paused_at_breakpoint = True
+            return
         if self._should_dehydrate(result):
             await self._persist()
 
