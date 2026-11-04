@@ -10,6 +10,10 @@ from uipath.runtime.workspace.hydrator import (
     AttachmentRegistryEntry,
     WorkspaceHydrator,
 )
+from uipath.runtime.workspace.managed import (
+    ManagedWorkspace,
+    WorkspaceServicesProtocol,
+)
 from uipath.runtime.workspace.registry_store import WorkspaceRegistryStore
 from uipath.runtime.workspace.workspace import Workspace
 
@@ -18,8 +22,10 @@ __all__ = [
     "ConversationalWorkspaceRuntime",
     "HydrationPolicy",
     "HydrationRuntime",
+    "ManagedWorkspace",
     "get_workspace_path",
     "Workspace",
     "WorkspaceHydrator",
     "WorkspaceRegistryStore",
+    "WorkspaceServicesProtocol",
 ]

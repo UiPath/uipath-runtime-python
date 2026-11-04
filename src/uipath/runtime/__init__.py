@@ -48,9 +48,11 @@ from uipath.runtime.workspace import (
     ConversationalWorkspaceRuntime,
     HydrationPolicy,
     HydrationRuntime,
+    ManagedWorkspace,
     Workspace,
     WorkspaceHydrator,
     WorkspaceRegistryStore,
+    WorkspaceServicesProtocol,
     get_workspace_path,
 )
 
@@ -88,8 +90,10 @@ __all__ = [
     "ConversationalWorkspaceRuntime",
     "HydrationPolicy",
     "HydrationRuntime",
+    "ManagedWorkspace",
     "get_workspace_path",
     "Workspace",
     "WorkspaceHydrator",
     "WorkspaceRegistryStore",
+    "WorkspaceServicesProtocol",
 ]
