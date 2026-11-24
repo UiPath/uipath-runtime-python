@@ -631,6 +631,25 @@ async def test_debug_runtime_quit_during_a_state_send_reports_after_the_delegate
     assert cleaned_up_at_completion == [True]
 
 
+@pytest.mark.asyncio
+async def test_debug_runtime_cancelled_while_stopping_on_quit_waits_for_the_delegate():
+    """A host cancellation during the quit's cleanup propagates once the delegate is done."""
+    runtime_impl = _SlowCleanupRuntime()
+    bridge, quit_event = _bridge_with_quit()
+    debug_runtime = UiPathDebugRuntime(delegate=runtime_impl, debug_bridge=bridge)
+
+    run = asyncio.create_task(debug_runtime.execute({}))
+    await asyncio.sleep(0.05)
+    quit_event.set()
+    await asyncio.wait_for(runtime_impl.cleanup_started.wait(), timeout=5)
+    run.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    assert runtime_impl.cleaned_up
+    cast(AsyncMock, bridge.emit_execution_completed).assert_not_awaited()
+
+
 class _BreakpointRuntime:
     """A delegate that pauses at a breakpoint: its stream ends with the breakpoint result."""
 
