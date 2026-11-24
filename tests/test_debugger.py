@@ -585,6 +585,52 @@ async def test_debug_runtime_cancellation_from_elsewhere_still_propagates():
     cast(AsyncMock, bridge.emit_execution_completed).assert_not_awaited()
 
 
+class _SlowCleanupRuntime(_WorkingRuntime):
+    """A delegate whose cleanup awaits, so it is done only once that await returns."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cleanup_started = asyncio.Event()
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        try:
+            self.emitted.append("first")
+            yield UiPathRuntimeStateEvent(node_name="first", payload={})
+            await asyncio.sleep(30)
+            yield UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+        finally:
+            self.cleanup_started.set()
+            await asyncio.sleep(0.1)
+            self.cleaned_up = True
+
+
+@pytest.mark.asyncio
+async def test_debug_runtime_quit_during_a_state_send_reports_after_the_delegate_cleans_up():
+    """A quit while a state update is being sent closes the delegate before completing."""
+    runtime_impl = _SlowCleanupRuntime()
+    bridge, quit_event = _bridge_with_quit()
+
+    async def quit_during_send(_event: Any) -> None:
+        quit_event.set()
+        await asyncio.sleep(30)
+
+    cleaned_up_at_completion: list[bool] = []
+    cast(AsyncMock, bridge.emit_state_update).side_effect = quit_during_send
+    cast(AsyncMock, bridge.emit_execution_completed).side_effect = (
+        lambda _result: cleaned_up_at_completion.append(runtime_impl.cleaned_up)
+    )
+    debug_runtime = UiPathDebugRuntime(delegate=runtime_impl, debug_bridge=bridge)
+
+    result = await asyncio.wait_for(debug_runtime.execute({}), timeout=5)
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert cleaned_up_at_completion == [True]
+
+
 class _BreakpointRuntime:
     """A delegate that pauses at a breakpoint: its stream ends with the breakpoint result."""
 

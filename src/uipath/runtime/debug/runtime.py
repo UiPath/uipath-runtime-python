@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from contextlib import aclosing
 from typing import Any, AsyncGenerator, cast
 
 from uipath.core.errors import UiPathPendingTriggerError
@@ -101,9 +102,10 @@ class UiPathDebugRuntime:
         options: UiPathStreamOptions | None,
     ) -> UiPathRuntimeResult:
         final_result = None
-        async for event in self.stream(input, options):
-            if isinstance(event, UiPathRuntimeResult):
-                final_result = event
+        async with aclosing(self.stream(input, options)) as events:
+            async for event in events:
+                if isinstance(event, UiPathRuntimeResult):
+                    final_result = event
 
         return (
             final_result
@@ -125,10 +127,13 @@ class UiPathDebugRuntime:
 
             # Try to stream events from inner runtime
             try:
-                async for event in self._stream_and_debug(input, options=options):
-                    yield event
-                    if isinstance(event, UiPathRuntimeResult):
-                        result = event
+                async with aclosing(
+                    self._stream_and_debug(input, options=options)
+                ) as events:
+                    async for event in events:
+                        yield event
+                        if isinstance(event, UiPathRuntimeResult):
+                            result = event
             except UiPathStreamNotSupportedError:
                 # Fallback to regular execute if streaming not supported
                 logger.debug(
@@ -178,14 +183,17 @@ class UiPathDebugRuntime:
             except Exception as e:
                 logger.warning(f"Error disconnecting debug bridge: {e}")
 
-            async for event in self.delegate.stream(
-                input,
-                options=UiPathStreamOptions(
-                    resume=options.resume if options else False,
-                    breakpoints=None,
-                ),
-            ):
-                yield event
+            async with aclosing(
+                self.delegate.stream(
+                    input,
+                    options=UiPathStreamOptions(
+                        resume=options.resume if options else False,
+                        breakpoints=None,
+                    ),
+                )
+            ) as events:
+                async for event in events:
+                    yield event
             return
         except UiPathDebugQuitError:
             logger.info("Debug session quit by user before execution started")
@@ -205,93 +213,94 @@ class UiPathDebugRuntime:
             debug_options.breakpoints = self.debug_bridge.get_breakpoints()
 
             # Stream events from inner runtime
-            async for event in self.delegate.stream(
-                current_input, options=debug_options
-            ):
-                yield event
+            async with aclosing(
+                self.delegate.stream(current_input, options=debug_options)
+            ) as events:
+                async for event in events:
+                    yield event
 
-                # Handle final result
-                if isinstance(event, UiPathRuntimeResult):
-                    final_result = event
+                    # Handle final result
+                    if isinstance(event, UiPathRuntimeResult):
+                        final_result = event
 
-                    # Check if it's a breakpoint result
-                    if isinstance(event, UiPathBreakpointResult):
-                        try:
-                            # Hit a breakpoint - wait for resume and continue
-                            await self.debug_bridge.emit_breakpoint_hit(event)
-                            await self.debug_bridge.wait_for_resume()
-
-                            # Tell inner runtime we're resuming
-                            debug_options.resume = True
-                            current_input = (
-                                None  # Resume with no new input (very important)
-                            )
-
-                        except UiPathDebugQuitError:
-                            final_result = UiPathRuntimeResult(
-                                status=UiPathRuntimeStatus.SUCCESSFUL,
-                            )
-                            yield final_result
-                            execution_completed = True
-                    else:
-                        # Normal completion or suspension with dynamic interrupt
-
-                        # Check if this is a suspended execution that needs polling
-                        if (
-                            (resumable_runtime := self.get_resumable_runtime())
-                            and self.trigger_poll_interval > 0
-                            and final_result.status == UiPathRuntimeStatus.SUSPENDED
-                            and final_result.trigger
-                        ):
-                            await self.debug_bridge.emit_execution_suspended(
-                                final_result
-                            )
-
-                            interrupt_id = final_result.trigger.interrupt_id
-                            assert interrupt_id is not None
-
-                            resume_data: dict[str, Any] | None = None
+                        # Check if it's a breakpoint result
+                        if isinstance(event, UiPathBreakpointResult):
                             try:
-                                trigger_data: dict[str, Any] | None = None
-                                if final_result.trigger.trigger_type in (
-                                    UiPathResumeTriggerType.API,
-                                    UiPathResumeTriggerType.INBOX,
-                                    UiPathResumeTriggerType.TIMER,
-                                ):
-                                    trigger_data = (
-                                        await self.debug_bridge.wait_for_resume()
-                                    )
-                                else:
-                                    trigger_data = await self._poll_trigger(
-                                        final_result.trigger,
-                                        resumable_runtime.trigger_manager,
-                                    )
-                                resume_data = {interrupt_id: trigger_data}
+                                # Hit a breakpoint - wait for resume and continue
+                                await self.debug_bridge.emit_breakpoint_hit(event)
+                                await self.debug_bridge.wait_for_resume()
+
+                                # Tell inner runtime we're resuming
+                                debug_options.resume = True
+                                current_input = (
+                                    None  # Resume with no new input (very important)
+                                )
+
                             except UiPathDebugQuitError:
                                 final_result = UiPathRuntimeResult(
                                     status=UiPathRuntimeStatus.SUCCESSFUL,
                                 )
                                 yield final_result
                                 execution_completed = True
+                        else:
+                            # Normal completion or suspension with dynamic interrupt
 
-                            if resume_data is not None:
-                                await self.debug_bridge.emit_execution_resumed(
-                                    resume_data
+                            # Check if this is a suspended execution that needs polling
+                            if (
+                                (resumable_runtime := self.get_resumable_runtime())
+                                and self.trigger_poll_interval > 0
+                                and final_result.status == UiPathRuntimeStatus.SUSPENDED
+                                and final_result.trigger
+                            ):
+                                await self.debug_bridge.emit_execution_suspended(
+                                    final_result
                                 )
 
-                                # Continue with resumed execution
-                                current_input = resume_data
-                                debug_options.resume = True
-                                # Don't mark as completed - continue the loop
-                            else:
-                                execution_completed = True
-                        else:
-                            # Normal completion - mark as done
-                            execution_completed = True
+                                interrupt_id = final_result.trigger.interrupt_id
+                                assert interrupt_id is not None
 
-                # Handle state update events - send to debug bridge
-                elif isinstance(event, UiPathRuntimeStateEvent):
-                    await self.debug_bridge.emit_state_update(event)
+                                resume_data: dict[str, Any] | None = None
+                                try:
+                                    trigger_data: dict[str, Any] | None = None
+                                    if final_result.trigger.trigger_type in (
+                                        UiPathResumeTriggerType.API,
+                                        UiPathResumeTriggerType.INBOX,
+                                        UiPathResumeTriggerType.TIMER,
+                                    ):
+                                        trigger_data = (
+                                            await self.debug_bridge.wait_for_resume()
+                                        )
+                                    else:
+                                        trigger_data = await self._poll_trigger(
+                                            final_result.trigger,
+                                            resumable_runtime.trigger_manager,
+                                        )
+                                    resume_data = {interrupt_id: trigger_data}
+                                except UiPathDebugQuitError:
+                                    final_result = UiPathRuntimeResult(
+                                        status=UiPathRuntimeStatus.SUCCESSFUL,
+                                    )
+                                    yield final_result
+                                    execution_completed = True
+
+                                if resume_data is not None:
+                                    await self.debug_bridge.emit_execution_resumed(
+                                        resume_data
+                                    )
+
+                                    # Continue with resumed execution
+                                    current_input = resume_data
+                                    debug_options.resume = True
+                                    # Don't mark as completed - continue the loop
+                                else:
+                                    execution_completed = True
+                            else:
+                                # Normal completion - mark as done
+                                execution_completed = True
+
+                    # Handle state update events - send to debug bridge
+                    elif isinstance(event, UiPathRuntimeStateEvent):
+                        await self.debug_bridge.emit_state_update(event)
 
     def get_resumable_runtime(
         self, max_depth: int = 10
