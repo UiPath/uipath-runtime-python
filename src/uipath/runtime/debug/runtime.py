@@ -404,14 +404,11 @@ class UiPathDebugRuntime:
 
 async def _wait_out(task: "asyncio.Future[Any]") -> None:
     """Wait until ``task`` is done, through cancellations of the caller, then re-raise the last."""
-    cancelled: asyncio.CancelledError | None = None
-    while not task.done():
-        try:
-            await asyncio.wait({task})
-        except asyncio.CancelledError as e:
-            cancelled = e
-    if cancelled is not None:
-        raise cancelled
+    try:
+        await asyncio.wait({task})
+    except asyncio.CancelledError:
+        await _wait_out(task)
+        raise
 
 
 def _quit_requested(terminate: "asyncio.Future[None]") -> bool:

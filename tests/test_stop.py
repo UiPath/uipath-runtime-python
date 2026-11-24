@@ -69,12 +69,15 @@ async def test_a_cancelled_run_ends_as_stopped(tmp_path: Path) -> None:
 async def test_a_stray_cancelled_error_still_faults(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
 
-    with pytest.raises(asyncio.CancelledError):
+    async def body() -> None:
         with ctx:
             child = asyncio.ensure_future(asyncio.sleep(10))
             await asyncio.sleep(0)
             child.cancel()
             await child
+
+    with pytest.raises(asyncio.CancelledError):
+        await body()
 
     content = _written(ctx)
     assert content["status"] == UiPathRuntimeStatus.FAULTED.value
@@ -135,8 +138,9 @@ async def test_a_task_group_whose_child_fails_after_its_body_faults(
             async with asyncio.TaskGroup() as group:
                 group.create_task(fail_soon())
 
+    task = asyncio.create_task(body())
     with pytest.raises(ExceptionGroup):
-        await asyncio.create_task(body())
+        await task
 
     content = _written(ctx)
     assert content["status"] == UiPathRuntimeStatus.FAULTED.value
