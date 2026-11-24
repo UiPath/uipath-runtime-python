@@ -121,6 +121,52 @@ async def test_an_error_in_a_run_nobody_cancelled_faults(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_a_task_group_whose_child_fails_after_its_body_faults(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+
+    async def fail_soon() -> None:
+        await asyncio.sleep(0.01)
+        raise ValueError("child failed")
+
+    async def body() -> None:
+        with ctx:
+            async with asyncio.TaskGroup() as group:
+                group.create_task(fail_soon())
+
+    with pytest.raises(ExceptionGroup):
+        await asyncio.create_task(body())
+
+    content = _written(ctx)
+    assert content["status"] == UiPathRuntimeStatus.FAULTED.value
+    assert content["error"]["code"] == "ERROR_ExceptionGroup"
+
+
+@pytest.mark.asyncio
+async def test_a_task_group_stopped_while_its_child_cleans_up_ends_as_stopped(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+
+    async def fail_on_cancel() -> None:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            raise RuntimeError("cleanup failed while stopping") from None
+
+    async def body() -> None:
+        with ctx:
+            async with asyncio.TaskGroup() as group:
+                group.create_task(fail_on_cancel())
+                await asyncio.sleep(10)
+
+    await _cancel_while_running(body)
+
+    assert _written(ctx)["status"] == UiPathRuntimeStatus.STOPPED.value
+
+
+@pytest.mark.asyncio
 async def test_the_result_sink_receives_a_stopped_result(tmp_path: Path) -> None:
     delivered: list[UiPathRuntimeResult] = []
     set_result_sink(lambda result, _path: delivered.append(result))

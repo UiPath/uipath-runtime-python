@@ -272,7 +272,12 @@ class UiPathRuntimeContext(BaseModel):
             if self.result is None:
                 self.result = UiPathRuntimeResult()
 
-            if exc_type and exc_val and _task_is_being_cancelled():
+            if (
+                exc_type
+                and exc_val
+                and _task_is_being_cancelled()
+                and _raised_by_a_cancellation(exc_val)
+            ):
                 self.result.status = UiPathRuntimeStatus.STOPPED
                 self.result.error = None
             elif exc_type and exc_val:
@@ -541,3 +546,25 @@ def _task_is_being_cancelled() -> bool:
     except RuntimeError:
         return False
     return task is not None and task.cancelling() > 0
+
+
+def _raised_by_a_cancellation(
+    exc: BaseException, _seen: frozenset[int] = frozenset()
+) -> bool:
+    """Whether ``exc`` is a CancelledError, or was raised while handling one or because of one.
+
+    ``cancelling()`` alone is not enough: before Python 3.13, a TaskGroup whose child fails
+    after the group's body has ended cancels the parent task and never takes it back.
+    """
+    if id(exc) in _seen:
+        return False
+    seen = _seen | {id(exc)}
+    if isinstance(exc, asyncio.CancelledError):
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        return all(_raised_by_a_cancellation(e, seen) for e in exc.exceptions)
+    return any(
+        _raised_by_a_cancellation(e, seen)
+        for e in (exc.__cause__, exc.__context__)
+        if e is not None
+    )
