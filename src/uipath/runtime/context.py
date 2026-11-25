@@ -22,6 +22,7 @@ from uipath.runtime.errors import (
 from uipath.runtime.logging._interceptor import UiPathRuntimeLogsInterceptor
 from uipath.runtime.output_sinks import ResultSink, get_log_handler, get_result_sink
 from uipath.runtime.result import UiPathRuntimeResult, UiPathRuntimeStatus
+from uipath.runtime.stop import StopRequestedProbe, get_stop_requested_probe
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,7 @@ class UiPathRuntimeContext(BaseModel):
     # installed when the context started is the one that receives the result — even if the registry is
     # changed in between or __exit__ runs on a different event loop.
     _result_sink: ResultSink | None = PrivateAttr(default=None)
+    _stop_requested_probe: StopRequestedProbe | None = PrivateAttr(default=None)
 
     def _apply_execution_source(self) -> None:
         """Derive execution_source from the command, if not already set.
@@ -248,6 +250,7 @@ class UiPathRuntimeContext(BaseModel):
         # the result sink is stashed for __exit__ so the two are read at the same moment (same context).
         log_handler = get_log_handler()
         self._result_sink = get_result_sink()
+        self._stop_requested_probe = get_stop_requested_probe()
 
         self.logs_interceptor = UiPathRuntimeLogsInterceptor(
             min_level=self.logs_min_level,
@@ -272,12 +275,7 @@ class UiPathRuntimeContext(BaseModel):
             if self.result is None:
                 self.result = UiPathRuntimeResult()
 
-            if (
-                exc_type
-                and exc_val
-                and _task_is_being_cancelled()
-                and _raised_by_a_cancellation(exc_val)
-            ):
+            if exc_type and exc_val and self._stopped_on_request(exc_val):
                 self.result.status = UiPathRuntimeStatus.STOPPED
                 self.result.error = None
             elif exc_type and exc_val:
@@ -386,6 +384,19 @@ class UiPathRuntimeContext(BaseModel):
             # Restore original logging
             if hasattr(self, "logs_interceptor"):
                 self.logs_interceptor.teardown()
+
+    def _stopped_on_request(self, exc: BaseException) -> bool:
+        """Whether the run ended in a cancellation its host confirms it asked for."""
+        probe = self._stop_requested_probe
+        if probe is None or not _raised_by_a_cancellation(exc):
+            return False
+        try:
+            return bool(probe())
+        except Exception:
+            logger.exception(
+                "Stop-requested probe failed; the run is reported as faulted"
+            )
+            return False
 
     def _deliver_result(self, sink: ResultSink, output_payload: Any) -> None:
         """Spill the output arguments to a file, then hand the result + that path to the sink."""
@@ -539,22 +550,12 @@ class UiPathRuntimeContext(BaseModel):
         return instance
 
 
-def _task_is_being_cancelled() -> bool:
-    """Whether someone called ``cancel()`` on the running task, as opposed to a stray CancelledError."""
-    try:
-        task = asyncio.current_task()
-    except RuntimeError:
-        return False
-    return task is not None and task.cancelling() > 0
-
-
 def _raised_by_a_cancellation(
     exc: BaseException, _seen: frozenset[int] = frozenset()
 ) -> bool:
     """Whether ``exc`` is a CancelledError, or was raised while handling one or because of one.
 
-    ``cancelling()`` alone is not enough: before Python 3.13, a TaskGroup whose child fails
-    after the group's body has ended cancels the parent task and never takes it back.
+    An error the run raised on its own while the stop was on its way is still a failure.
     """
     if id(exc) in _seen:
         return False
