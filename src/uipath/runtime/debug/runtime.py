@@ -61,6 +61,7 @@ class UiPathDebugRuntime:
         if trigger_poll_interval < 0:
             raise ValueError("trigger_poll_interval must be >= 0")
         self.trigger_poll_interval = trigger_poll_interval
+        self._stopping = False
 
     async def execute(
         self,
@@ -68,6 +69,7 @@ class UiPathDebugRuntime:
         options: UiPathExecuteOptions | None = None,
     ) -> UiPathRuntimeResult:
         """Execute the workflow with debug support; a quit while it runs stops it."""
+        self._stopping = False
         run = asyncio.ensure_future(
             self._run(input, cast(UiPathStreamOptions, options))
         )
@@ -81,6 +83,7 @@ class UiPathDebugRuntime:
         finally:
             terminate.cancel()
             if not run.done():
+                self._stopping = True
                 run.cancel()
                 await _wait_out(run)
 
@@ -209,6 +212,7 @@ class UiPathDebugRuntime:
 
         # Keep streaming until execution completes (not just paused at breakpoint)
         while not execution_completed:
+            self._raise_if_stopping()
             # Update breakpoints from debug bridge
             debug_options.breakpoints = self.debug_bridge.get_breakpoints()
 
@@ -301,6 +305,17 @@ class UiPathDebugRuntime:
                     # Handle state update events - send to debug bridge
                     elif isinstance(event, UiPathRuntimeStateEvent):
                         await self.debug_bridge.emit_state_update(event)
+
+                    self._raise_if_stopping()
+
+    def _raise_if_stopping(self) -> None:
+        """Keep a stopped run from going on when a bridge call answered the stop's cancellation.
+
+        A bridge may catch the CancelledError while it waits, the console bridge's resume wait
+        does, and return as if the user had resumed.
+        """
+        if self._stopping:
+            raise asyncio.CancelledError()
 
     def get_resumable_runtime(
         self, max_depth: int = 10

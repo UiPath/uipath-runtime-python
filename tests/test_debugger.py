@@ -746,3 +746,51 @@ async def test_debug_runtime_quit_stops_a_delegate_that_cannot_stream():
     assert result.status == UiPathRuntimeStatus.SUCCESSFUL
     assert runtime_impl.cleaned_up
     cast(AsyncMock, bridge.emit_execution_completed).assert_awaited_once_with(result)
+
+
+class _TwoSegmentRuntime(_BreakpointRuntime):
+    """Pauses at a breakpoint, then runs a second segment when resumed."""
+
+    def __init__(self) -> None:
+        self.resumed = False
+
+    async def stream(
+        self,
+        input: dict[str, Any] | None = None,
+        options: UiPathStreamOptions | None = None,
+    ) -> AsyncGenerator[UiPathRuntimeEvent, None]:
+        if options and options.resume:
+            self.resumed = True
+            yield UiPathRuntimeResult(status=UiPathRuntimeStatus.SUCCESSFUL)
+            return
+        async for event in super().stream(input, options):
+            yield event
+
+
+@pytest.mark.asyncio
+async def test_debug_runtime_quit_at_a_breakpoint_does_not_resume_when_the_bridge_swallows_the_stop():
+    """A bridge that answers the stop's cancellation with a resume does not resume the delegate."""
+    runtime_impl = _TwoSegmentRuntime()
+    bridge, quit_event = _bridge_with_quit()
+    at_breakpoint = asyncio.Event()
+
+    async def resume_like_the_console() -> Any:
+        if cast(AsyncMock, bridge.wait_for_resume).await_count == 1:
+            return None
+        at_breakpoint.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            return {"command": "continue", "args": None}
+
+    cast(AsyncMock, bridge.wait_for_resume).side_effect = resume_like_the_console
+    debug_runtime = UiPathDebugRuntime(delegate=runtime_impl, debug_bridge=bridge)
+
+    run = asyncio.create_task(debug_runtime.execute({}))
+    await asyncio.wait_for(at_breakpoint.wait(), timeout=5)
+    quit_event.set()
+    result = await asyncio.wait_for(run, timeout=5)
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    assert not runtime_impl.resumed
+    cast(AsyncMock, bridge.emit_execution_completed).assert_awaited_once_with(result)

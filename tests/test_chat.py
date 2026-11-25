@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncGenerator, Sequence, cast
 from unittest.mock import AsyncMock, Mock
 
@@ -507,6 +508,8 @@ async def test_chat_runtime_under_debugger_ends_exchange_after_reply():
     debug_bridge.emit_execution_completed = AsyncMock()
     debug_bridge.emit_breakpoint_hit = AsyncMock()
     debug_bridge.wait_for_resume = AsyncMock()
+    # The bridge returns from wait_for_terminate only once the user quits.
+    debug_bridge.wait_for_terminate = AsyncMock(side_effect=asyncio.Event().wait)
     debug_bridge.get_breakpoints = Mock(return_value="*")
 
     calls = Mock()
