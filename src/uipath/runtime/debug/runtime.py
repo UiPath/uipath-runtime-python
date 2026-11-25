@@ -62,6 +62,7 @@ class UiPathDebugRuntime:
             raise ValueError("trigger_poll_interval must be >= 0")
         self.trigger_poll_interval = trigger_poll_interval
         self._stopping = False
+        self._reporting_completion = False
 
     async def execute(
         self,
@@ -70,6 +71,7 @@ class UiPathDebugRuntime:
     ) -> UiPathRuntimeResult:
         """Execute the workflow with debug support; a quit while it runs stops it."""
         self._stopping = False
+        self._reporting_completion = False
         run = asyncio.ensure_future(
             self._run(input, cast(UiPathStreamOptions, options))
         )
@@ -78,7 +80,10 @@ class UiPathDebugRuntime:
             done, _ = await asyncio.wait(
                 {run, terminate}, return_when=asyncio.FIRST_COMPLETED
             )
-            if run not in done and not _quit_requested(terminate):
+            # A run already reporting its completion owns it, so a quit lets it finish.
+            if run not in done and (
+                not _quit_requested(terminate) or self._reporting_completion
+            ):
                 done, _ = await asyncio.wait({run})
         finally:
             terminate.cancel()
@@ -147,6 +152,7 @@ class UiPathDebugRuntime:
                 yield result
 
             if result:
+                self._reporting_completion = True
                 await self.debug_bridge.emit_execution_completed(result)
 
         except Exception as e:

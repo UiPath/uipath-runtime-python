@@ -703,6 +703,7 @@ async def test_debug_runtime_quit_at_a_breakpoint_yields_one_result():
     ]
 
     assert [r.status for r in results] == [UiPathRuntimeStatus.SUCCESSFUL]
+    cast(AsyncMock, bridge.emit_execution_completed).assert_awaited_once()
 
 
 class _NonStreamingWorkingRuntime(_WorkingRuntime):
@@ -794,3 +795,28 @@ async def test_debug_runtime_quit_at_a_breakpoint_does_not_resume_when_the_bridg
     assert result.status == UiPathRuntimeStatus.SUCCESSFUL
     assert not runtime_impl.resumed
     cast(AsyncMock, bridge.emit_execution_completed).assert_awaited_once_with(result)
+
+
+@pytest.mark.asyncio
+async def test_debug_runtime_quit_at_a_breakpoint_reports_completion_once():
+    """A quit that lands while the breakpoint's quit result is being reported sends it once."""
+    bridge, quit_event = _bridge_with_quit()
+
+    async def quit_at_the_breakpoint() -> None:
+        if cast(AsyncMock, bridge.wait_for_resume).await_count > 1:
+            quit_event.set()
+            raise UiPathDebugQuitError("quit")
+
+    async def slow_send(_result: Any) -> None:
+        await asyncio.sleep(0.05)
+
+    cast(AsyncMock, bridge.wait_for_resume).side_effect = quit_at_the_breakpoint
+    cast(AsyncMock, bridge.emit_execution_completed).side_effect = slow_send
+    debug_runtime = UiPathDebugRuntime(
+        delegate=_BreakpointRuntime(), debug_bridge=bridge
+    )
+
+    result = await asyncio.wait_for(debug_runtime.execute({}), timeout=5)
+
+    assert result.status == UiPathRuntimeStatus.SUCCESSFUL
+    cast(AsyncMock, bridge.emit_execution_completed).assert_awaited_once()
